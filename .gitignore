@@ -1,0 +1,13 @@
+.gradle/
+.codegraph/
+.bootstrap-gradle*/
+.bootstrap-gradle-*.zip
+.idea/
+build/
+out/
+*.iml
+*.log
+desktop-run.*.log
+local.properties
+**/build/
+desktop/src/main/resources/generated/
