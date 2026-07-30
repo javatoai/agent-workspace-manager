@@ -61,7 +61,7 @@ class RuntimeContext(
 @Command(
     name = "taskwt",
     mixinStandardHelpOptions = true,
-    version = ["Task Worktree Manager 0.1.1"],
+    version = ["Task Worktree Manager 0.1.3"],
     description = ["多仓库 Git Worktree 与 UAT Tag 管理器"],
     subcommands = [
         SourceCommand::class,
@@ -387,7 +387,7 @@ class ServiceBootstrapShowCommand : Callable<Int> {
     }
 }
 
-@Command(name = "set", description = ["从 JSON 文件设置初始化配置，或启用 codegraph 预设"])
+@Command(name = "set", description = ["从 JSON 文件设置初始化配置，或启用 empty/codegraph 预设"])
 class ServiceBootstrapSetCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: ServiceBootstrapCommand
@@ -410,17 +410,11 @@ class ServiceBootstrapSetCommand : Callable<Int> {
         val bootstrap = if (configFile != null) {
             context.json.decodeFromString<BootstrapConfig>(Files.readString(configFile))
         } else {
-            require(preset.equals("codegraph", ignoreCase = true)) { "未知预设：$preset" }
-            BootstrapConfig(
-                commands = listOf(
-                    com.snowball.taskwt.core.BootstrapCommand(
-                        name = "初始化 CodeGraph 索引",
-                        executable = "codegraph",
-                        arguments = listOf("init", "-i"),
-                        timeoutSeconds = 600,
-                    ),
-                ),
-            )
+            when (preset?.lowercase()) {
+                "empty" -> BootstrapPresets.empty()
+                "codegraph" -> BootstrapPresets.codeGraph()
+                else -> throw IllegalArgumentException("未知预设：$preset（支持 empty、codegraph）")
+            }
         }
         val updated = service.copy(bootstrap = bootstrap)
         context.configStore.save(
@@ -437,6 +431,7 @@ class ServiceBootstrapSetCommand : Callable<Int> {
     description = ["管理研发任务"],
     subcommands = [
         TaskCreateCommand::class,
+        TaskAddServicesCommand::class,
         TaskListCommand::class,
         TaskPathCommand::class,
         TaskOpenCommand::class,
@@ -444,6 +439,7 @@ class ServiceBootstrapSetCommand : Callable<Int> {
         TaskTerminalCommand::class,
         TaskRevealCommand::class,
         TaskInitializeCommand::class,
+        TaskRetryFailedCommand::class,
         TaskArchiveCommand::class,
         TaskRestoreCommand::class,
     ],
@@ -475,10 +471,44 @@ class TaskCreateCommand : Callable<Int> {
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
+        val repositories = context.repositories(config)
+        val repositoryIds = services.map { resolveServiceId(repositories, config, it) }
         val manifest = context.tasks.create(
             config,
-            context.repositories(config),
-            CreateTaskRequest(taskKey, branch, services.toList()),
+            repositories,
+            CreateTaskRequest(taskKey, branch, repositoryIds),
+        )
+        if (asJson) println(context.json.encodeToString(manifest))
+        else printManifestSummary(manifest)
+        return if (manifest.status == WorkspaceStatus.READY) 0 else PARTIAL_EXIT_CODE
+    }
+}
+
+@Command(name = "add-services", description = ["向已有任务追加服务 Worktree"])
+class TaskAddServicesCommand : Callable<Int> {
+    @ParentCommand
+    lateinit var parent: TaskCommand
+
+    @Option(names = ["--task-key"], required = true)
+    lateinit var taskKey: String
+
+    @Option(names = ["--service"], required = true, arity = "1..*")
+    lateinit var services: Array<String>
+
+    @Option(names = ["--json"])
+    var asJson: Boolean = false
+
+    override fun call(): Int {
+        val context = parent.root.context
+        val config = context.config()
+        val repositories = context.repositories(config)
+        val repositoryIds = services.map { resolveServiceId(repositories, config, it) }
+        val taskDirectory = context.taskDirectory(taskKey, config)
+        val manifest = context.tasks.addServices(
+            config,
+            repositories,
+            taskDirectory,
+            AddServicesRequest(repositoryIds),
         )
         if (asJson) println(context.json.encodeToString(manifest))
         else printManifestSummary(manifest)
@@ -631,6 +661,32 @@ class TaskInitializeCommand : Callable<Int> {
         val config = context.config()
         val result = context.tasks.initialize(config, context.taskDirectory(taskKey, config), failedOnly)
         printManifestSummary(result)
+        return if (result.status == WorkspaceStatus.READY) 0 else PARTIAL_EXIT_CODE
+    }
+}
+
+@Command(name = "retry-failed", description = ["重新 checkout 失败的服务"])
+class TaskRetryFailedCommand : Callable<Int> {
+    @ParentCommand
+    lateinit var parent: TaskCommand
+
+    @Option(names = ["--task-key"], required = true)
+    lateinit var taskKey: String
+
+    @Option(names = ["--service"])
+    var service: String? = null
+
+    @Option(names = ["--json"])
+    var asJson: Boolean = false
+
+    override fun call(): Int {
+        val context = parent.root.context
+        val config = context.config()
+        val taskDirectory = context.taskDirectory(taskKey, config)
+        val repositoryIds = service?.let { listOf(resolveServiceId(context.repositories(config), config, it)) }
+        val result = context.tasks.retryFailedServices(config, taskDirectory, repositoryIds)
+        if (asJson) println(context.json.encodeToString(result))
+        else printManifestSummary(result)
         return if (result.status == WorkspaceStatus.READY) 0 else PARTIAL_EXIT_CODE
     }
 }
@@ -823,4 +879,17 @@ private fun printManifestSummary(manifest: TaskManifest) {
         println("  ${it.serviceName}\t${it.status}\t${it.worktreePath}")
         it.warnings.forEach { warning -> println("    警告：$warning") }
     }
+}
+
+fun resolveServiceId(
+    repositories: List<RepositoryInfo>,
+    config: AppConfig,
+    idOrName: String,
+): String {
+    repositories.firstOrNull { it.id == idOrName }?.id?.let { return it }
+    repositories.firstOrNull { it.name.equals(idOrName, ignoreCase = true) }?.id?.let { return it }
+    config.services.values.firstOrNull {
+        it.repositoryId == idOrName || it.displayName.equals(idOrName, ignoreCase = true)
+    }?.repositoryId?.let { return it }
+    throw IllegalArgumentException("找不到服务：$idOrName")
 }

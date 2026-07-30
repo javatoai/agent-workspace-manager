@@ -110,12 +110,14 @@ class GitClient(
         run(repository, "merge-base", "--is-ancestor", ancestor, descendant, check = false).succeeded
 
     fun fetch(repository: Path, remote: String = "origin") {
-        run(repository, "fetch", "--prune", "--tags", remote, timeout = Duration.ofMinutes(5))
+        run(repository, "fetch", "--prune", "--tags", "--force", remote, timeout = Duration.ofMinutes(5))
     }
 
     fun addWorktree(repository: Path, target: Path, branch: String, baseRef: String) {
         run(
             repository,
+            "-c",
+            "core.symlinks=false",
             "worktree",
             "add",
             "-b",
@@ -127,12 +129,23 @@ class GitClient(
     }
 
     fun addExistingWorktree(repository: Path, target: Path, branch: String) {
-        run(repository, "worktree", "add", target.toString(), branch, timeout = Duration.ofMinutes(5))
+        run(
+            repository,
+            "-c",
+            "core.symlinks=false",
+            "worktree",
+            "add",
+            target.toString(),
+            branch,
+            timeout = Duration.ofMinutes(5),
+        )
     }
 
     fun addDetachedWorktree(repository: Path, target: Path, ref: String) {
         run(
             repository,
+            "-c",
+            "core.symlinks=false",
             "worktree",
             "add",
             "--detach",

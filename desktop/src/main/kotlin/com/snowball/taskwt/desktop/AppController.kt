@@ -197,6 +197,23 @@ class AppController(
             },
         )
 
+    fun addServices(task: TaskManifest, repositoryIds: List<String>) =
+        runOperation(
+            successMessage = "服务已追加",
+            block = {
+                taskManager.addServices(
+                    config,
+                    repositories,
+                    taskDirectory(task),
+                    AddServicesRequest(repositoryIds),
+                )
+            },
+            onSuccess = { updated ->
+                selectedTask = updated
+                reloadTasks()
+            },
+        )
+
     fun archiveTask(task: TaskManifest, force: Boolean = false) =
         runOperation(
             successMessage = "任务已归档",
@@ -227,9 +244,28 @@ class AppController(
             },
         )
 
+    fun retryFailedServices(task: TaskManifest, repositoryIds: List<String>? = null) =
+        runOperation(
+            successMessage = "失败服务已重试",
+            block = {
+                taskManager.retryFailedServices(config, taskDirectory(task), repositoryIds)
+            },
+            onSuccess = { updated ->
+                selectedTask = updated
+                reloadTasks()
+            },
+        )
+
     fun copyPath(path: String) {
-        runCatching { desktopIntegration.copyPath(Path.of(path)) }
-            .onSuccess { showStatus("路径已复制") }
+        copyText(path, "路径已复制")
+    }
+
+    fun copyText(text: String, successMessage: String = "已复制") {
+        runCatching {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                .setContents(java.awt.datatransfer.StringSelection(text), null)
+        }
+            .onSuccess { showStatus(successMessage) }
             .onFailure(::showError)
     }
 
