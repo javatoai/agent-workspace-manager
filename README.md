@@ -122,6 +122,21 @@ taskwt tag build --folder-name "OBT-123 支付" --services <repositoryId>
 
 Compose Desktop 原生安装包不能跨平台生成：EXE / MSI 须在 Windows 构建，DMG 须在 macOS 构建。
 
+## CI / GitHub Release
+
+推送到 `main`、打 `v*` 标签，或在 Actions 中手动触发 **Release packages** 工作流后，会自动：
+
+1. 在 `windows-latest` 跑 `scripts/build-windows.ps1`（测试 + 绿色 zip + EXE + MSI + CLI）
+2. 在 `macos-latest` 跑 `scripts/build-macos.sh`（测试 + DMG + CLI）
+3. 上传到 GitHub Releases
+
+| 触发 | Release |
+|------|---------|
+| `main` 推送 / 手动运行 | 预发布标签 `continuous`（每次覆盖更新附件） |
+| 标签 `v*`（如 `v0.1.4`） | 正式版 Release（设为 Latest） |
+
+产物下载：仓库页 **Releases**，或对应 workflow run 的 Artifacts（保留 14 天）。
+
 ## 模块结构
 
 ```text
