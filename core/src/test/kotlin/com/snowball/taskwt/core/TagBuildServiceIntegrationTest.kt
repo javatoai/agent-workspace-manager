@@ -36,7 +36,7 @@ class TagBuildServiceIntegrationTest {
         ManifestStore().save(
             taskDirectory,
             TaskManifest(
-                taskKey = "TAG-1",
+                folderName = "TAG-1",
                 taskDirectoryName = "TAG-1",
                 featureBranch = "feature/TAG-1",
                 createdAt = now,
@@ -70,7 +70,7 @@ class TagBuildServiceIntegrationTest {
 
         val preview = builder.preflight(config, taskDirectory, repositoryInfo.id)
         assertEquals("1.6.89.beta-11", preview.estimatedTag)
-        val result = builder.build(config, taskDirectory, repositoryInfo.id, confirmed = true)
+        val result = builder.build(config, taskDirectory, repositoryInfo.id)
 
         assertEquals(TagOperationState.SUCCESS, result.state, result.message)
         assertEquals("1.6.89.beta-11", result.tag)
@@ -118,7 +118,7 @@ class TagBuildServiceIntegrationTest {
         ManifestStore().save(
             taskDirectory,
             TaskManifest(
-                taskKey = "TAG-PARTIAL",
+                folderName = "TAG-PARTIAL",
                 taskDirectoryName = "TAG-PARTIAL",
                 featureBranch = "feature/TAG-PARTIAL",
                 createdAt = now,
@@ -166,7 +166,7 @@ class TagBuildServiceIntegrationTest {
             """.trimMargin(),
         )
 
-        val partial = builder.build(config, taskDirectory, repositoryInfo.id, confirmed = true)
+        val partial = builder.build(config, taskDirectory, repositoryInfo.id)
 
         assertEquals(TagOperationState.PARTIAL, partial.state, partial.message)
         assertEquals("1.0.0.beta-1", partial.tag)

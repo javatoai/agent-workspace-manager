@@ -48,13 +48,13 @@ class RuntimeContext(
             config.taskRoot?.let(Path::of),
         )
 
-    fun taskDirectory(taskKey: String, config: AppConfig = config()): Path {
+    fun taskDirectory(folderName: String, config: AppConfig = config()): Path {
         val root = config.taskRoot?.let(Path::of)
             ?: throw IllegalStateException("尚未配置任务根目录")
-        val direct = root.resolve(TaskNaming.directoryName(taskKey))
+        val direct = root.resolve(TaskNaming.directoryName(folderName))
         if (direct.resolve(ManifestStore.FILE_NAME).exists()) return direct
-        return manifests.list(root).firstOrNull { it.second.taskKey == taskKey }?.first
-            ?: throw IllegalArgumentException("找不到任务：$taskKey")
+        return manifests.list(root).firstOrNull { it.second.folderName == folderName }?.first
+            ?: throw IllegalArgumentException("找不到任务：$folderName")
     }
 }
 
@@ -457,8 +457,11 @@ class TaskCreateCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TaskCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
+
+    @Option(names = ["--requirement-link"], required = true)
+    lateinit var requirementLink: String
 
     @Option(names = ["--branch"], required = true)
     lateinit var branch: String
@@ -477,7 +480,7 @@ class TaskCreateCommand : Callable<Int> {
         val manifest = context.tasks.create(
             config,
             repositories,
-            CreateTaskRequest(taskKey, branch, repositoryIds),
+            CreateTaskRequest(folderName, branch, repositoryIds, requirementLink),
         )
         if (asJson) println(context.json.encodeToString(manifest))
         else printManifestSummary(manifest)
@@ -490,8 +493,8 @@ class TaskAddServicesCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TaskCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--service"], required = true, arity = "1..*")
     lateinit var services: Array<String>
@@ -504,7 +507,7 @@ class TaskAddServicesCommand : Callable<Int> {
         val config = context.config()
         val repositories = context.repositories(config)
         val repositoryIds = services.map { resolveServiceId(repositories, config, it) }
-        val taskDirectory = context.taskDirectory(taskKey, config)
+        val taskDirectory = context.taskDirectory(folderName, config)
         val manifest = context.tasks.addServices(
             config,
             repositories,
@@ -542,14 +545,14 @@ class TaskPathCommand : Callable<Int> {
     lateinit var parent: TaskCommand
 
     @Parameters(index = "0")
-    lateinit var taskKey: String
+    lateinit var folderName: String
 
     @Option(names = ["--copy"])
     var copy: Boolean = false
 
     override fun call(): Int {
         val context = parent.root.context
-        val path = context.taskDirectory(taskKey)
+        val path = context.taskDirectory(folderName)
         if (copy) context.desktop.copyPath(path)
         println(path.toAbsolutePath())
         return 0
@@ -562,7 +565,7 @@ class TaskOpenCommand : Callable<Int> {
     lateinit var parent: TaskCommand
 
     @Parameters(index = "0")
-    lateinit var taskKey: String
+    lateinit var folderName: String
 
     @Option(names = ["--ide"], defaultValue = "ALL")
     lateinit var ide: String
@@ -570,7 +573,7 @@ class TaskOpenCommand : Callable<Int> {
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
-        val taskDirectory = context.taskDirectory(taskKey, config)
+        val taskDirectory = context.taskDirectory(folderName, config)
         val manifest = context.manifests.load(taskDirectory)
         val requested = ide.uppercase()
         if (requested == "ALL" || requested == "IDEA") {
@@ -592,8 +595,8 @@ class TaskOpenServiceCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TaskCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--service"], required = true)
     lateinit var service: String
@@ -601,7 +604,7 @@ class TaskOpenServiceCommand : Callable<Int> {
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
-        val taskDirectory = context.taskDirectory(taskKey, config)
+        val taskDirectory = context.taskDirectory(folderName, config)
         val manifest = context.manifests.load(taskDirectory)
         val workspace = manifest.services.firstOrNull {
             it.repositoryId == service || it.serviceName.equals(service, ignoreCase = true)
@@ -620,14 +623,14 @@ abstract class TaskPathAction : Callable<Int> {
     lateinit var parent: TaskCommand
 
     @Parameters(index = "0")
-    lateinit var taskKey: String
+    lateinit var folderName: String
 
     abstract fun act(context: RuntimeContext, path: Path, config: AppConfig)
 
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
-        act(context, context.taskDirectory(taskKey, config), config)
+        act(context, context.taskDirectory(folderName, config), config)
         return 0
     }
 }
@@ -652,7 +655,7 @@ class TaskInitializeCommand : Callable<Int> {
     lateinit var parent: TaskCommand
 
     @Parameters(index = "0")
-    lateinit var taskKey: String
+    lateinit var folderName: String
 
     @Option(names = ["--failed-only"])
     var failedOnly: Boolean = false
@@ -660,7 +663,12 @@ class TaskInitializeCommand : Callable<Int> {
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
-        val result = context.tasks.initialize(config, context.taskDirectory(taskKey, config), failedOnly)
+        val result = context.tasks.initialize(
+            config,
+            context.taskDirectory(folderName, config),
+            context.repositories(config),
+            failedOnly,
+        )
         printManifestSummary(result)
         return if (result.status == WorkspaceStatus.READY) 0 else PARTIAL_EXIT_CODE
     }
@@ -671,8 +679,8 @@ class TaskRetryFailedCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TaskCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--service"])
     var service: String? = null
@@ -683,9 +691,10 @@ class TaskRetryFailedCommand : Callable<Int> {
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
-        val taskDirectory = context.taskDirectory(taskKey, config)
-        val repositoryIds = service?.let { listOf(resolveServiceId(context.repositories(config), config, it)) }
-        val result = context.tasks.retryFailedServices(config, taskDirectory, repositoryIds)
+        val taskDirectory = context.taskDirectory(folderName, config)
+        val repositories = context.repositories(config)
+        val repositoryIds = service?.let { listOf(resolveServiceId(repositories, config, it)) }
+        val result = context.tasks.retryFailedServices(config, taskDirectory, repositories, repositoryIds)
         if (asJson) println(context.json.encodeToString(result))
         else printManifestSummary(result)
         return if (result.status == WorkspaceStatus.READY) 0 else PARTIAL_EXIT_CODE
@@ -698,17 +707,20 @@ class TaskArchiveCommand : Callable<Int> {
     lateinit var parent: TaskCommand
 
     @Parameters(index = "0")
-    lateinit var taskKey: String
+    lateinit var folderName: String
 
-    @Option(names = ["--force-confirm"], description = ["有风险时必须再次输入完整 taskKey"])
+    @Option(names = ["--force-confirm"], description = ["有风险时必须再次输入完整 folderName"])
     var forceConfirm: String? = null
 
     override fun call(): Int {
         val context = parent.root.context
-        val taskDirectory = context.taskDirectory(taskKey)
+        val config = context.config()
+        val taskDirectory = context.taskDirectory(folderName, config)
         val force = forceConfirm != null
-        require(!force || forceConfirm == taskKey) { "--force-confirm 必须与 taskKey 完全一致" }
-        printManifestSummary(context.tasks.archive(taskDirectory, force))
+        require(!force || forceConfirm == folderName) { "--force-confirm 必须与 folderName 完全一致" }
+        printManifestSummary(
+            context.tasks.archive(config, taskDirectory, context.repositories(config), force),
+        )
         return 0
     }
 }
@@ -718,17 +730,17 @@ class TaskDeleteCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TaskCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--force-discard"], description = ["确认丢弃未提交改动后删除"])
     var forceDiscard: Boolean = false
 
     override fun call(): Int {
         val context = parent.root.context
-        val taskDirectory = context.taskDirectory(taskKey)
+        val taskDirectory = context.taskDirectory(folderName)
         context.tasks.delete(taskDirectory, forceDiscard)
-        println("已删除任务：$taskKey")
+        println("已删除任务：$folderName")
         return 0
     }
 }
@@ -739,7 +751,7 @@ class TaskRestoreCommand : Callable<Int> {
     lateinit var parent: TaskCommand
 
     @Parameters(index = "0")
-    lateinit var taskKey: String
+    lateinit var folderName: String
 
     @Option(names = ["--skip-bootstrap"])
     var skipBootstrap: Boolean = false
@@ -749,7 +761,8 @@ class TaskRestoreCommand : Callable<Int> {
         val config = context.config()
         val result = context.tasks.restore(
             config,
-            context.taskDirectory(taskKey, config),
+            context.taskDirectory(folderName, config),
+            context.repositories(config),
             rerunBootstrap = !skipBootstrap,
         )
         printManifestSummary(result)
@@ -780,8 +793,8 @@ class TagPreflightCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TagCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--service"], required = true)
     lateinit var repositoryId: String
@@ -794,7 +807,7 @@ class TagPreflightCommand : Callable<Int> {
         val config = context.config()
         val preview = context.tags.preflight(
             config,
-            context.taskDirectory(taskKey, config),
+            context.taskDirectory(folderName, config),
             repositoryId,
         )
         if (asJson) {
@@ -821,19 +834,16 @@ class TagPreflightCommand : Callable<Int> {
     }
 }
 
-@Command(name = "build", description = ["合并测试分支并推送 UAT Tag"])
+@Command(name = "build", description = ["合并测试分支并推送 UAT Tag（内部自动预检）"])
 class TagBuildCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TagCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--services"], split = ",", required = true)
     lateinit var services: Array<String>
-
-    @Option(names = ["--yes"], required = true, description = ["确认已经查看预检结果"])
-    var confirmed: Boolean = false
 
     @Option(names = ["--json"])
     var asJson: Boolean = false
@@ -841,8 +851,8 @@ class TagBuildCommand : Callable<Int> {
     override fun call(): Int {
         val context = parent.root.context
         val config = context.config()
-        val taskDirectory = context.taskDirectory(taskKey, config)
-        val results = services.map { context.tags.build(config, taskDirectory, it, confirmed) }
+        val taskDirectory = context.taskDirectory(folderName, config)
+        val results = services.map { context.tags.build(config, taskDirectory, it) }
         if (asJson) println(context.json.encodeToString(results))
         else results.forEach { println(it.message ?: "${it.serviceName}：${it.state}") }
         return if (results.all { it.state == TagOperationState.SUCCESS }) 0 else PARTIAL_EXIT_CODE
@@ -854,8 +864,8 @@ class TagRetryCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TagCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     @Option(names = ["--operation"], required = true)
     lateinit var operationId: String
@@ -868,7 +878,7 @@ class TagRetryCommand : Callable<Int> {
         val config = context.config()
         val result = context.tags.resumePartial(
             config,
-            context.taskDirectory(taskKey, config),
+            context.taskDirectory(folderName, config),
             operationId,
         )
         if (asJson) println(context.json.encodeToString(result))
@@ -882,12 +892,12 @@ class TagHistoryCommand : Callable<Int> {
     @ParentCommand
     lateinit var parent: TagCommand
 
-    @Option(names = ["--task-key"], required = true)
-    lateinit var taskKey: String
+    @Option(names = ["--folder-name"], required = true)
+    lateinit var folderName: String
 
     override fun call(): Int {
         val context = parent.root.context
-        val directory = context.taskDirectory(taskKey)
+        val directory = context.taskDirectory(folderName)
         val history = TagOperationStore().list(directory)
         println(context.json.encodeToString(history))
         return 0
@@ -895,7 +905,7 @@ class TagHistoryCommand : Callable<Int> {
 }
 
 private fun printManifestSummary(manifest: TaskManifest) {
-    println("${manifest.taskKey}\t${manifest.featureBranch}\t${manifest.status}")
+    println("${manifest.folderName}\t${manifest.featureBranch}\t${manifest.status}")
     manifest.services.forEach {
         println("  ${it.serviceName}\t${it.status}\t${it.worktreePath}")
         it.warnings.forEach { warning -> println("    警告：$warning") }

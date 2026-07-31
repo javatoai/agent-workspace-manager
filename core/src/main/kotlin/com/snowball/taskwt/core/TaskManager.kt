@@ -12,9 +12,10 @@ import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 
 data class CreateTaskRequest(
-    val taskKey: String,
+    val folderName: String,
     val featureBranch: String,
     val repositoryIds: List<String>,
+    val requirementLink: String,
 )
 
 data class AddServicesRequest(
@@ -41,7 +42,8 @@ class TaskManager(
         repositories: List<RepositoryInfo>,
         request: CreateTaskRequest,
     ): TaskManifest {
-        require(request.taskKey.isNotBlank()) { "任务编号不能为空" }
+        require(request.folderName.isNotBlank()) { "文件夹名不能为空" }
+        require(request.requirementLink.trim().isNotEmpty()) { "需求链接不能为空" }
         require(request.featureBranch.isNotBlank()) { "分支名不能为空" }
         require(request.featureBranch.none { it.isWhitespace() }) { "分支名不能包含空白字符" }
         require(request.repositoryIds.isNotEmpty()) { "至少选择一个服务" }
@@ -49,7 +51,7 @@ class TaskManager(
             event = "task.create.started",
             message = "开始创建任务工作区",
             metadata = mapOf(
-                "taskKey" to request.taskKey,
+                "folderName" to request.folderName,
                 "featureBranch" to request.featureBranch,
                 "serviceCount" to request.repositoryIds.distinct().size.toString(),
             ),
@@ -57,10 +59,10 @@ class TaskManager(
         )
         val taskRoot = config.taskRoot?.let(Path::of)
             ?: throw IllegalStateException("尚未配置任务根目录")
-        val taskDirectoryName = TaskNaming.directoryName(request.taskKey)
+        val taskDirectoryName = TaskNaming.directoryName(request.folderName)
         val taskDirectory = taskRoot.resolve(taskDirectoryName)
         require(!taskDirectory.resolve(ManifestStore.FILE_NAME).exists()) {
-            "任务已存在：${request.taskKey}"
+            "任务已存在：${request.folderName}"
         }
 
         val selected = resolveRepositories(repositories, request.repositoryIds)
@@ -83,9 +85,10 @@ class TaskManager(
             featureBranch = request.featureBranch,
         )
         var manifest = TaskManifest(
-            taskKey = request.taskKey.trim(),
+            folderName = request.folderName.trim(),
             taskDirectoryName = taskDirectoryName,
             featureBranch = request.featureBranch,
+            requirementLink = request.requirementLink.trim(),
             createdAt = now,
             updatedAt = now,
             status = WorkspaceStatus.CREATING,
@@ -97,18 +100,19 @@ class TaskManager(
             createWorkspace(config, workspace)
         }
         writeIdeaAggregate(taskDirectory, taskDirectoryName, results)
-        writeJetBrainsProjectNames(taskDirectory, manifest.taskKey, taskDirectoryName, results)
+        writeJetBrainsProjectNames(taskDirectory, manifest.folderName, taskDirectoryName, results)
         manifest = manifest.copy(
             updatedAt = Instant.now(clock).toString(),
             status = aggregateStatus(results),
             services = results,
         )
         manifests.save(taskDirectory, manifest)
+        writeAgentsMd(config, taskDirectory, manifest, repositories)
         events.info(
             event = "task.create.completed",
             message = "任务工作区创建结束",
             metadata = mapOf(
-                "taskKey" to manifest.taskKey,
+                "folderName" to manifest.folderName,
                 "status" to manifest.status.name,
             ),
             clock = clock,
@@ -129,7 +133,7 @@ class TaskManager(
             event = "task.add_services.started",
             message = "开始向任务追加服务",
             metadata = mapOf(
-                "taskKey" to manifest.taskKey,
+                "folderName" to manifest.folderName,
                 "serviceCount" to request.repositoryIds.distinct().size.toString(),
             ),
             clock = clock,
@@ -164,7 +168,7 @@ class TaskManager(
         writeIdeaAggregate(taskDirectory, manifest.taskDirectoryName, merged)
         writeJetBrainsProjectNames(
             taskDirectory,
-            manifest.taskKey,
+            manifest.folderName,
             manifest.taskDirectoryName,
             merged,
         )
@@ -174,11 +178,12 @@ class TaskManager(
             services = merged,
         ).also {
             manifests.save(taskDirectory, it)
+            writeAgentsMd(config, taskDirectory, it, repositories)
             events.info(
                 event = "task.add_services.completed",
                 message = "任务追加服务结束",
                 metadata = mapOf(
-                    "taskKey" to it.taskKey,
+                    "folderName" to it.folderName,
                     "status" to it.status.name,
                     "addedCount" to results.size.toString(),
                 ),
@@ -190,6 +195,7 @@ class TaskManager(
     fun initialize(
         config: AppConfig,
         taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
         failedOnly: Boolean = false,
     ): TaskManifest {
         val manifest = manifests.load(taskDirectory)
@@ -222,12 +228,16 @@ class TaskManager(
             updatedAt = Instant.now(clock).toString(),
             status = status,
             services = updatedServices,
-        ).also { manifests.save(taskDirectory, it) }
+        ).also {
+            manifests.save(taskDirectory, it)
+            writeAgentsMd(config, taskDirectory, it, repositories)
+        }
     }
 
     fun retryFailedServices(
         config: AppConfig,
         taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
         repositoryIds: List<String>? = null,
     ): TaskManifest {
         val manifest = manifests.load(taskDirectory)
@@ -241,7 +251,7 @@ class TaskManager(
             event = "task.retry_failed.started",
             message = "开始重试失败服务的 checkout",
             metadata = mapOf(
-                "taskKey" to manifest.taskKey,
+                "folderName" to manifest.folderName,
                 "serviceCount" to targets.size.toString(),
             ),
             clock = clock,
@@ -258,7 +268,7 @@ class TaskManager(
         writeIdeaAggregate(taskDirectory, manifest.taskDirectoryName, updated)
         writeJetBrainsProjectNames(
             taskDirectory,
-            manifest.taskKey,
+            manifest.folderName,
             manifest.taskDirectoryName,
             updated,
         )
@@ -268,16 +278,26 @@ class TaskManager(
             services = updated,
         ).also {
             manifests.save(taskDirectory, it)
+            writeAgentsMd(config, taskDirectory, it, repositories)
             events.info(
                 event = "task.retry_failed.completed",
                 message = "失败服务重试结束",
                 metadata = mapOf(
-                    "taskKey" to it.taskKey,
+                    "folderName" to it.folderName,
                     "status" to it.status.name,
                 ),
                 clock = clock,
             )
         }
+    }
+
+    fun refreshAgentsMd(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositories: List<RepositoryInfo>,
+    ) {
+        val manifest = manifests.load(taskDirectory)
+        writeAgentsMd(config, taskDirectory, manifest, repositories)
     }
 
     fun inspectDeleteRisk(taskDirectory: Path): List<DeleteRisk> {
@@ -291,7 +311,7 @@ class TaskManager(
             event = "task.delete.started",
             message = "开始删除任务工作区",
             metadata = mapOf(
-                "taskKey" to manifest.taskKey,
+                "folderName" to manifest.folderName,
                 "forceDiscard" to forceDiscard.toString(),
             ),
             clock = clock,
@@ -323,7 +343,7 @@ class TaskManager(
         events.info(
             event = "task.delete.completed",
             message = "任务工作区已删除",
-            metadata = mapOf("taskKey" to manifest.taskKey),
+            metadata = mapOf("folderName" to manifest.folderName),
             clock = clock,
         )
     }
@@ -343,12 +363,17 @@ class TaskManager(
             )
         }
 
-    fun archive(taskDirectory: Path, force: Boolean = false): TaskManifest {
+    fun archive(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
+        force: Boolean = false,
+    ): TaskManifest {
         val manifest = manifests.load(taskDirectory)
         events.info(
             event = "task.archive.started",
             message = "开始归档任务",
-            metadata = mapOf("taskKey" to manifest.taskKey, "force" to force.toString()),
+            metadata = mapOf("folderName" to manifest.folderName, "force" to force.toString()),
             clock = clock,
         )
         require(manifest.status != WorkspaceStatus.ARCHIVED) { "任务已经归档" }
@@ -378,10 +403,11 @@ class TaskManager(
             services = manifest.services.map { it.copy(status = WorkspaceStatus.ARCHIVED) },
         ).also {
             manifests.save(taskDirectory, it)
+            writeAgentsMd(config, taskDirectory, it, repositories)
             events.info(
                 event = "task.archive.completed",
                 message = "任务归档完成",
-                metadata = mapOf("taskKey" to it.taskKey),
+                metadata = mapOf("folderName" to it.folderName),
                 clock = clock,
             )
         }
@@ -390,13 +416,14 @@ class TaskManager(
     fun restore(
         config: AppConfig,
         taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
         rerunBootstrap: Boolean = true,
     ): TaskManifest {
         val manifest = manifests.load(taskDirectory)
         events.info(
             event = "task.restore.started",
             message = "开始恢复任务",
-            metadata = mapOf("taskKey" to manifest.taskKey),
+            metadata = mapOf("folderName" to manifest.folderName),
             clock = clock,
         )
         require(manifest.status == WorkspaceStatus.ARCHIVED) { "只有已归档任务可以恢复" }
@@ -427,7 +454,7 @@ class TaskManager(
         writeIdeaAggregate(taskDirectory, manifest.taskDirectoryName, restored)
         writeJetBrainsProjectNames(
             taskDirectory,
-            manifest.taskKey,
+            manifest.folderName,
             manifest.taskDirectoryName,
             restored,
         )
@@ -437,13 +464,23 @@ class TaskManager(
             services = restored,
         ).also {
             manifests.save(taskDirectory, it)
+            writeAgentsMd(config, taskDirectory, it, repositories)
             events.info(
                 event = "task.restore.completed",
                 message = "任务恢复结束",
-                metadata = mapOf("taskKey" to it.taskKey, "status" to it.status.name),
+                metadata = mapOf("folderName" to it.folderName, "status" to it.status.name),
                 clock = clock,
             )
         }
+    }
+
+    private fun writeAgentsMd(
+        config: AppConfig,
+        taskDirectory: Path,
+        manifest: TaskManifest,
+        repositories: List<RepositoryInfo>,
+    ) {
+        AgentsMdWriter.write(taskDirectory, manifest, repositories, config.agentsMdAppendix)
     }
 
     private fun resolveRepositories(
@@ -729,7 +766,7 @@ class TaskManager(
 
     private fun writeJetBrainsProjectNames(
         taskDirectory: Path,
-        taskKey: String,
+        folderName: String,
         taskDirectoryName: String,
         workspaces: List<ServiceWorkspace>,
     ) {
@@ -739,12 +776,12 @@ class TaskManager(
         if (ready.any { it.ideType == IdeType.IDEA }) {
             val metadata = taskDirectory.resolve("idea-$taskDirectoryName").resolve(".idea")
             metadata.createDirectories()
-            Files.writeString(metadata.resolve(".name"), "TaskWT - $taskKey - IDEA")
+            Files.writeString(metadata.resolve(".name"), "TaskWT - $folderName - IDEA")
         }
         if (ready.any { it.ideType == IdeType.WEBSTORM }) {
             val metadata = taskDirectory.resolve("webstorm-$taskDirectoryName").resolve(".idea")
             metadata.createDirectories()
-            Files.writeString(metadata.resolve(".name"), "TaskWT - $taskKey - WebStorm")
+            Files.writeString(metadata.resolve(".name"), "TaskWT - $folderName - WebStorm")
         }
     }
 

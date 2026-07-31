@@ -6,9 +6,9 @@ import java.text.Normalizer
 object TaskNaming {
     private const val MAX_DIRECTORY_NAME_LENGTH = 80
 
-    fun directoryName(taskKey: String): String {
-        require(taskKey.isNotBlank()) { "任务编号不能为空" }
-        val normalized = Normalizer.normalize(taskKey.trim(), Normalizer.Form.NFKC)
+    fun directoryName(folderName: String): String {
+        require(folderName.isNotBlank()) { "文件夹名不能为空" }
+        val normalized = Normalizer.normalize(folderName.trim(), Normalizer.Form.NFKC)
         val safe = normalized
             .replace(Regex("""[<>:"/\\|?*\p{Cc}]"""), "-")
             .replace(Regex("""\s+"""), "-")
@@ -17,7 +17,7 @@ object TaskNaming {
             .ifBlank { "task" }
         val reservedSafe = if (isWindowsReservedName(safe)) "_$safe" else safe
         if (reservedSafe.length <= MAX_DIRECTORY_NAME_LENGTH) return reservedSafe
-        val suffix = shortHash(taskKey)
+        val suffix = shortHash(folderName)
         return "${reservedSafe.take(MAX_DIRECTORY_NAME_LENGTH - suffix.length - 1)}-$suffix"
     }
 

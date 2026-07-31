@@ -125,8 +125,8 @@ private fun TaskWorktreeApp(controller: AppController) {
                 controller.config.services[it.id]?.enabled != false
             },
             onDismiss = { showCreateTask = false },
-            onCreate = { taskKey, branch, services ->
-                controller.createTask(taskKey, branch, services)
+            onCreate = { folderName, branch, services, requirementLink ->
+                controller.createTask(folderName, branch, services, requirementLink)
                 showCreateTask = false
             },
         )
@@ -149,14 +149,7 @@ private fun TaskWorktreeApp(controller: AppController) {
         BatchServiceSelectionDialog(
             task = task,
             onDismiss = controller::clearBatchSelection,
-            onConfirm = { repositoryIds -> controller.preflightTags(task, repositoryIds) },
-        )
-    }
-    controller.batchTagPreview?.let { preview ->
-        BatchTagPreflightDialog(
-            preflight = preview,
-            onDismiss = controller::clearBatchTagPreview,
-            onConfirm = { controller.buildTags(preview) },
+            onConfirm = { repositoryIds -> controller.buildTags(task, repositoryIds) },
         )
     }
     controller.batchTagResults?.let { results ->
@@ -169,21 +162,6 @@ private fun TaskWorktreeApp(controller: AppController) {
                 controller.copyText(text, "Tag 已复制")
             },
             onDismiss = controller::clearBatchTagResults,
-        )
-    }
-    controller.tagPreview?.let { preview ->
-        TagPreflightDialog(
-            preview = preview,
-            onDismiss = controller::clearTagPreview,
-            onConfirm = {
-                val task = controller.tasks.firstOrNull { it.taskKey == preview.taskKey }
-                val repositoryId = task?.services
-                    ?.firstOrNull { it.serviceName == preview.serviceName }
-                    ?.repositoryId
-                if (task != null && repositoryId != null) {
-                    controller.buildTag(task, repositoryId)
-                }
-            },
         )
     }
     controller.tagResult?.let { result ->
@@ -534,10 +512,10 @@ private fun TasksScreen(
                 SectionHeader("任务列表", "${controller.tasks.size} 个任务")
                 Spacer(Modifier.height(14.dp))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(controller.tasks, key = { it.taskKey }) { task ->
+                    items(controller.tasks, key = { it.folderName }) { task ->
                         TaskRow(
                             task = task,
-                            selected = controller.selectedTask?.taskKey == task.taskKey,
+                            selected = controller.selectedTask?.folderName == task.folderName,
                             onClick = { controller.selectedTask = task },
                             compact = true,
                         )
@@ -593,7 +571,7 @@ private fun TaskRow(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(task.taskKey, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(task.folderName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     task.featureBranch,
                     style = MaterialTheme.typography.bodySmall,
@@ -613,8 +591,8 @@ private fun TaskDetail(
     task: TaskManifest,
     onAddServices: () -> Unit,
 ) {
-    var showArchiveDialog by remember(task.taskKey) { mutableStateOf(false) }
-    var showDeleteDialog by remember(task.taskKey) { mutableStateOf(false) }
+    var showArchiveDialog by remember(task.folderName) { mutableStateOf(false) }
+    var showDeleteDialog by remember(task.folderName) { mutableStateOf(false) }
     val availableServices = task.services.filter { workspace ->
         workspace.status != WorkspaceStatus.ARCHIVED &&
             workspace.status != WorkspaceStatus.FAILED &&
@@ -628,12 +606,32 @@ private fun TaskDetail(
     PageContainer {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(task.taskKey, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(task.folderName, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 Text(
                     task.featureBranch,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (task.requirementLink.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    val linkClickable = isHttpUrl(task.requirementLink)
+                    Text(
+                        text = task.requirementLink,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (linkClickable) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = if (linkClickable) {
+                            Modifier.clickable { controller.openUrl(task.requirementLink) }
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
             }
             OutlinedButton(onClick = { controller.copyPath(taskRootPath(controller, task)) }) {
                 Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
@@ -698,6 +696,11 @@ private fun TaskDetail(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = { controller.refreshAgentsMd(task) }) {
+                Icon(Icons.Outlined.Description, null)
+                Spacer(Modifier.width(6.dp))
+                Text("刷新 AGENTS.md")
+            }
             OutlinedButton(
                 onClick = { controller.initializeTask(task, failedOnly = false) },
                 enabled = hasExistingWorktrees,
@@ -852,12 +855,12 @@ private fun WorkspaceCard(
                 }
                 Spacer(Modifier.weight(1f))
                 Button(
-                    onClick = { controller.preflightTag(task, workspace.repositoryId) },
+                    onClick = { controller.buildTag(task, workspace.repositoryId) },
                     enabled = workspaceAvailable,
                 ) {
                     Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("生成 UAT Tag")
+                    Text("创建Tag")
                 }
             }
         }
@@ -946,7 +949,7 @@ private fun UatScreen(controller: AppController) {
     PageContainer {
         SectionHeader("UAT 构建记录", "测试分支和 Tag 均在隔离 Worktree 中生成，并保留完整状态")
         if (operations.isEmpty()) {
-            EmptyState(Icons.Outlined.Sell, "还没有 UAT 构建", "进入研发任务，选择服务后执行“生成 UAT Tag”。")
+            EmptyState(Icons.Outlined.Sell, "还没有 UAT 构建", "进入研发任务，选择服务后执行“创建Tag”。")
         } else {
             operations.forEach { operation ->
                 ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
@@ -967,7 +970,7 @@ private fun UatScreen(controller: AppController) {
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                "${operation.taskKey} · ${operation.featureBranch} → ${operation.testBranch}",
+                                "${operation.folderName} · ${operation.featureBranch} → ${operation.testBranch}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1016,6 +1019,9 @@ private fun SettingsScreen(controller: AppController) {
     var terminal by remember(controller.config.terminalExecutable) {
         mutableStateOf(controller.config.terminalExecutable.orEmpty())
     }
+    var agentsAppendix by remember(controller.config.agentsMdAppendix) {
+        mutableStateOf(controller.config.agentsMdAppendix)
+    }
     PageContainer {
         SectionHeader("目录配置", "配置文件：${ApplicationPaths.systemDefault().config}")
         SettingsCard("服务扫描目录", "递归发现目录内的主 Git 仓库，不支持单独手工添加仓库") {
@@ -1059,6 +1065,21 @@ private fun SettingsScreen(controller: AppController) {
             )
             Button(onClick = { controller.updateIdeExecutables(idea, webStorm, terminal) }) {
                 Text("保存开发工具配置")
+            }
+        }
+        SettingsCard(
+            "AGENTS.md 模板追加",
+            "每次生成/刷新任务 AGENTS.md 时，原样拼接到文末「自定义说明」章节；留空则省略该章节",
+        ) {
+            OutlinedTextField(
+                value = agentsAppendix,
+                onValueChange = { agentsAppendix = it },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                minLines = 5,
+                placeholder = { Text("可选：团队约定、常用命令、注意事项…") },
+            )
+            Button(onClick = { controller.updateAgentsMdAppendix(agentsAppendix) }) {
+                Text("保存 AGENTS.md 追加内容")
             }
         }
     }
@@ -1223,9 +1244,10 @@ private fun DirectoryField(label: String, value: String, browse: () -> Unit) {
 private fun CreateTaskDialog(
     repositories: List<RepositoryInfo>,
     onDismiss: () -> Unit,
-    onCreate: (String, String, List<String>) -> Unit,
+    onCreate: (folderName: String, branch: String, services: List<String>, requirementLink: String) -> Unit,
 ) {
-    var taskKey by remember { mutableStateOf("") }
+    var requirementLink by remember { mutableStateOf("") }
+    var folderName by remember { mutableStateOf("") }
     var branch by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     AlertDialog(
@@ -1234,7 +1256,7 @@ private fun CreateTaskDialog(
             Column {
                 Text("新建跨仓库任务", fontWeight = FontWeight.Bold)
                 Text(
-                    "任务编号可以是任意字符串",
+                    "需求链接、文件夹名与 Feature 分支均为必填",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1246,9 +1268,17 @@ private fun CreateTaskDialog(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 OutlinedTextField(
-                    taskKey,
-                    { taskKey = it },
-                    label = { Text("需求编号 / taskKey") },
+                    requirementLink,
+                    { requirementLink = it },
+                    label = { Text("需求链接") },
+                    placeholder = { Text("飞书项目 URL 或任意文本") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    folderName,
+                    { folderName = it },
+                    label = { Text("文件夹名") },
                     placeholder = { Text("例如：OBT-12345 支付链路改造") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
@@ -1298,8 +1328,11 @@ private fun CreateTaskDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onCreate(taskKey, branch, selected.toList()) },
-                enabled = taskKey.isNotBlank() && branch.isNotBlank() && selected.isNotEmpty(),
+                onClick = { onCreate(folderName, branch, selected.toList(), requirementLink) },
+                enabled = requirementLink.isNotBlank() &&
+                    folderName.isNotBlank() &&
+                    branch.isNotBlank() &&
+                    selected.isNotEmpty(),
             ) { Text("创建 Worktree") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
@@ -1521,7 +1554,7 @@ private fun ArchiveTaskDialog(
                     shape = RoundedCornerShape(10.dp),
                 ) {
                     Text(
-                        "仅在你已经确认所有本地改动均可丢弃时，输入完整任务编号以启用强制归档。",
+                        "仅在你已经确认所有本地改动均可丢弃时，输入完整文件夹名以启用强制归档。",
                         Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = WarningAmber,
@@ -1530,7 +1563,7 @@ private fun ArchiveTaskDialog(
                 OutlinedTextField(
                     value = confirmation,
                     onValueChange = { confirmation = it },
-                    label = { Text("强制归档确认：${task.taskKey}") },
+                    label = { Text("强制归档确认：${task.folderName}") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -1545,7 +1578,7 @@ private fun ArchiveTaskDialog(
             Row {
                 TextButton(
                     onClick = { onArchive(true) },
-                    enabled = confirmation == task.taskKey,
+                    enabled = confirmation == task.folderName,
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) {
                     Text("强制归档")
@@ -1564,7 +1597,7 @@ private fun DeleteTaskDialog(
     onDismiss: () -> Unit,
     onDelete: (forceDiscard: Boolean) -> Unit,
 ) {
-    val risks = remember(task.taskKey) { controller.inspectDeleteRisk(task) }
+    val risks = remember(task.folderName) { controller.inspectDeleteRisk(task) }
     var discardConfirmed by remember { mutableStateOf(false) }
     val canDelete = risks.isEmpty() || discardConfirmed
     AlertDialog(
@@ -1642,7 +1675,7 @@ private fun BatchServiceSelectionDialog(
             it.status != WorkspaceStatus.FAILED &&
             Path.of(it.worktreePath).toFile().isDirectory
     }
-    var selected by remember(task.taskKey) {
+    var selected by remember(task.folderName) {
         mutableStateOf(eligible.map { it.repositoryId }.toSet())
     }
     AlertDialog(
@@ -1655,7 +1688,7 @@ private fun BatchServiceSelectionDialog(
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Text(
-                    "每个服务会独立预检和构建；某个服务失败不会中断其他服务。",
+                    "每个服务会独立自动预检并构建；某个服务失败不会中断其他服务。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 eligible.forEach { workspace ->
@@ -1705,81 +1738,7 @@ private fun BatchServiceSelectionDialog(
             Button(
                 onClick = { onConfirm(selected.toList()) },
                 enabled = selected.isNotEmpty(),
-            ) { Text("预检 ${selected.size} 个服务") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        shape = RoundedCornerShape(20.dp),
-    )
-}
-
-@Composable
-private fun BatchTagPreflightDialog(
-    preflight: BatchTagPreflight,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    val passed = preflight.entries.count { it.preview != null }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.AutoMirrored.Outlined.FactCheck, null, tint = if (passed > 0) SuccessGreen else DangerRed) },
-        title = { Text("批量 UAT 预检结果", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                Modifier.widthIn(min = 680.dp).heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    "通过 $passed / ${preflight.entries.size}。确认后只构建预检通过的服务。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                preflight.entries.forEach { entry ->
-                    val preview = entry.preview
-                    Surface(
-                        color = if (preview != null) SuccessGreen.copy(alpha = 0.08f)
-                        else MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Column(
-                            Modifier.fillMaxWidth().padding(13.dp),
-                            verticalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    if (preview != null) Icons.Outlined.CheckCircle else Icons.Outlined.ErrorOutline,
-                                    null,
-                                    tint = if (preview != null) SuccessGreen else MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(entry.serviceName, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                if (preview != null) StatusPill(preview.mergeMode.name)
-                            }
-                            if (preview != null) {
-                                Text(
-                                    "${preview.featureBranch} → ${preview.remote}/${preview.testBranch}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(
-                                    "预计 Tag：${preview.estimatedTag} · ${preview.commitList.size} 个提交",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else {
-                                Text(
-                                    entry.error ?: "预检失败",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = passed > 0) {
-                Text("构建 $passed 个服务")
-            }
+            ) { Text("构建 ${selected.size} 个服务") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         shape = RoundedCornerShape(20.dp),
@@ -1850,66 +1809,6 @@ private fun BatchTagResultDialog(
         },
         shape = RoundedCornerShape(20.dp),
     )
-}
-
-@Composable
-private fun TagPreflightDialog(
-    preview: TagPreflight,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.AutoMirrored.Outlined.FactCheck, null, tint = SuccessGreen) },
-        title = { Text("UAT 构建预检", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                Modifier.widthIn(min = 620.dp).heightIn(max = 600.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                PreviewLine("服务", preview.serviceName)
-                PreviewLine("Feature", "${preview.featureBranch}@${preview.featureSha.take(12)}")
-                PreviewLine("测试分支", "${preview.remote}/${preview.testBranch}@${preview.testSha.take(12)}")
-                PreviewLine("合并方式", preview.mergeMode.name)
-                PreviewLine("预计 Tag", preview.estimatedTag)
-                PreviewLine("远端同步", "ahead ${preview.featureSync.ahead} · behind ${preview.featureSync.behind}")
-                HorizontalDivider()
-                Text("提交列表", fontWeight = FontWeight.SemiBold)
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
-                    Text(
-                        preview.commitList.ifEmpty { listOf("Feature 已包含在测试分支中") }.joinToString("\n"),
-                        Modifier.fillMaxWidth().padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Text("Diff 统计", fontWeight = FontWeight.SemiBold)
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
-                    Text(
-                        preview.diffStat.ifBlank { "无文件差异" },
-                        Modifier.fillMaxWidth().padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm) {
-                Icon(Icons.Outlined.Sell, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("确认合并并生成 Tag")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        shape = RoundedCornerShape(20.dp),
-    )
-}
-
-@Composable
-private fun PreviewLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth()) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(100.dp))
-        Text(value, fontWeight = FontWeight.Medium)
-    }
 }
 
 @Composable

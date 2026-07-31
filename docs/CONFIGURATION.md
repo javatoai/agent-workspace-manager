@@ -20,6 +20,8 @@ macOS：
 
 `config.json` 使用原子替换写入。程序能忽略未来版本增加的未知字段。
 
+可选字段 `agentsMdAppendix`：写入设置页「AGENTS.md 模板追加」的多行文本；生成/刷新任务目录 `AGENTS.md` 时拼接到「自定义说明」章节。
+
 ## 服务扫描
 
 扫描器遵循以下规则：
@@ -95,19 +97,20 @@ taskwt config init --scan-root <dir> --task-root <dir>
 taskwt source add|remove|list|scan
 taskwt service list|set|enable|disable
 taskwt service bootstrap show|set
-taskwt task create --task-key <text> --branch <branch> --services <id,id>
+taskwt task create --folder-name <text> --requirement-link <url-or-text> --branch <branch> --services <id,id>
 taskwt task list
-taskwt task open <taskKey> --ide all|idea|webstorm
-taskwt task open-service --task-key <taskKey> --service <id-or-name>
-taskwt task path <taskKey> --copy
-taskwt task terminal|reveal <taskKey>
-taskwt task initialize <taskKey> [--failed-only]
-taskwt task archive <taskKey> [--force-confirm <taskKey>]
-taskwt task restore <taskKey> [--skip-bootstrap]
-taskwt tag preflight --task-key <taskKey> --service <id>
-taskwt tag build --task-key <taskKey> --services <id,id> --yes
-taskwt tag retry --task-key <taskKey> --operation <operationId>
-taskwt tag history --task-key <taskKey>
+taskwt task open <folderName> --ide all|idea|webstorm
+taskwt task open-service --folder-name <folderName> --service <id-or-name>
+taskwt task path <folderName> --copy
+taskwt task terminal|reveal <folderName>
+taskwt task initialize <folderName> [--failed-only]
+taskwt task archive <folderName> [--force-confirm <folderName>]
+taskwt task restore <folderName> [--skip-bootstrap]
+taskwt task delete --folder-name <folderName> [--force-discard]
+taskwt tag preflight --folder-name <folderName> --service <id>
+taskwt tag build --folder-name <folderName> --services <id,id>
+taskwt tag retry --folder-name <folderName> --operation <operationId>
+taskwt tag history --folder-name <folderName>
 ```
 
 批量命令返回值：

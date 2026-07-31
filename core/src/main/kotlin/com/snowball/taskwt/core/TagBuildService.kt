@@ -32,7 +32,7 @@ data class FeatureSyncStatus(
 
 @Serializable
 data class TagPreflight(
-    val taskKey: String,
+    val folderName: String,
     val serviceName: String,
     val featureBranch: String,
     val featureSha: String,
@@ -94,7 +94,7 @@ class TagBuildService(
             val diffStat = git.run(repository, "diff", "--stat", testSha, featureSha).stdout.trim()
             val estimatedTag = nextTag(repository, testSha, service.initialUatTag)
             TagPreflight(
-                taskKey = manifest.taskKey,
+                folderName = manifest.folderName,
                 serviceName = workspace.serviceName,
                 featureBranch = workspace.branch,
                 featureSha = featureSha,
@@ -114,9 +114,7 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         repositoryId: String,
-        confirmed: Boolean,
     ): TagOperation {
-        require(confirmed) { "生成 Tag 前必须确认预检结果" }
         val manifest = manifests.load(taskDirectory)
         val workspace = manifest.services.firstOrNull { it.repositoryId == repositoryId }
             ?: throw IllegalArgumentException("任务中不存在服务：$repositoryId")
@@ -126,7 +124,7 @@ class TagBuildService(
         val now = Instant.now(clock).toString()
         var operation = TagOperation(
             operationId = UUID.randomUUID().toString(),
-            taskKey = manifest.taskKey,
+            folderName = manifest.folderName,
             serviceName = workspace.serviceName,
             repositoryId = repositoryId,
             featureBranch = workspace.branch,
@@ -142,7 +140,7 @@ class TagBuildService(
             message = "开始 UAT Tag 构建",
             metadata = mapOf(
                 "operationId" to operation.operationId,
-                "taskKey" to operation.taskKey,
+                "folderName" to operation.folderName,
                 "service" to operation.serviceName,
             ),
             clock = clock,
@@ -323,7 +321,7 @@ class TagBuildService(
         }
         verifyMergeInTemporaryWorktree(repository, testSha, featureSha, workspace.serviceName)
         return TagPreflight(
-            taskKey = manifest.taskKey,
+            folderName = manifest.folderName,
             serviceName = workspace.serviceName,
             featureBranch = workspace.branch,
             featureSha = featureSha,
@@ -541,7 +539,7 @@ class TagBuildService(
         testSha: String,
     ): String = buildString {
         appendLine("${service.tagMessagePrefix} build")
-        appendLine("Task: ${manifest.taskKey}")
+        appendLine("Task: ${manifest.folderName}")
         appendLine("Service: ${workspace.serviceName}")
         appendLine("Feature: ${workspace.branch}@$featureSha")
         appendLine("Test: ${service.uatBranch}@$testSha")
@@ -590,7 +588,7 @@ class TagBuildService(
             TagBuildHistoryEntry(
                 operationId = operation.operationId,
                 timestamp = operation.updatedAt,
-                taskKey = operation.taskKey,
+                folderName = operation.folderName,
                 serviceName = operation.serviceName,
                 featureBranch = operation.featureBranch,
                 testBranch = operation.testBranch,
@@ -601,7 +599,7 @@ class TagBuildService(
         )
         val metadata = mapOf(
             "operationId" to operation.operationId,
-            "taskKey" to operation.taskKey,
+            "folderName" to operation.folderName,
             "service" to operation.serviceName,
             "state" to operation.state.name,
             "tag" to operation.tag.orEmpty(),

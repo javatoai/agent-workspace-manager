@@ -3,6 +3,7 @@ package com.snowball.taskwt.core
 import java.awt.Desktop
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.net.URI
 import java.nio.file.Path
 
 class DesktopIntegration(
@@ -10,6 +11,22 @@ class DesktopIntegration(
 ) {
     fun copyPath(path: Path) {
         Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(path.toString()), null)
+    }
+
+    fun openUrl(url: String) {
+        require(isHttpUrl(url)) { "不是有效的 http(s) 链接：$url" }
+        val uri = URI(url.trim())
+        val os = System.getProperty("os.name")
+        when {
+            Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) ->
+                Desktop.getDesktop().browse(uri)
+            os.startsWith("Windows", ignoreCase = true) ->
+                runner.run(listOf("rundll32", "url.dll,FileProtocolHandler", uri.toString()))
+            os.startsWith("Mac", ignoreCase = true) ->
+                runner.run(listOf("open", uri.toString()))
+            else ->
+                runner.run(listOf("xdg-open", uri.toString()))
+        }
     }
 
     fun reveal(path: Path) {

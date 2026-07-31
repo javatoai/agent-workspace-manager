@@ -43,7 +43,7 @@ class TagConflictIntegrationTest {
         ManifestStore().save(
             taskDirectory,
             TaskManifest(
-                taskKey = "CONFLICT-1",
+                folderName = "CONFLICT-1",
                 taskDirectoryName = "CONFLICT-1",
                 featureBranch = "feature/CONFLICT-1",
                 createdAt = now,

@@ -22,18 +22,6 @@ enum class NavigationItem(
     SETTINGS("设置", "Settings"),
 }
 
-data class BatchTagPreflightEntry(
-    val repositoryId: String,
-    val serviceName: String,
-    val preview: TagPreflight? = null,
-    val error: String? = null,
-)
-
-data class BatchTagPreflight(
-    val taskKey: String,
-    val entries: List<BatchTagPreflightEntry>,
-)
-
 class AppController(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val configStore: ConfigStore = ConfigStore(paths),
@@ -64,13 +52,9 @@ class AppController(
         },
     )
         private set
-    var tagPreview by mutableStateOf<TagPreflight?>(null)
-        private set
     var tagResult by mutableStateOf<TagOperation?>(null)
         private set
     var batchSelectionTask by mutableStateOf<TaskManifest?>(null)
-        private set
-    var batchTagPreview by mutableStateOf<BatchTagPreflight?>(null)
         private set
     var batchTagResults by mutableStateOf<List<TagOperation>?>(null)
         private set
@@ -116,7 +100,7 @@ class AppController(
             repositories = scanned
             tasks = taskList
             selectedTask = selectedTask?.let { previous ->
-                taskList.firstOrNull { it.taskKey == previous.taskKey }
+                taskList.firstOrNull { it.folderName == previous.folderName }
             }
         },
     )
@@ -175,25 +159,35 @@ class AppController(
         saveConfig(config.copy(theme = theme))
     }
 
+    fun updateAgentsMdAppendix(appendix: String) {
+        saveConfig(config.copy(agentsMdAppendix = appendix))
+        showStatus("AGENTS.md 模板追加已保存")
+    }
+
     fun updateService(updated: ServiceConfig) {
         saveConfig(config.copy(services = config.services + (updated.repositoryId to updated)))
         showStatus("${updated.displayName} 配置已保存")
     }
 
-    fun createTask(taskKey: String, branch: String, repositoryIds: List<String>) =
+    fun createTask(
+        folderName: String,
+        branch: String,
+        repositoryIds: List<String>,
+        requirementLink: String,
+    ) =
         runOperation(
             successMessage = "任务已创建",
             block = {
-            taskManager.create(
-                config,
-                repositories,
-                CreateTaskRequest(taskKey, branch, repositoryIds),
-            )
+                taskManager.create(
+                    config,
+                    repositories,
+                    CreateTaskRequest(folderName, branch, repositoryIds, requirementLink),
+                )
             },
             onSuccess = { manifest ->
-            selectedTask = manifest
-            reloadTasks()
-            navigation = NavigationItem.TASKS
+                selectedTask = manifest
+                reloadTasks()
+                navigation = NavigationItem.TASKS
             },
         )
 
@@ -217,7 +211,7 @@ class AppController(
     fun archiveTask(task: TaskManifest, force: Boolean = false) =
         runOperation(
             successMessage = "任务已归档",
-            block = { taskManager.archive(taskDirectory(task), force) },
+            block = { taskManager.archive(config, taskDirectory(task), repositories, force) },
             onSuccess = { updated ->
                 selectedTask = updated
                 reloadTasks()
@@ -227,7 +221,7 @@ class AppController(
     fun restoreTask(task: TaskManifest) =
         runOperation(
             successMessage = "任务已恢复",
-            block = { taskManager.restore(config, taskDirectory(task)) },
+            block = { taskManager.restore(config, taskDirectory(task), repositories) },
             onSuccess = { updated ->
                 selectedTask = updated
                 reloadTasks()
@@ -256,7 +250,9 @@ class AppController(
     fun initializeTask(task: TaskManifest, failedOnly: Boolean) =
         runOperation(
             successMessage = "初始化步骤已完成",
-            block = { taskManager.initialize(config, taskDirectory(task), failedOnly) },
+            block = {
+                taskManager.initialize(config, taskDirectory(task), repositories, failedOnly)
+            },
             onSuccess = { updated ->
                 selectedTask = updated
                 reloadTasks()
@@ -267,13 +263,32 @@ class AppController(
         runOperation(
             successMessage = "失败服务已重试",
             block = {
-                taskManager.retryFailedServices(config, taskDirectory(task), repositoryIds)
+                taskManager.retryFailedServices(
+                    config,
+                    taskDirectory(task),
+                    repositories,
+                    repositoryIds,
+                )
             },
             onSuccess = { updated ->
                 selectedTask = updated
                 reloadTasks()
             },
         )
+
+    fun refreshAgentsMd(task: TaskManifest) =
+        runOperation(
+            successMessage = "AGENTS.md 已刷新",
+            block = {
+                taskManager.refreshAgentsMd(config, taskDirectory(task), repositories)
+            },
+            onSuccess = {},
+        )
+
+    fun openUrl(url: String) {
+        runCatching { desktopIntegration.openUrl(url) }
+            .onFailure(::showError)
+    }
 
     fun copyPath(path: String) {
         copyText(path, "路径已复制")
@@ -349,21 +364,13 @@ class AppController(
             .onFailure(::showError)
     }
 
-    fun preflightTag(task: TaskManifest, repositoryId: String) =
-        runOperation(
-            successMessage = "预检通过，请确认后构建",
-            block = { tagBuildService.preflight(config, taskDirectory(task), repositoryId) },
-            onSuccess = { preview -> tagPreview = preview },
-        )
-
     fun buildTag(task: TaskManifest, repositoryId: String) =
         runOperation(
             successMessage = "Tag 操作已完成",
             block = {
-                tagBuildService.build(config, taskDirectory(task), repositoryId, confirmed = true)
+                tagBuildService.build(config, taskDirectory(task), repositoryId)
             },
             onSuccess = { operation ->
-                tagPreview = null
                 tagResult = operation
             },
         )
@@ -376,75 +383,28 @@ class AppController(
         batchSelectionTask = null
     }
 
-    fun preflightTags(task: TaskManifest, repositoryIds: List<String>) =
-        runOperation(
-            successMessage = "批量预检完成，请核对每个服务",
-            block = {
-                repositoryIds.map { repositoryId ->
-                    val serviceName = task.services
-                        .firstOrNull { it.repositoryId == repositoryId }
-                        ?.serviceName
-                        ?: repositoryId
-                    runCatching {
-                        tagBuildService.preflight(config, taskDirectory(task), repositoryId)
-                    }.fold(
-                        onSuccess = {
-                            BatchTagPreflightEntry(repositoryId, serviceName, preview = it)
-                        },
-                        onFailure = {
-                            BatchTagPreflightEntry(
-                                repositoryId,
-                                serviceName,
-                                error = it.message ?: "预检失败",
-                            )
-                        },
-                    )
-                }
-            },
-            onSuccess = { entries ->
-                batchSelectionTask = null
-                batchTagPreview = BatchTagPreflight(task.taskKey, entries)
-            },
-        )
-
-    fun buildTags(preflight: BatchTagPreflight) {
-        val task = tasks.firstOrNull { it.taskKey == preflight.taskKey }
-        if (task == null) {
-            showError(IllegalStateException("任务已不存在：${preflight.taskKey}"))
-            return
-        }
-        val repositoryIds = preflight.entries.filter { it.preview != null }.map { it.repositoryId }
+    fun buildTags(task: TaskManifest, repositoryIds: List<String>) =
         runOperation(
             successMessage = "批量 UAT Tag 操作已结束",
             block = {
                 repositoryIds.map { repositoryId ->
-                    tagBuildService.build(
-                        config,
-                        taskDirectory(task),
-                        repositoryId,
-                        confirmed = true,
-                    )
+                    tagBuildService.build(config, taskDirectory(task), repositoryId)
                 }
             },
             onSuccess = { results ->
-                batchTagPreview = null
+                batchSelectionTask = null
                 batchTagResults = results
             },
         )
-    }
-
-    fun clearBatchTagPreview() {
-        batchTagPreview = null
-    }
 
     fun clearBatchTagResults() {
         batchTagResults = null
     }
 
     fun resumeTag(operation: TagOperation) {
-        val task = tasks.firstOrNull { it.taskKey == operation.taskKey }
+        val task = tasks.firstOrNull { it.folderName == operation.folderName }
         if (task == null) {
-            showError(IllegalStateException("任务已不存在：${operation.taskKey}"))
+            showError(IllegalStateException("任务已不存在：${operation.folderName}"))
             return
         }
         runOperation(
@@ -461,17 +421,13 @@ class AppController(
     }
 
     fun openOperationTask(operation: TagOperation) {
-        val task = tasks.firstOrNull { it.taskKey == operation.taskKey }
+        val task = tasks.firstOrNull { it.folderName == operation.folderName }
         if (task == null) {
-            showError(IllegalStateException("任务已不存在：${operation.taskKey}"))
+            showError(IllegalStateException("任务已不存在：${operation.folderName}"))
             return
         }
         selectedTask = task
         navigation = NavigationItem.TASKS
-    }
-
-    fun clearTagPreview() {
-        tagPreview = null
     }
 
     fun clearTagResult() {

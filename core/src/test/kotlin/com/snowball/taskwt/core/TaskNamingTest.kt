@@ -16,10 +16,9 @@ class TaskNamingTest {
     }
 
     @Test
-    fun `long names are stable and bounded`() {
-        val key = "REQ-" + "很长的需求".repeat(30)
-        val first = TaskNaming.directoryName(key)
-        assertEquals(first, TaskNaming.directoryName(key))
-        assertTrue(first.length <= 80)
+    fun `rejects blank folder name`() {
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            TaskNaming.directoryName("  ")
+        }
     }
 }

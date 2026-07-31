@@ -23,7 +23,7 @@ class EventLogTest {
         sink.info(
             event = "task.create.completed",
             message = "任务创建完成",
-            metadata = mapOf("taskKey" to "OBT-1"),
+            metadata = mapOf("folderName" to "OBT-1"),
             clock = clock,
         )
 
@@ -31,7 +31,7 @@ class EventLogTest {
         assertTrue(Files.exists(log))
         val lines = Files.readAllLines(log)
         assertEquals(1, lines.size)
-        assertTrue(lines.single().contains("\"taskKey\":\"OBT-1\""))
+        assertTrue(lines.single().contains("\"folderName\":\"OBT-1\""))
         assertTrue(lines.single().contains("\"event\":\"task.create.completed\""))
     }
 }

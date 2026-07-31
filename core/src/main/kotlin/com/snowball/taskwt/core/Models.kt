@@ -63,6 +63,8 @@ data class AppConfig(
     val ideaExecutable: String? = null,
     val webStormExecutable: String? = null,
     val terminalExecutable: String? = null,
+    /** Appended to each generated task AGENTS.md under「自定义说明」. */
+    val agentsMdAppendix: String = "",
 )
 
 @Serializable
@@ -100,9 +102,10 @@ data class ServiceWorkspace(
 @Serializable
 data class TaskManifest(
     val schemaVersion: Int = 1,
-    val taskKey: String,
+    val folderName: String,
     val taskDirectoryName: String,
     val featureBranch: String,
+    val requirementLink: String = "",
     val createdAt: String,
     val updatedAt: String,
     val status: WorkspaceStatus,
@@ -126,7 +129,7 @@ enum class TagOperationState {
 @Serializable
 data class TagOperation(
     val operationId: String,
-    val taskKey: String,
+    val folderName: String,
     val serviceName: String,
     val repositoryId: String,
     val featureBranch: String,
@@ -146,7 +149,7 @@ data class TagOperation(
 data class TagBuildHistoryEntry(
     val operationId: String,
     val timestamp: String,
-    val taskKey: String,
+    val folderName: String,
     val serviceName: String,
     val featureBranch: String,
     val testBranch: String,

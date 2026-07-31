@@ -41,10 +41,17 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT/123 支付", "feature/OBT-123", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT/123 支付", "feature/OBT-123", listOf(repositoryInfo.id), "https://example.com/req"),
         )
 
         assertEquals(WorkspaceStatus.READY, created.status)
+        assertEquals("https://example.com/req", created.requirementLink)
+        val agentsMd = Files.readString(
+            taskRoot.resolve(created.taskDirectoryName).resolve(AgentsMdWriter.FILE_NAME),
+        )
+        assertTrue(agentsMd.contains("https://example.com/req"))
+        assertTrue(agentsMd.contains("本任务可改动的 Worktree"))
+        assertTrue(agentsMd.contains("job-manager"))
         val worktree = Path.of(created.services.single().worktreePath)
         assertTrue(Files.exists(worktree.resolve("local.conf")))
         val ideaProject = taskRoot.resolve(created.taskDirectoryName).resolve("idea-${created.taskDirectoryName}")
@@ -54,7 +61,7 @@ class TaskManagerIntegrationTest {
             Files.readString(ideaProject.resolve(".idea").resolve(".name")),
         )
 
-        val archived = manager.archive(taskRoot.resolve(created.taskDirectoryName))
+        val archived = manager.archive(config, taskRoot.resolve(created.taskDirectoryName))
         assertEquals(WorkspaceStatus.ARCHIVED, archived.status)
         assertFalse(Files.exists(worktree))
         assertTrue(GitClient().refExists(repository, "refs/heads/feature/OBT-123"))
@@ -65,7 +72,7 @@ class TaskManagerIntegrationTest {
 
         Files.writeString(worktree.resolve("uncommitted.txt"), "dirty")
         assertThrows(IllegalStateException::class.java) {
-            manager.archive(taskRoot.resolve(created.taskDirectoryName))
+            manager.archive(config, taskRoot.resolve(created.taskDirectoryName))
         }
         assertTrue(Files.exists(worktree))
     }
@@ -91,7 +98,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             repositories,
-            CreateTaskRequest("OBT-add", "feature/OBT-add", listOf(firstInfo.id)),
+            CreateTaskRequest("OBT-add", "feature/OBT-add", listOf(firstInfo.id), "https://example.com/req"),
         )
         assertEquals(1, created.services.size)
 
@@ -122,7 +129,7 @@ class TaskManagerIntegrationTest {
             )
         }
 
-        manager.archive(taskRoot.resolve(created.taskDirectoryName))
+        manager.archive(config, taskRoot.resolve(created.taskDirectoryName))
         val archivedError = assertThrows(IllegalArgumentException::class.java) {
             manager.addServices(
                 config,
@@ -155,7 +162,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT-fail", "feature/OBT-fail", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT-fail", "feature/OBT-fail", listOf(repositoryInfo.id), "https://example.com/req"),
         )
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val worktree = Path.of(created.services.single().worktreePath)
@@ -212,7 +219,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             repositories,
-            CreateTaskRequest("OBT-shared", branch, listOf(firstInfo.id)),
+            CreateTaskRequest("OBT-shared", branch, listOf(firstInfo.id), "https://example.com/req"),
         )
         val added = manager.addServices(
             config,
@@ -247,7 +254,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT-retry", "feature/OBT-retry", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT-retry", "feature/OBT-retry", listOf(repositoryInfo.id), "https://example.com/req"),
         )
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val worktree = Path.of(created.services.single().worktreePath)
@@ -290,7 +297,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT-retry2", "feature/OBT-retry2", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT-retry2", "feature/OBT-retry2", listOf(repositoryInfo.id), "https://example.com/req"),
         )
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val worktree = Path.of(created.services.single().worktreePath)
@@ -334,7 +341,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT-del", "feature/OBT-del", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT-del", "feature/OBT-del", listOf(repositoryInfo.id), "https://example.com/req"),
         )
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val worktree = Path.of(created.services.single().worktreePath)
@@ -368,7 +375,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT-dirty", "feature/OBT-dirty", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT-dirty", "feature/OBT-dirty", listOf(repositoryInfo.id), "https://example.com/req"),
         )
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val worktree = Path.of(created.services.single().worktreePath)
@@ -411,7 +418,7 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             listOf(repositoryInfo),
-            CreateTaskRequest("OBT-unpushed", "feature/OBT-unpushed", listOf(repositoryInfo.id)),
+            CreateTaskRequest("OBT-unpushed", "feature/OBT-unpushed", listOf(repositoryInfo.id), "https://example.com/req"),
         )
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val worktree = Path.of(created.services.single().worktreePath)
@@ -426,7 +433,7 @@ class TaskManagerIntegrationTest {
         assertTrue(manager.inspectDeleteRisk(taskDirectory).isEmpty())
 
         assertThrows(IllegalStateException::class.java) {
-            manager.archive(taskDirectory)
+            manager.archive(config, taskDirectory)
         }
         assertTrue(Files.exists(worktree))
 
@@ -434,6 +441,76 @@ class TaskManagerIntegrationTest {
         assertFalse(Files.exists(worktree))
         assertFalse(Files.exists(taskDirectory))
         assertTrue(GitClient().refExists(repository, "refs/heads/feature/OBT-unpushed"))
+    }
+
+    @Test
+    fun `create rejects blank folderName or requirementLink`() {
+        val config = AppConfig(taskRoot = temporary.resolve("tasks").toString())
+        val manager = TaskManager()
+        assertThrows(IllegalArgumentException::class.java) {
+            manager.create(
+                config,
+                emptyList(),
+                CreateTaskRequest("  ", "feature/x", listOf("id"), "https://example.com"),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            manager.create(
+                config,
+                emptyList(),
+                CreateTaskRequest("OBT-1", "feature/x", listOf("id"), "   "),
+            )
+        }
+    }
+
+    @Test
+    fun `agents md includes other local repos and appendix`() {
+        val servicesRoot = temporary.resolve("services")
+        cloneNamedService(servicesRoot, "alpha-service")
+        cloneNamedService(servicesRoot, "beta-service")
+        val repositories = RepositoryScanner().scan(listOf(servicesRoot), null)
+        val firstInfo = repositories.first { it.name == "alpha-service" }
+        val secondInfo = repositories.first { it.name == "beta-service" }
+        val taskRoot = temporary.resolve("tasks")
+        val config = AppConfig(
+            scanRoots = listOf(servicesRoot.toString()),
+            taskRoot = taskRoot.toString(),
+            services = mapOf(
+                firstInfo.id to ServiceConfig(repositoryId = firstInfo.id, displayName = firstInfo.name),
+                secondInfo.id to ServiceConfig(repositoryId = secondInfo.id, displayName = secondInfo.name),
+            ),
+            agentsMdAppendix = "团队约定：先跑单测",
+        )
+        val manager = TaskManager()
+        val created = manager.create(
+            config,
+            repositories,
+            CreateTaskRequest(
+                "OBT-agents",
+                "feature/OBT-agents",
+                listOf(firstInfo.id),
+                "飞书需求：支付改造",
+            ),
+        )
+        val agentsPath = taskRoot.resolve(created.taskDirectoryName).resolve(AgentsMdWriter.FILE_NAME)
+        val content = Files.readString(agentsPath)
+        assertTrue(content.contains("飞书需求：支付改造"))
+        assertTrue(content.contains("alpha-service"))
+        assertTrue(content.contains("其它本地服务（只读上下文）"))
+        assertTrue(content.contains("beta-service"))
+        assertTrue(content.contains(secondInfo.rootPath))
+        assertTrue(content.contains("## 自定义说明"))
+        assertTrue(content.contains("团队约定：先跑单测"))
+
+        val refreshedConfig = config.copy(agentsMdAppendix = "刷新后的附录")
+        manager.refreshAgentsMd(
+            refreshedConfig,
+            taskRoot.resolve(created.taskDirectoryName),
+            repositories,
+        )
+        val refreshed = Files.readString(agentsPath)
+        assertTrue(refreshed.contains("刷新后的附录"))
+        assertFalse(refreshed.contains("团队约定：先跑单测"))
     }
 
     private fun cloneNamedService(servicesRoot: Path, name: String): Path {

@@ -8,7 +8,9 @@
 
 - 扫描一个或多个目录中的主 Git 仓库（支持 Windows 目录链接 / 符号链接）
 - 自动忽略构建目录、子模块、Linked Worktree、任务根目录及工具自建临时 Worktree
-- 自由字符串 `taskKey`，自动生成 Windows 安全且稳定的任务目录名
+- 自由字符串 `folderName`，自动生成 Windows 安全且稳定的任务目录名
+- 新建任务需填写需求链接（URL 或文本）；详情页对 http(s) 可点开浏览器
+- 任务目录自动生成 `AGENTS.md`（本任务 worktree、其它本地仓只读表、设置中的自定义追加）
 - 一次需求可为多个服务创建同名 Feature 分支与 Worktree；事后可追加服务
 - 生成 IDEA 聚合 Maven 工程、WebStorm 工程及唯一 JetBrains 项目显示名
 - 一键打开 IDEA / WebStorm、终端、资源管理器；复制任务或服务绝对路径
@@ -66,6 +68,7 @@ Windows 完整打包（测试 + CLI + 绿色包 + EXE/MSI）：
 ```text
 <taskRoot>/<taskDirectoryName>/
 ├── taskwt.json
+├── AGENTS.md
 ├── tag-build-history.jsonl
 ├── tag-operations/
 ├── idea-<taskDirectoryName>/
@@ -80,8 +83,8 @@ Windows 完整打包（测试 + CLI + 绿色包 + EXE/MSI）：
 JetBrains 项目显示名：
 
 ```text
-TaskWT - <taskKey> - IDEA
-TaskWT - <taskKey> - WebStorm
+TaskWT - <folderName> - IDEA
+TaskWT - <folderName> - WebStorm
 ```
 
 建议在 IDEA / WebStorm 中将「打开项目」设为「新窗口」。工具不会修改 JetBrains 全局设置。
@@ -90,13 +93,14 @@ TaskWT - <taskKey> - WebStorm
 
 ```powershell
 taskwt config init --scan-root <服务目录> --task-root <任务根目录>
-taskwt task create --task-key "OBT-123 支付" --branch feature/OBT-123 --services job-manager,order-center
+taskwt task create --folder-name "OBT-123 支付" --requirement-link "https://project.feishu.cn/..." --branch feature/OBT-123 --services job-manager,order-center
 taskwt task list
-taskwt task reveal --task-key "OBT-123 支付"
-taskwt task delete --task-key "OBT-123 支付"            # 干净时可直接删
-taskwt task delete --task-key "OBT-123 支付" --force-discard  # 丢弃未提交后删除
+taskwt task reveal "OBT-123 支付"
+taskwt task delete --folder-name "OBT-123 支付"            # 干净时可直接删
+taskwt task delete --folder-name "OBT-123 支付" --force-discard  # 丢弃未提交后删除
 taskwt task archive "OBT-123 支付"
-taskwt tag preflight --task-key "OBT-123 支付" --service <repositoryId>
+taskwt tag preflight --folder-name "OBT-123 支付" --service <repositoryId>
+taskwt tag build --folder-name "OBT-123 支付" --services <repositoryId>
 ```
 
 ## 归档 vs 删除
