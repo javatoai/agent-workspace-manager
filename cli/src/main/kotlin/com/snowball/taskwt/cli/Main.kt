@@ -441,6 +441,7 @@ class ServiceBootstrapSetCommand : Callable<Int> {
         TaskInitializeCommand::class,
         TaskRetryFailedCommand::class,
         TaskArchiveCommand::class,
+        TaskDeleteCommand::class,
         TaskRestoreCommand::class,
     ],
 )
@@ -708,6 +709,26 @@ class TaskArchiveCommand : Callable<Int> {
         val force = forceConfirm != null
         require(!force || forceConfirm == taskKey) { "--force-confirm 必须与 taskKey 完全一致" }
         printManifestSummary(context.tasks.archive(taskDirectory, force))
+        return 0
+    }
+}
+
+@Command(name = "delete", description = ["永久删除任务目录与 worktree（保留 feature 分支）"])
+class TaskDeleteCommand : Callable<Int> {
+    @ParentCommand
+    lateinit var parent: TaskCommand
+
+    @Option(names = ["--task-key"], required = true)
+    lateinit var taskKey: String
+
+    @Option(names = ["--force-discard"], description = ["确认丢弃未提交改动后删除"])
+    var forceDiscard: Boolean = false
+
+    override fun call(): Int {
+        val context = parent.root.context
+        val taskDirectory = context.taskDirectory(taskKey)
+        context.tasks.delete(taskDirectory, forceDiscard)
+        println("已删除任务：$taskKey")
         return 0
     }
 }

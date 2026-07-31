@@ -35,7 +35,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Dmg)
             packageName = "Task Worktree Manager"
-            packageVersion = "0.1.3"
+            packageVersion = "0.1.4"
             description = "Multi-repository Git worktree and UAT tag manager"
             vendor = "Snowball Technology"
 

@@ -614,13 +614,17 @@ private fun TaskDetail(
     onAddServices: () -> Unit,
 ) {
     var showArchiveDialog by remember(task.taskKey) { mutableStateOf(false) }
+    var showDeleteDialog by remember(task.taskKey) { mutableStateOf(false) }
     val availableServices = task.services.filter { workspace ->
         workspace.status != WorkspaceStatus.ARCHIVED &&
             workspace.status != WorkspaceStatus.FAILED &&
             Path.of(workspace.worktreePath).toFile().isDirectory
     }
     val failedServices = task.services.filter { it.status == WorkspaceStatus.FAILED }
-    val hasExistingWorktrees = task.services.any { Path.of(it.worktreePath).toFile().isDirectory }
+    val hasExistingWorktrees = task.services.any { workspace ->
+        val root = Path.of(workspace.worktreePath)
+        root.toFile().isDirectory && root.resolve(".git").toFile().exists()
+    }
     PageContainer {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -641,6 +645,12 @@ private fun TaskDetail(
                 Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("终端")
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { controller.reveal(taskRootPath(controller, task)) }) {
+                Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("打开文件夹")
             }
             if (availableServices.any { it.ideType == IdeType.IDEA }) {
                 Spacer(Modifier.width(8.dp))
@@ -716,6 +726,14 @@ private fun TaskDetail(
                     Text("安全归档")
                 }
             }
+            OutlinedButton(
+                onClick = { showDeleteDialog = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) {
+                Icon(Icons.Outlined.DeleteForever, null)
+                Spacer(Modifier.width(6.dp))
+                Text("删除任务")
+            }
         }
     }
     if (showArchiveDialog) {
@@ -725,6 +743,17 @@ private fun TaskDetail(
             onArchive = { force ->
                 controller.archiveTask(task, force)
                 showArchiveDialog = false
+            },
+        )
+    }
+    if (showDeleteDialog) {
+        DeleteTaskDialog(
+            controller = controller,
+            task = task,
+            onDismiss = { showDeleteDialog = false },
+            onDelete = { forceDiscard ->
+                controller.deleteTask(task, forceDiscard)
+                showDeleteDialog = false
             },
         )
     }
@@ -1524,6 +1553,80 @@ private fun ArchiveTaskDialog(
                 TextButton(onClick = onDismiss) { Text("取消") }
             }
         },
+        shape = RoundedCornerShape(20.dp),
+    )
+}
+
+@Composable
+private fun DeleteTaskDialog(
+    controller: AppController,
+    task: TaskManifest,
+    onDismiss: () -> Unit,
+    onDelete: (forceDiscard: Boolean) -> Unit,
+) {
+    val risks = remember(task.taskKey) { controller.inspectDeleteRisk(task) }
+    var discardConfirmed by remember { mutableStateOf(false) }
+    val canDelete = risks.isEmpty() || discardConfirmed
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Outlined.DeleteForever, null, tint = MaterialTheme.colorScheme.error) },
+        title = { Text("删除任务", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "将永久删除任务目录及其中的 Worktree，并释放磁盘空间。本地 / 远端 Feature 分支会保留。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "路径：${taskRootPath(controller, task)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (risks.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "以下服务存在未提交改动或进行中的 Git 操作：",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            risks.forEach { risk ->
+                                Text(
+                                    "• ${risk.serviceName}" +
+                                        listOfNotNull(
+                                            if (risk.staged) "staged" else null,
+                                            if (risk.unstaged) "unstaged" else null,
+                                            if (risk.untracked) "untracked" else null,
+                                            risk.operationInProgress,
+                                        ).joinToString(prefix = "（", postfix = "）", separator = ", "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = discardConfirmed,
+                            onCheckedChange = { discardConfirmed = it },
+                        )
+                        Text("确认丢弃未提交改动")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onDelete(risks.isNotEmpty()) },
+                enabled = canDelete,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text("删除任务")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         shape = RoundedCornerShape(20.dp),
     )
 }

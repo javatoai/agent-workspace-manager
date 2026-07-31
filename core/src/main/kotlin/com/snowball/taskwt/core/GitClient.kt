@@ -26,6 +26,10 @@ data class RepositoryStatus(
 ) {
     val safeToArchive: Boolean
         get() = !staged && !unstaged && !untracked && unpushedCommits == 0 && operationInProgress == null
+
+    /** Uncommitted work or in-progress git operation; unpushed commits alone do not count. */
+    val hasUncommittedChanges: Boolean
+        get() = staged || unstaged || untracked || operationInProgress != null
 }
 
 class GitClient(

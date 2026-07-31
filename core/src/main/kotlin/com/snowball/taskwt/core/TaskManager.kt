@@ -21,6 +21,14 @@ data class AddServicesRequest(
     val repositoryIds: List<String>,
 )
 
+data class DeleteRisk(
+    val serviceName: String,
+    val staged: Boolean,
+    val unstaged: Boolean,
+    val untracked: Boolean,
+    val operationInProgress: String?,
+)
+
 class TaskManager(
     private val git: GitClient = GitClient(),
     private val manifests: ManifestStore = ManifestStore(),
@@ -57,7 +65,12 @@ class TaskManager(
 
         val selected = resolveRepositories(repositories, request.repositoryIds)
         selected.forEach { repository ->
-            prepareRepositoryForNewBranch(config, repository, request.featureBranch)
+            prepareRepositoryForFeatureBranch(
+                config = config,
+                repository = repository,
+                featureBranch = request.featureBranch,
+                requireAbsent = true,
+            )
         }
 
         val now = Instant.now(clock).toString()
@@ -128,7 +141,12 @@ class TaskManager(
 
         val selected = resolveRepositories(repositories, newIds)
         selected.forEach { repository ->
-            prepareRepositoryForNewBranch(config, repository, manifest.featureBranch)
+            prepareRepositoryForFeatureBranch(
+                config = config,
+                repository = repository,
+                featureBranch = manifest.featureBranch,
+                requireAbsent = false,
+            )
         }
 
         val newWorkspaces = buildWorkspaces(
@@ -178,8 +196,9 @@ class TaskManager(
         require(manifest.status != WorkspaceStatus.ARCHIVED) { "已归档任务不能执行初始化，请先恢复任务" }
         val updatedServices = manifest.services.map { workspace ->
             val worktree = Path.of(workspace.worktreePath)
-            if (!worktree.exists() || !worktree.isDirectory()) {
-                // Checkout never succeeded — do not flip FAILED to READY via empty Bootstrap.
+            val repository = Path.of(workspace.repositoryPath)
+            // Only re-run Bootstrap on a registered worktree — residual dirs must not become READY.
+            if (!isRegisteredWorktree(repository, worktree)) {
                 return@map workspace
             }
             if (failedOnly && workspace.status != WorkspaceStatus.READY_WITH_WARNINGS &&
@@ -189,7 +208,7 @@ class TaskManager(
             }
             val serviceConfig = config.services[workspace.repositoryId] ?: return@map workspace
             val result = bootstrap.initialize(
-                Path.of(workspace.repositoryPath),
+                repository,
                 worktree,
                 serviceConfig.bootstrap,
             )
@@ -260,6 +279,69 @@ class TaskManager(
             )
         }
     }
+
+    fun inspectDeleteRisk(taskDirectory: Path): List<DeleteRisk> {
+        val manifest = manifests.load(taskDirectory)
+        return collectDeleteRisks(manifest)
+    }
+
+    fun delete(taskDirectory: Path, forceDiscard: Boolean = false) {
+        val manifest = manifests.load(taskDirectory)
+        events.info(
+            event = "task.delete.started",
+            message = "开始删除任务工作区",
+            metadata = mapOf(
+                "taskKey" to manifest.taskKey,
+                "forceDiscard" to forceDiscard.toString(),
+            ),
+            clock = clock,
+        )
+        val risks = collectDeleteRisks(manifest)
+        if (risks.isNotEmpty() && !forceDiscard) {
+            val detail = risks.joinToString("\n") { risk ->
+                "${risk.serviceName}：staged=${risk.staged}, unstaged=${risk.unstaged}, " +
+                    "untracked=${risk.untracked}, operation=${risk.operationInProgress ?: "none"}"
+            }
+            throw IllegalStateException(
+                "存在未提交改动，删除将丢弃这些改动。请确认后使用强制丢弃：\n$detail",
+            )
+        }
+        val dirtyNames = risks.map { it.serviceName }.toSet()
+        manifest.services.forEach { workspace ->
+            val worktree = Path.of(workspace.worktreePath)
+            if (!worktree.exists()) return@forEach
+            val force = forceDiscard || workspace.serviceName in dirtyNames
+            runCatching {
+                git.removeWorktree(Path.of(workspace.repositoryPath), worktree, force)
+            }.onFailure {
+                if (worktree.exists()) {
+                    deleteRecursively(worktree)
+                }
+            }
+        }
+        deleteRecursively(taskDirectory)
+        events.info(
+            event = "task.delete.completed",
+            message = "任务工作区已删除",
+            metadata = mapOf("taskKey" to manifest.taskKey),
+            clock = clock,
+        )
+    }
+
+    private fun collectDeleteRisks(manifest: TaskManifest): List<DeleteRisk> =
+        manifest.services.mapNotNull { workspace ->
+            val path = Path.of(workspace.worktreePath)
+            if (!path.exists()) return@mapNotNull null
+            val status = runCatching { git.status(path) }.getOrNull() ?: return@mapNotNull null
+            if (!status.hasUncommittedChanges) return@mapNotNull null
+            DeleteRisk(
+                serviceName = workspace.serviceName,
+                staged = status.staged,
+                unstaged = status.unstaged,
+                untracked = status.untracked,
+                operationInProgress = status.operationInProgress,
+            )
+        }
 
     fun archive(taskDirectory: Path, force: Boolean = false): TaskManifest {
         val manifest = manifests.load(taskDirectory)
@@ -375,18 +457,41 @@ class TaskManager(
         }
     }
 
-    private fun prepareRepositoryForNewBranch(
+    private fun prepareRepositoryForFeatureBranch(
         config: AppConfig,
         repository: RepositoryInfo,
         featureBranch: String,
+        requireAbsent: Boolean,
     ) {
         val service = config.services[repository.id] ?: ServiceConfig(
             repositoryId = repository.id,
             displayName = repository.name,
         )
         require(service.enabled) { "服务已禁用：${service.displayName}" }
-        git.fetch(Path.of(repository.rootPath), service.uatRemote)
-        ensureBranchAvailable(Path.of(repository.rootPath), featureBranch)
+        val repoPath = Path.of(repository.rootPath)
+        git.fetch(repoPath, service.uatRemote)
+        require(git.run(repoPath, "check-ref-format", "--branch", featureBranch, check = false).succeeded) {
+            "分支名不合法：$featureBranch"
+        }
+        val usedBy = git.worktrees(repoPath).firstOrNull { it.branch == featureBranch }
+        require(usedBy == null) { "分支 $featureBranch 已被工作树占用：${usedBy?.path}" }
+        if (requireAbsent) {
+            require(!git.refExists(repoPath, "refs/heads/$featureBranch")) {
+                "本地分支已存在：$featureBranch"
+            }
+            val remotes = git.run(repoPath, "for-each-ref", "--format=%(refname)", "refs/remotes").stdout
+            require(remotes.lineSequence().none { it.endsWith("/$featureBranch") }) {
+                "远端分支已存在：$featureBranch"
+            }
+        }
+    }
+
+    private fun isRegisteredWorktree(repository: Path, worktree: Path): Boolean {
+        if (!worktree.exists() || !worktree.isDirectory()) return false
+        val normalized = worktree.toAbsolutePath().normalize()
+        return runCatching {
+            git.worktrees(repository).any { it.path == normalized }
+        }.getOrDefault(false)
     }
 
     private fun buildWorkspaces(
@@ -468,7 +573,7 @@ class TaskManager(
             ) {
                 "基础分支不存在：${service.defaultBaseRef}"
             }
-            git.addWorktree(repository, target, workspace.branch, service.defaultBaseRef)
+            attachWorktree(config, workspace, repository, target, allowCreateFromBase = true)
             val result = bootstrap.initialize(repository, target, service.bootstrap)
             workspace.copy(
                 status = if (result.succeeded) WorkspaceStatus.READY else WorkspaceStatus.READY_WITH_WARNINGS,
@@ -583,17 +688,6 @@ class TaskManager(
                 }
             },
         )
-    }
-
-    private fun ensureBranchAvailable(repository: Path, branch: String) {
-        require(git.run(repository, "check-ref-format", "--branch", branch, check = false).succeeded) {
-            "分支名不合法：$branch"
-        }
-        val usedBy = git.worktrees(repository).firstOrNull { it.branch == branch }
-        require(usedBy == null) { "分支 $branch 已被工作树占用：${usedBy?.path}" }
-        require(!git.refExists(repository, "refs/heads/$branch")) { "本地分支已存在：$branch" }
-        val remotes = git.run(repository, "for-each-ref", "--format=%(refname)", "refs/remotes").stdout
-        require(remotes.lineSequence().none { it.endsWith("/$branch") }) { "远端分支已存在：$branch" }
     }
 
     private fun writeIdeaAggregate(

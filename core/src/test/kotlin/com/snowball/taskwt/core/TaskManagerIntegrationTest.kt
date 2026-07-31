@@ -175,6 +175,56 @@ class TaskManagerIntegrationTest {
         assertEquals(WorkspaceStatus.FAILED, afterInit.status)
         assertEquals(WorkspaceStatus.FAILED, afterInit.services.single().status)
         assertFalse(Files.exists(worktree))
+
+        // Residual directory that is not a registered worktree must not become READY.
+        Files.createDirectories(worktree)
+        Files.writeString(worktree.resolve("junk.txt"), "leftover")
+        val afterResidual = manager.initialize(config, taskDirectory, failedOnly = false)
+        assertEquals(WorkspaceStatus.FAILED, afterResidual.status)
+        assertEquals(WorkspaceStatus.FAILED, afterResidual.services.single().status)
+        assertEquals(listOf("checkout failed"), afterResidual.services.single().warnings)
+    }
+
+    @Test
+    fun `addServices succeeds when feature branch already exists on target repo`() {
+        val servicesRoot = temporary.resolve("services-existing-branch")
+        cloneNamedService(servicesRoot, "alpha-svc")
+        cloneNamedService(servicesRoot, "beta-svc")
+        val repositories = RepositoryScanner().scan(listOf(servicesRoot), null)
+        val firstInfo = repositories.first { it.name == "alpha-svc" }
+        val secondInfo = repositories.first { it.name == "beta-svc" }
+        val betaRepo = Path.of(secondInfo.rootPath)
+        val branch = "feature/OBT-shared"
+        GitTestSupport.run(betaRepo, "checkout", "-b", branch)
+        GitTestSupport.run(betaRepo, "push", "-u", "origin", branch)
+        GitTestSupport.run(betaRepo, "checkout", "master")
+
+        val taskRoot = temporary.resolve("tasks-existing-branch")
+        val config = AppConfig(
+            scanRoots = listOf(servicesRoot.toString()),
+            taskRoot = taskRoot.toString(),
+            services = mapOf(
+                firstInfo.id to ServiceConfig(repositoryId = firstInfo.id, displayName = firstInfo.name),
+                secondInfo.id to ServiceConfig(repositoryId = secondInfo.id, displayName = secondInfo.name),
+            ),
+        )
+        val manager = TaskManager()
+        val created = manager.create(
+            config,
+            repositories,
+            CreateTaskRequest("OBT-shared", branch, listOf(firstInfo.id)),
+        )
+        val added = manager.addServices(
+            config,
+            repositories,
+            taskRoot.resolve(created.taskDirectoryName),
+            AddServicesRequest(listOf(secondInfo.id)),
+        )
+        assertEquals(2, added.services.size)
+        val beta = added.services.single { it.repositoryId == secondInfo.id }
+        assertEquals(WorkspaceStatus.READY, beta.status)
+        assertTrue(Files.isDirectory(Path.of(beta.worktreePath)))
+        assertTrue(GitClient().refExists(betaRepo, "refs/heads/$branch"))
     }
 
     @Test
@@ -262,6 +312,128 @@ class TaskManagerIntegrationTest {
         assertEquals(WorkspaceStatus.READY, retried.status)
         assertTrue(Files.isDirectory(Path.of(retried.services.single().worktreePath)))
         assertTrue(GitClient().refExists(repository, "refs/heads/feature/OBT-retry2"))
+    }
+
+    @Test
+    fun `delete removes worktree and task directory but keeps feature branch`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("source-delete"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("services").resolve("delete-svc"))
+        val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
+        val taskRoot = temporary.resolve("tasks-delete")
+        val config = AppConfig(
+            scanRoots = listOf(repository.parent.toString()),
+            taskRoot = taskRoot.toString(),
+            services = mapOf(
+                repositoryInfo.id to ServiceConfig(
+                    repositoryId = repositoryInfo.id,
+                    displayName = repositoryInfo.name,
+                ),
+            ),
+        )
+        val manager = TaskManager()
+        val created = manager.create(
+            config,
+            listOf(repositoryInfo),
+            CreateTaskRequest("OBT-del", "feature/OBT-del", listOf(repositoryInfo.id)),
+        )
+        val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
+        val worktree = Path.of(created.services.single().worktreePath)
+        assertTrue(Files.isDirectory(worktree))
+        assertTrue(Files.isDirectory(taskDirectory))
+
+        manager.delete(taskDirectory)
+
+        assertFalse(Files.exists(worktree))
+        assertFalse(Files.exists(taskDirectory))
+        assertTrue(GitClient().refExists(repository, "refs/heads/feature/OBT-del"))
+    }
+
+    @Test
+    fun `delete requires forceDiscard when worktree has uncommitted files`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("source-dirty"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("services").resolve("dirty-svc"))
+        val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
+        val taskRoot = temporary.resolve("tasks-dirty")
+        val config = AppConfig(
+            scanRoots = listOf(repository.parent.toString()),
+            taskRoot = taskRoot.toString(),
+            services = mapOf(
+                repositoryInfo.id to ServiceConfig(
+                    repositoryId = repositoryInfo.id,
+                    displayName = repositoryInfo.name,
+                ),
+            ),
+        )
+        val manager = TaskManager()
+        val created = manager.create(
+            config,
+            listOf(repositoryInfo),
+            CreateTaskRequest("OBT-dirty", "feature/OBT-dirty", listOf(repositoryInfo.id)),
+        )
+        val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
+        val worktree = Path.of(created.services.single().worktreePath)
+        Files.writeString(worktree.resolve("uncommitted.txt"), "dirty")
+
+        val risks = manager.inspectDeleteRisk(taskDirectory)
+        assertEquals(1, risks.size)
+        assertTrue(risks.single().untracked)
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            manager.delete(taskDirectory)
+        }
+        assertTrue(error.message!!.contains("未提交"))
+        assertTrue(Files.exists(worktree))
+        assertTrue(Files.exists(taskDirectory))
+
+        manager.delete(taskDirectory, forceDiscard = true)
+        assertFalse(Files.exists(worktree))
+        assertFalse(Files.exists(taskDirectory))
+        assertTrue(GitClient().refExists(repository, "refs/heads/feature/OBT-dirty"))
+    }
+
+    @Test
+    fun `delete allows unpushed commits without force while archive does not`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("source-unpushed"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("services").resolve("unpushed-svc"))
+        val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
+        val taskRoot = temporary.resolve("tasks-unpushed")
+        val config = AppConfig(
+            scanRoots = listOf(repository.parent.toString()),
+            taskRoot = taskRoot.toString(),
+            services = mapOf(
+                repositoryInfo.id to ServiceConfig(
+                    repositoryId = repositoryInfo.id,
+                    displayName = repositoryInfo.name,
+                ),
+            ),
+        )
+        val manager = TaskManager()
+        val created = manager.create(
+            config,
+            listOf(repositoryInfo),
+            CreateTaskRequest("OBT-unpushed", "feature/OBT-unpushed", listOf(repositoryInfo.id)),
+        )
+        val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
+        val worktree = Path.of(created.services.single().worktreePath)
+        Files.writeString(worktree.resolve("local-only.txt"), "commit me")
+        GitTestSupport.run(worktree, "add", "local-only.txt")
+        GitTestSupport.run(worktree, "commit", "-m", "local only commit")
+
+        val status = GitClient().status(worktree)
+        assertTrue(status.unpushedCommits > 0)
+        assertFalse(status.hasUncommittedChanges)
+        assertFalse(status.safeToArchive)
+        assertTrue(manager.inspectDeleteRisk(taskDirectory).isEmpty())
+
+        assertThrows(IllegalStateException::class.java) {
+            manager.archive(taskDirectory)
+        }
+        assertTrue(Files.exists(worktree))
+
+        manager.delete(taskDirectory)
+        assertFalse(Files.exists(worktree))
+        assertFalse(Files.exists(taskDirectory))
+        assertTrue(GitClient().refExists(repository, "refs/heads/feature/OBT-unpushed"))
     }
 
     private fun cloneNamedService(servicesRoot: Path, name: String): Path {

@@ -234,6 +234,25 @@ class AppController(
             },
         )
 
+    fun inspectDeleteRisk(task: TaskManifest): List<DeleteRisk> =
+        runCatching { taskManager.inspectDeleteRisk(taskDirectory(task)) }
+            .getOrElse {
+                showError(it)
+                emptyList()
+            }
+
+    fun deleteTask(task: TaskManifest, forceDiscard: Boolean) =
+        runOperation(
+            successMessage = "任务已删除",
+            block = {
+                taskManager.delete(taskDirectory(task), forceDiscard)
+            },
+            onSuccess = {
+                selectedTask = null
+                reloadTasks()
+            },
+        )
+
     fun initializeTask(task: TaskManifest, failedOnly: Boolean) =
         runOperation(
             successMessage = "初始化步骤已完成",
