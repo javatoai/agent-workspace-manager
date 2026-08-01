@@ -106,6 +106,16 @@ jobs:
           chmod +x ./gradlew ./scripts/build-macos.sh
           ./scripts/build-macos.sh
 
+      - name: Show macOS packaging diagnostics
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for log in desktop/build/compose/logs/createDistributable/*-err.txt desktop/build/compose/logs/createDistributable/*-out.txt; do
+            echo "===== $log ====="
+            cat "$log"
+          done
+
       - name: Stage macOS release assets
         shell: bash
         run: |
