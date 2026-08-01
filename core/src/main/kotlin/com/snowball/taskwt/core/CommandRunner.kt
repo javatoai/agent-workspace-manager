@@ -4,7 +4,9 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 interface CommandRunner {
     fun run(
@@ -23,6 +25,7 @@ class ProcessCommandRunner : CommandRunner {
         environment: Map<String, String>,
     ): CommandResult {
         require(command.isNotEmpty()) { "命令不能为空" }
+        require(!timeout.isNegative && !timeout.isZero) { "timeout must be greater than zero" }
         val process = ProcessBuilder(command)
             .directory(workingDirectory?.toFile())
             .apply {
@@ -42,13 +45,15 @@ class ProcessCommandRunner : CommandRunner {
             }
             val finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)
             if (!finished) {
-                process.destroy()
+                destroyProcessTree(process)
                 if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+                process.inputStream.close()
+                process.errorStream.close()
                 CommandResult(
                     exitCode = TIMEOUT_EXIT_CODE,
-                    stdout = stdoutFuture.get(2, TimeUnit.SECONDS),
+                    stdout = readAfterTermination(stdoutFuture),
                     stderr = "命令执行超时（${timeout.seconds} 秒）\n" +
-                        stderrFuture.get(2, TimeUnit.SECONDS),
+                        readAfterTermination(stderrFuture),
                 )
             } else {
                 CommandResult(
@@ -61,6 +66,23 @@ class ProcessCommandRunner : CommandRunner {
             executor.shutdownNow()
         }
     }
+
+    private fun destroyProcessTree(process: Process) {
+        process.toHandle().descendants().toList().asReversed().forEach { descendant ->
+            descendant.destroy()
+        }
+        process.destroy()
+    }
+
+    private fun readAfterTermination(future: Future<String>): String =
+        try {
+            future.get(2, TimeUnit.SECONDS)
+        } catch (_: TimeoutException) {
+            future.cancel(true)
+            ""
+        } catch (_: Exception) {
+            ""
+        }
 
     companion object {
         const val TIMEOUT_EXIT_CODE = 124

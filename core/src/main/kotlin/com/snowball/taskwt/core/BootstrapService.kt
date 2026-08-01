@@ -38,6 +38,13 @@ class BootstrapService(
         val steps = mutableListOf<BootstrapStepResult>()
         val warnings = mutableListOf<String>()
 
+        config.commands
+            .filter { it.enabled && supportsCurrentPlatform(it.platforms) }
+            .forEach { command ->
+                require(command.executable.isNotBlank()) { "command executable must not be blank" }
+                require(command.timeoutSeconds > 0) { "command timeoutSeconds must be greater than zero" }
+            }
+
         config.copyRules.forEach { rule ->
             val stepName = "复制 ${rule.source} → ${rule.target}"
             runCatching {
@@ -93,6 +100,8 @@ class BootstrapService(
         require(source.fileName.toString() != ".git" && !source.startsWith(sourceRepository.resolve(".git"))) {
             "禁止复制 .git 内容"
         }
+        require(!Files.isSymbolicLink(source)) { "copy source must not be a symbolic link: $source" }
+        require(!Files.isSymbolicLink(target)) { "copy target must not be a symbolic link: $target" }
         if (target.exists() && !rule.overwrite) {
             throw IllegalStateException("目标已存在且规则禁止覆盖：$target")
         }
@@ -131,7 +140,7 @@ class BootstrapService(
         if (target.exists() && !overwrite) {
             throw IllegalStateException("目标已存在且规则禁止覆盖：$target")
         }
-        val temporary = target.parent.resolve(".${target.fileName}.taskwt.tmp")
+        val temporary = Files.createTempFile(target.parent, ".${target.fileName}.taskwt-", ".tmp")
         try {
             Files.copy(source, temporary, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES)
             try {
@@ -169,6 +178,17 @@ class BootstrapService(
         val resolved = normalizedRoot.resolve(relative).normalize()
         require(resolved.startsWith(normalizedRoot)) { "$label 超出仓库范围：$relativeValue" }
         require(resolved.none { it.toString() == ".git" }) { "$label 禁止访问 .git：$relativeValue" }
+        val relativeResolved = normalizedRoot.relativize(resolved)
+        require(relativeResolved.none { it.toString().equals(".git", ignoreCase = true) }) {
+            "$label must not access .git: $relativeValue"
+        }
+        var current = normalizedRoot
+        relativeResolved.forEach { component ->
+            current = current.resolve(component)
+            require(!Files.isSymbolicLink(current)) {
+                "$label must not traverse symbolic links: $relativeValue"
+            }
+        }
         return resolved
     }
 

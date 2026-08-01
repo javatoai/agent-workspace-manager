@@ -1634,6 +1634,7 @@ private fun DeleteTaskDialog(
                                             if (risk.unstaged) "unstaged" else null,
                                             if (risk.untracked) "untracked" else null,
                                             risk.operationInProgress,
+                                            risk.statusCheckError?.let { "status check failed: $it" },
                                         ).joinToString(prefix = "（", postfix = "）", separator = ", "),
                                     style = MaterialTheme.typography.bodySmall,
                                 )

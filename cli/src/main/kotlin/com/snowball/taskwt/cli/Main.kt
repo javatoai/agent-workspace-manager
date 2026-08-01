@@ -12,6 +12,7 @@ import picocli.CommandLine.Parameters
 import java.nio.file.Path
 import java.nio.file.Files
 import java.util.concurrent.Callable
+import java.util.Locale
 import kotlin.io.path.exists
 import kotlin.system.exitProcess
 
@@ -410,7 +411,7 @@ class ServiceBootstrapSetCommand : Callable<Int> {
         val bootstrap = if (configFile != null) {
             context.json.decodeFromString<BootstrapConfig>(Files.readString(configFile))
         } else {
-            when (preset?.lowercase()) {
+            when (preset?.lowercase(Locale.ROOT)) {
                 "empty" -> BootstrapPresets.empty()
                 "codegraph" -> BootstrapPresets.codeGraph()
                 else -> throw IllegalArgumentException("未知预设：$preset（支持 empty、codegraph）")

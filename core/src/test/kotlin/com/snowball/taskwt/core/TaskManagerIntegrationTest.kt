@@ -444,6 +444,46 @@ class TaskManagerIntegrationTest {
     }
 
     @Test
+    fun `treats git status failure as a delete risk`() {
+        val taskDirectory = temporary.resolve("task-status-failure")
+        val worktree = temporary.resolve("not-a-git-worktree")
+        val repository = temporary.resolve("not-a-repository")
+        Files.createDirectories(worktree)
+        Files.createDirectories(repository)
+        val workspace = ServiceWorkspace(
+            repositoryId = "repo-test",
+            serviceName = "broken-service",
+            repositoryPath = repository.toString(),
+            worktreePath = worktree.toString(),
+            ideType = IdeType.IDEA,
+            branch = "feature/test",
+        )
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "status-failure",
+                taskDirectoryName = taskDirectory.fileName.toString(),
+                featureBranch = "feature/test",
+                createdAt = "2026-01-01T00:00:00Z",
+                updatedAt = "2026-01-01T00:00:00Z",
+                status = WorkspaceStatus.READY,
+                services = listOf(workspace),
+            ),
+        )
+
+        val manager = TaskManager()
+        val risks = manager.inspectDeleteRisk(taskDirectory)
+
+        assertEquals(1, risks.size)
+        assertTrue(risks.single().statusCheckError != null)
+        assertThrows(IllegalStateException::class.java) {
+            manager.delete(taskDirectory)
+        }
+        assertTrue(Files.exists(worktree))
+        assertTrue(Files.exists(taskDirectory))
+    }
+
+    @Test
     fun `create rejects blank folderName or requirementLink`() {
         val config = AppConfig(taskRoot = temporary.resolve("tasks").toString())
         val manager = TaskManager()

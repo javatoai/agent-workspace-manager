@@ -7,6 +7,7 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.time.Clock
 import java.time.Instant
+import java.util.Locale
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -28,6 +29,7 @@ data class DeleteRisk(
     val unstaged: Boolean,
     val untracked: Boolean,
     val operationInProgress: String?,
+    val statusCheckError: String? = null,
 )
 
 class TaskManager(
@@ -36,8 +38,22 @@ class TaskManager(
     private val bootstrap: BootstrapService = BootstrapService(),
     private val clock: Clock = Clock.systemUTC(),
     private val events: EventSink = NoOpEventSink,
+    private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
 ) {
     fun create(
+        config: AppConfig,
+        repositories: List<RepositoryInfo>,
+        request: CreateTaskRequest,
+    ): TaskManifest {
+        val taskRoot = config.taskRoot?.let(Path::of)
+            ?: throw IllegalStateException("task root is not configured")
+        val taskDirectory = taskRoot.resolve(TaskNaming.directoryName(request.folderName))
+        return withTaskLock(taskDirectory) {
+            createUnlocked(config, repositories, request)
+        }
+    }
+
+    private fun createUnlocked(
         config: AppConfig,
         repositories: List<RepositoryInfo>,
         request: CreateTaskRequest,
@@ -125,6 +141,15 @@ class TaskManager(
         repositories: List<RepositoryInfo>,
         taskDirectory: Path,
         request: AddServicesRequest,
+    ): TaskManifest = withTaskLock(taskDirectory) {
+        addServicesUnlocked(config, repositories, taskDirectory, request)
+    }
+
+    private fun addServicesUnlocked(
+        config: AppConfig,
+        repositories: List<RepositoryInfo>,
+        taskDirectory: Path,
+        request: AddServicesRequest,
     ): TaskManifest {
         require(request.repositoryIds.isNotEmpty()) { "至少选择一个服务" }
         val manifest = manifests.load(taskDirectory)
@@ -197,6 +222,15 @@ class TaskManager(
         taskDirectory: Path,
         repositories: List<RepositoryInfo> = emptyList(),
         failedOnly: Boolean = false,
+    ): TaskManifest = withTaskLock(taskDirectory) {
+        initializeUnlocked(config, taskDirectory, repositories, failedOnly)
+    }
+
+    private fun initializeUnlocked(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
+        failedOnly: Boolean = false,
     ): TaskManifest {
         val manifest = manifests.load(taskDirectory)
         require(manifest.status != WorkspaceStatus.ARCHIVED) { "已归档任务不能执行初始化，请先恢复任务" }
@@ -235,6 +269,15 @@ class TaskManager(
     }
 
     fun retryFailedServices(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
+        repositoryIds: List<String>? = null,
+    ): TaskManifest = withTaskLock(taskDirectory) {
+        retryFailedServicesUnlocked(config, taskDirectory, repositories, repositoryIds)
+    }
+
+    private fun retryFailedServicesUnlocked(
         config: AppConfig,
         taskDirectory: Path,
         repositories: List<RepositoryInfo> = emptyList(),
@@ -295,17 +338,23 @@ class TaskManager(
         config: AppConfig,
         taskDirectory: Path,
         repositories: List<RepositoryInfo>,
-    ) {
+    ) = withTaskLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
         writeAgentsMd(config, taskDirectory, manifest, repositories)
     }
 
     fun inspectDeleteRisk(taskDirectory: Path): List<DeleteRisk> {
-        val manifest = manifests.load(taskDirectory)
-        return collectDeleteRisks(manifest)
+        return withTaskLock(taskDirectory) {
+            val manifest = manifests.load(taskDirectory)
+            collectDeleteRisks(manifest)
+        }
     }
 
-    fun delete(taskDirectory: Path, forceDiscard: Boolean = false) {
+    fun delete(taskDirectory: Path, forceDiscard: Boolean = false) = withTaskLock(taskDirectory) {
+        deleteUnlocked(taskDirectory, forceDiscard)
+    }
+
+    private fun deleteUnlocked(taskDirectory: Path, forceDiscard: Boolean) {
         val manifest = manifests.load(taskDirectory)
         events.info(
             event = "task.delete.started",
@@ -327,18 +376,34 @@ class TaskManager(
             )
         }
         val dirtyNames = risks.map { it.serviceName }.toSet()
+        val removalFailures = mutableListOf<String>()
         manifest.services.forEach { workspace ->
             val worktree = Path.of(workspace.worktreePath)
             if (!worktree.exists()) return@forEach
             val force = forceDiscard || workspace.serviceName in dirtyNames
-            runCatching {
+            try {
                 git.removeWorktree(Path.of(workspace.repositoryPath), worktree, force)
-            }.onFailure {
+            } catch (error: Throwable) {
+                if (!force) {
+                    throw IllegalStateException(
+                        "failed to remove worktree ${workspace.serviceName}; use forceDiscard only after reviewing the risk",
+                        error,
+                    )
+                }
                 if (worktree.exists()) {
                     deleteRecursively(worktree)
                 }
+                git.run(Path.of(workspace.repositoryPath), "worktree", "prune", check = false)
+                removalFailures += "${workspace.serviceName}: ${error.message ?: error::class.simpleName}"
             }
         }
+        if (removalFailures.isNotEmpty()) {
+            throw IllegalStateException("some worktrees required forced cleanup:\n${removalFailures.joinToString("\n")}")
+        }
+        manifest.services
+            .map { Path.of(it.repositoryPath) }
+            .distinct()
+            .forEach { git.run(it, "worktree", "prune", check = false) }
         deleteRecursively(taskDirectory)
         events.info(
             event = "task.delete.completed",
@@ -352,7 +417,19 @@ class TaskManager(
         manifest.services.mapNotNull { workspace ->
             val path = Path.of(workspace.worktreePath)
             if (!path.exists()) return@mapNotNull null
-            val status = runCatching { git.status(path) }.getOrNull() ?: return@mapNotNull null
+            val statusResult = runCatching { git.status(path) }
+            if (statusResult.isFailure) {
+                return@mapNotNull DeleteRisk(
+                    serviceName = workspace.serviceName,
+                    staged = false,
+                    unstaged = false,
+                    untracked = false,
+                    operationInProgress = null,
+                    statusCheckError = statusResult.exceptionOrNull()?.message
+                        ?: statusResult.exceptionOrNull()?.let { it::class.simpleName },
+                )
+            }
+            val status = statusResult.getOrThrow()
             if (!status.hasUncommittedChanges) return@mapNotNull null
             DeleteRisk(
                 serviceName = workspace.serviceName,
@@ -364,6 +441,15 @@ class TaskManager(
         }
 
     fun archive(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
+        force: Boolean = false,
+    ): TaskManifest = withTaskLock(taskDirectory) {
+        archiveUnlocked(config, taskDirectory, repositories, force)
+    }
+
+    private fun archiveUnlocked(
         config: AppConfig,
         taskDirectory: Path,
         repositories: List<RepositoryInfo> = emptyList(),
@@ -391,12 +477,30 @@ class TaskManager(
             }
             throw IllegalStateException("存在未安全保存的工作区，无法归档：\n$detail")
         }
+        val removalFailures = mutableListOf<String>()
         manifest.services.forEach { workspace ->
             val worktree = Path.of(workspace.worktreePath)
             if (worktree.exists()) {
-                git.removeWorktree(Path.of(workspace.repositoryPath), worktree, force)
+                runCatching {
+                    git.removeWorktree(Path.of(workspace.repositoryPath), worktree, force)
+                }.onFailure { error ->
+                    if (force && worktree.exists()) {
+                        deleteRecursively(worktree)
+                        git.run(Path.of(workspace.repositoryPath), "worktree", "prune", check = false)
+                    }
+                    removalFailures += "${workspace.serviceName}: ${error.message ?: error::class.simpleName}"
+                }
             }
         }
+        if (removalFailures.isNotEmpty()) {
+            throw IllegalStateException(
+                "some worktrees could not be archived; retry archive after resolving:\n${removalFailures.joinToString("\n")}",
+            )
+        }
+        manifest.services
+            .map { Path.of(it.repositoryPath) }
+            .distinct()
+            .forEach { git.run(it, "worktree", "prune", check = false) }
         return manifest.copy(
             status = WorkspaceStatus.ARCHIVED,
             updatedAt = Instant.now(clock).toString(),
@@ -414,6 +518,15 @@ class TaskManager(
     }
 
     fun restore(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositories: List<RepositoryInfo> = emptyList(),
+        rerunBootstrap: Boolean = true,
+    ): TaskManifest = withTaskLock(taskDirectory) {
+        restoreUnlocked(config, taskDirectory, repositories, rerunBootstrap)
+    }
+
+    private fun restoreUnlocked(
         config: AppConfig,
         taskDirectory: Path,
         repositories: List<RepositoryInfo> = emptyList(),
@@ -473,6 +586,13 @@ class TaskManager(
             )
         }
     }
+
+    private fun <T> withTaskLock(taskDirectory: Path, block: () -> T): T =
+        FileLocking.withExclusiveLock(
+            paths.locks.resolve("task-${FileLocking.stablePathHash(taskDirectory)}.lock"),
+            "task is already being modified: $taskDirectory",
+            block,
+        )
 
     private fun writeAgentsMd(
         config: AppConfig,
@@ -543,19 +663,19 @@ class TaskManager(
         existing.forEach { workspace ->
             val key = Path.of(workspace.worktreePath).fileName.toString()
                 .substringBeforeLast("-")
-                .lowercase()
+                .lowercase(Locale.ROOT)
             // Prefer repository folder base name from display path when possible.
-            val repoName = Path.of(workspace.repositoryPath).fileName.toString().lowercase()
+            val repoName = Path.of(workspace.repositoryPath).fileName.toString().lowercase(Locale.ROOT)
             nameCounts[repoName] = nameCounts.getOrDefault(repoName, 0) + 1
             // Also count the actual directory stem for uniqueness checks below.
             nameCounts[key] = nameCounts.getOrDefault(key, 0)
         }
         selected.forEach { repository ->
-            val key = repository.name.lowercase()
+            val key = repository.name.lowercase(Locale.ROOT)
             nameCounts[key] = nameCounts.getOrDefault(key, 0) + 1
         }
         val usedDirectoryNames = existing.map {
-            Path.of(it.worktreePath).fileName.toString().lowercase()
+            Path.of(it.worktreePath).fileName.toString().lowercase(Locale.ROOT)
         }.toMutableSet()
 
         return selected.map { repository ->
@@ -567,18 +687,18 @@ class TaskManager(
                 IdeType.IDEA -> taskDirectory.resolve("idea-$taskDirectoryName")
                 IdeType.WEBSTORM -> taskDirectory.resolve("webstorm-$taskDirectoryName")
             }
-            val baseName = if (nameCounts.getOrDefault(repository.name.lowercase(), 0) > 1) {
+            val baseName = if (nameCounts.getOrDefault(repository.name.lowercase(Locale.ROOT), 0) > 1) {
                 "${repository.name}-${repository.id.removePrefix("repo-").take(6)}"
             } else {
                 repository.name
             }
             var directoryName = baseName
             var suffix = 2
-            while (directoryName.lowercase() in usedDirectoryNames) {
+            while (directoryName.lowercase(Locale.ROOT) in usedDirectoryNames) {
                 directoryName = "$baseName-$suffix"
                 suffix += 1
             }
-            usedDirectoryNames += directoryName.lowercase()
+            usedDirectoryNames += directoryName.lowercase(Locale.ROOT)
             ServiceWorkspace(
                 repositoryId = repository.id,
                 serviceName = service.displayName,

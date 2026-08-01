@@ -1,5 +1,7 @@
 package com.snowball.taskwt.core
 
+import java.util.Locale
+
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -24,7 +26,7 @@ object AgentsMdWriter {
         val taskRepoIds = manifest.services.map { it.repositoryId }.toSet()
         val others = allRepositories
             .filter { it.id !in taskRepoIds }
-            .sortedBy { it.name.lowercase() }
+            .sortedBy { it.name.lowercase(Locale.ROOT) }
         val appendixTrimmed = appendix.trim()
 
         return buildString {

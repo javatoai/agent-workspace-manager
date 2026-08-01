@@ -18,7 +18,7 @@ class ManifestStore(
     fun save(taskDirectory: Path, manifest: TaskManifest) {
         taskDirectory.createDirectories()
         val target = taskDirectory.resolve(FILE_NAME)
-        val temporary = taskDirectory.resolve("$FILE_NAME.tmp")
+        val temporary = Files.createTempFile(taskDirectory, ".$FILE_NAME-", ".tmp")
         Files.writeString(temporary, json.encodeToString(manifest))
         try {
             Files.move(

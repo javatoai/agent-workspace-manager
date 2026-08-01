@@ -472,9 +472,10 @@ class AppController(
         block: () -> T,
         onSuccess: (T) -> Unit,
     ) {
+        if (busy) return
+        busy = true
+        dismissMessages()
         scope.launch {
-            busy = true
-            dismissMessages()
             runCatching { withContext(Dispatchers.IO) { block() } }
                 .onSuccess {
                     onSuccess(it)

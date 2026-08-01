@@ -2,6 +2,8 @@ package com.snowball.taskwt.core
 
 import java.security.MessageDigest
 import java.text.Normalizer
+import java.nio.charset.StandardCharsets
+import java.util.Locale
 
 object TaskNaming {
     private const val MAX_DIRECTORY_NAME_LENGTH = 80
@@ -32,7 +34,7 @@ object TaskNaming {
 
     private fun shortHash(value: String): String =
         MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray())
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
             .take(4)
-            .joinToString("") { "%02x".format(it) }
+            .joinToString("") { "%02x".format(Locale.ROOT, it) }
 }

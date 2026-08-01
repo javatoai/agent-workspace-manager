@@ -66,6 +66,53 @@ class BootstrapServiceTest {
         assertFalse(Files.exists(target.resolve("secret")))
     }
 
+    @Test
+    fun `rejects enabled commands with non-positive timeout`() {
+        val source = temporary.resolve("source-timeout")
+        val target = temporary.resolve("target-timeout")
+        Files.createDirectories(source)
+        Files.createDirectories(target)
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            BootstrapService().initialize(
+                source,
+                target,
+                BootstrapConfig(
+                    commands = listOf(
+                        BootstrapCommand("invalid", "git", timeoutSeconds = 0),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `rejects symbolic link copy sources`() {
+        val source = temporary.resolve("source-link")
+        val target = temporary.resolve("target-link")
+        val outside = temporary.resolve("outside.txt")
+        Files.createDirectories(source)
+        Files.createDirectories(target)
+        Files.writeString(outside, "outside")
+        val link = source.resolve("linked.txt")
+        try {
+            Files.createSymbolicLink(link, outside)
+        } catch (_: UnsupportedOperationException) {
+            return
+        } catch (_: java.io.IOException) {
+            return
+        }
+
+        val result = BootstrapService().initialize(
+            source,
+            target,
+            BootstrapConfig(copyRules = listOf(BootstrapCopyRule("linked.txt", "copied.txt"))),
+        )
+
+        assertFalse(result.succeeded)
+        assertFalse(Files.exists(target.resolve("copied.txt")))
+    }
+
     private fun assertEqualsCompat(expected: Int, actual: Int) {
         assertTrue(expected == actual, "expected=$expected actual=$actual")
     }

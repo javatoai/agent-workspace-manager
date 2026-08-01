@@ -25,7 +25,7 @@ class ConfigStore(
 
     fun save(config: AppConfig) {
         paths.home.createDirectories()
-        val temporary = paths.home.resolve("config.json.tmp")
+        val temporary = Files.createTempFile(paths.home, ".config-", ".json.tmp")
         Files.writeString(temporary, json.encodeToString(config))
         moveAtomically(temporary, paths.config)
     }

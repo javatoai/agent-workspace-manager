@@ -1,12 +1,11 @@
 package com.snowball.taskwt.core
 
 import kotlinx.serialization.Serializable
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -622,24 +621,19 @@ class TagBuildService(
     }
 
     private fun <T> withRepositoryLock(repository: Path, block: () -> T): T {
-        paths.locks.createDirectories()
         val lockPath = paths.locks.resolve("${repositoryHash(git.commonDirectory(repository))}.lock")
-        FileChannel.open(
+        return FileLocking.withExclusiveLock(
             lockPath,
-            StandardOpenOption.CREATE,
-            StandardOpenOption.WRITE,
-        ).use { channel ->
-            val lock: FileLock = channel.tryLock()
-                ?: throw IllegalStateException("该仓库正在执行另一个 Tag 操作")
-            lock.use { return block() }
-        }
+            "repository is already running another Tag operation",
+            block,
+        )
     }
 
     private fun repositoryHash(path: Path): String =
         MessageDigest.getInstance("SHA-256")
-            .digest(path.toAbsolutePath().normalize().toString().lowercase().toByteArray())
+            .digest(path.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
             .take(12)
-            .joinToString("") { "%02x".format(it) }
+            .joinToString("") { "%02x".format(Locale.ROOT, it) }
 }
 
 class MergeConflictException(

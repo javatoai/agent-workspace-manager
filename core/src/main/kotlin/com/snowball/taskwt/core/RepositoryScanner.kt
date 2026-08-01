@@ -9,6 +9,8 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.EnumSet
+import java.nio.charset.StandardCharsets
+import java.util.Locale
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 
@@ -36,7 +38,10 @@ class RepositoryScanner(
             if (!root.exists() || !root.isDirectory()) return@forEach
             Files.walkFileTree(
                 root,
-                EnumSet.of(FileVisitOption.FOLLOW_LINKS),
+                // Do not recursively follow links. Direct links to repositories are
+                // handled in visitFile below, while this prevents cycles and scans
+                // escaping into arbitrary external directory trees.
+                EnumSet.noneOf(FileVisitOption::class.java),
                 Int.MAX_VALUE,
                 object : SimpleFileVisitor<Path>() {
                     override fun preVisitDirectory(
@@ -74,10 +79,35 @@ class RepositoryScanner(
                     ): FileVisitResult =
                         if (exception is FileSystemLoopException) FileVisitResult.CONTINUE
                         else super.visitFileFailed(file, exception)
+
+                    override fun visitFile(
+                        file: Path,
+                        attributes: BasicFileAttributes,
+                    ): FileVisitResult {
+                        // A configured scan root may contain a direct directory link
+                        // to a repository. Inspect that link without traversing it.
+                        if (Files.isDirectory(file)) {
+                            val canonical = file.canonicalOrNormalized()
+                            if (excludedTaskRoot != null && canonical.startsWith(excludedTaskRoot)) {
+                                return FileVisitResult.CONTINUE
+                            }
+                            val dotGit = file.resolve(".git")
+                            if (dotGit.isDirectory()) {
+                                runCatching { inspect(file) }
+                                    .onSuccess { repository ->
+                                        byCommonDirectory.putIfAbsent(
+                                            Path.of(repository.gitCommonDirectory).canonicalOrNormalized(),
+                                            repository,
+                                        )
+                                    }
+                            }
+                        }
+                        return FileVisitResult.CONTINUE
+                    }
                 },
             )
         }
-        return byCommonDirectory.values.sortedBy { it.name.lowercase() }
+        return byCommonDirectory.values.sortedBy { it.name.lowercase(Locale.ROOT) }
     }
 
     private fun inspect(directory: Path): RepositoryInfo {
@@ -95,9 +125,9 @@ class RepositoryScanner(
 
     private fun repositoryId(commonDirectory: Path): String {
         val digest = MessageDigest.getInstance("SHA-256")
-            .digest(commonDirectory.toString().lowercase().toByteArray())
+            .digest(commonDirectory.toString().lowercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
             .take(8)
-            .joinToString("") { "%02x".format(it) }
+            .joinToString("") { "%02x".format(Locale.ROOT, it) }
         return "repo-$digest"
     }
 }

@@ -22,7 +22,7 @@ class TagOperationStore(
         val directory = taskDirectory.resolve("tag-operations")
         directory.createDirectories()
         val target = directory.resolve("${operation.operationId}.json")
-        val temporary = directory.resolve("${operation.operationId}.json.tmp")
+        val temporary = Files.createTempFile(directory, ".${operation.operationId}-", ".json.tmp")
         Files.writeString(temporary, json.encodeToString(operation))
         try {
             Files.move(
