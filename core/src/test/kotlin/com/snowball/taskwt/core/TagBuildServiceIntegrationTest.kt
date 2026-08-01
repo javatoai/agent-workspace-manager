@@ -165,6 +165,9 @@ class TagBuildServiceIntegrationTest {
             |
             """.trimMargin(),
         )
+        // Git only executes receive hooks when the file is executable on POSIX hosts.
+        // Windows Git does not require this bit, which previously hid the portability bug.
+        hook.toFile().setExecutable(true)
 
         val partial = builder.build(config, taskDirectory, repositoryInfo.id)
 
