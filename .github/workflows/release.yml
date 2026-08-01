@@ -51,7 +51,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = (Select-String -Path 'desktop\build.gradle.kts' -Pattern 'packageVersion\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $version = (Select-String -Path 'build.gradle.kts' -Pattern 'version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
           $out = 'dist\windows'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
@@ -104,7 +104,7 @@ jobs:
           # Normalize them before executing them on the macOS runner.
           perl -pi -e 's/\r$//' ./gradlew ./scripts/build-macos.sh
           chmod +x ./gradlew ./scripts/build-macos.sh
-          ./scripts/build-macos.sh
+          MAC_PACKAGE_VERSION=1.4.0 ./scripts/build-macos.sh
 
       - name: Show macOS packaging diagnostics
         if: always()
@@ -120,7 +120,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(sed -n 's/.*packageVersion *= *"\([^"]*\)".*/\1/p' desktop/build.gradle.kts | head -n1)
+          version=$(sed -n 's/.*version *= *"\([^"]*\)".*/\1/p' build.gradle.kts | head -n1)
           mkdir -p dist/macos
           dmg=$(ls desktop/build/compose/binaries/main/dmg/*.dmg | head -n1)
           cli=$(ls cli/build/distributions/*.zip | head -n1)

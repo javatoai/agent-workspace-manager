@@ -1,5 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
+val macPackageVersion = providers.gradleProperty("macPackageVersion").orElse("0.1.4")
+
 plugins {
     kotlin("jvm")
     kotlin("plugin.serialization")
@@ -35,7 +37,10 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Dmg)
             packageName = "Task Worktree Manager"
-            packageVersion = "0.1.4"
+            // macOS jpackage rejects versions whose first component is zero.
+            // CI overrides this with a compatible internal app version while the
+            // project and release version remain 0.1.4.
+            packageVersion = macPackageVersion.get()
             description = "Multi-repository Git worktree and UAT tag manager"
             vendor = "Snowball Technology"
 
