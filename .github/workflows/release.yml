@@ -32,9 +32,11 @@ jobs:
 
       - name: Install WiX Toolset (MSI)
         run: |
-          choco install wixtoolset --version=3.14.1 -y --no-progress
           $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
           if (-not (Test-Path $wixBin)) {
+            choco install wixtoolset --version=3.14.1 -y --no-progress
+          }
+          if (-not (Test-Path (Join-Path $wixBin 'candle.exe'))) {
             throw "WiX bin directory not found: $wixBin"
           }
           echo "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -98,6 +100,9 @@ jobs:
 
       - name: Build macOS distributables
         run: |
+          # These files may be checked out with CRLF from a Windows workspace.
+          # Normalize them before executing them on the macOS runner.
+          perl -pi -e 's/\r$//' ./gradlew ./scripts/build-macos.sh
           chmod +x ./gradlew ./scripts/build-macos.sh
           ./scripts/build-macos.sh
 
