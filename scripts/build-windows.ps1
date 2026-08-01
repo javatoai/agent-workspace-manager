@@ -8,7 +8,7 @@ try {
         throw "Gradle build failed with exit code $LASTEXITCODE"
     }
 
-    $version = (Select-String -Path 'desktop\build.gradle.kts' -Pattern 'packageVersion\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+    $version = (Select-String -Path 'build.gradle.kts' -Pattern 'version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
     $portableSrc = 'desktop\build\compose\binaries\main\app\Task Worktree Manager'
     $zipDir = 'desktop\build\compose\binaries\main\zip'
     New-Item -ItemType Directory -Force -Path $zipDir | Out-Null
