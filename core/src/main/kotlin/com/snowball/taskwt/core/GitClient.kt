@@ -117,7 +117,13 @@ class GitClient(
         run(repository, "fetch", "--prune", "--tags", "--force", remote, timeout = Duration.ofMinutes(5))
     }
 
-    fun addWorktree(repository: Path, target: Path, branch: String, baseRef: String) {
+    fun addWorktree(
+        repository: Path,
+        target: Path,
+        branch: String,
+        baseRef: String,
+        trackingRemote: String = "origin",
+    ) {
         run(
             repository,
             "-c",
@@ -126,10 +132,13 @@ class GitClient(
             "add",
             "-b",
             branch,
+            "--no-track",
             target.toString(),
             baseRef,
             timeout = Duration.ofMinutes(5),
         )
+        run(repository, "config", "branch.$branch.remote", trackingRemote)
+        run(repository, "config", "branch.$branch.merge", "refs/heads/$branch")
     }
 
     fun addExistingWorktree(repository: Path, target: Path, branch: String) {

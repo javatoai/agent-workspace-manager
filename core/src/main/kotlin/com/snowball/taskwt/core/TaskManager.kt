@@ -818,7 +818,13 @@ class TaskManager(
         require(allowCreateFromBase) {
             "本地和远端都找不到分支：${workspace.branch}"
         }
-        git.addWorktree(repository, target, workspace.branch, service.defaultBaseRef)
+        git.addWorktree(
+            repository,
+            target,
+            workspace.branch,
+            service.defaultBaseRef,
+            service.uatRemote,
+        )
     }
 
     private fun cleanupFailedTarget(repository: Path, target: Path) {

@@ -54,6 +54,14 @@ class TaskManagerIntegrationTest {
         assertTrue(agentsMd.contains("job-manager"))
         val worktree = Path.of(created.services.single().worktreePath)
         assertTrue(Files.exists(worktree.resolve("local.conf")))
+        assertEquals(
+            "origin",
+            GitTestSupport.run(repository, "config", "--get", "branch.feature/OBT-123.remote"),
+        )
+        assertEquals(
+            "refs/heads/feature/OBT-123",
+            GitTestSupport.run(repository, "config", "--get", "branch.feature/OBT-123.merge"),
+        )
         val ideaProject = taskRoot.resolve(created.taskDirectoryName).resolve("idea-${created.taskDirectoryName}")
         assertTrue(Files.exists(ideaProject.resolve("pom.xml")))
         assertEquals(
