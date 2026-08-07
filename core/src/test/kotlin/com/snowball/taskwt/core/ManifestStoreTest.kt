@@ -11,7 +11,7 @@ class ManifestStoreTest {
     lateinit var temporary: Path
 
     @Test
-    fun `rejects legacy manifests instead of silently hiding them`() {
+    fun `legacy manifests are preserved and reported but not imported`() {
         val taskDirectory = temporary.resolve("legacy-task")
         Files.createDirectories(taskDirectory)
         Files.writeString(
@@ -21,7 +21,10 @@ class ManifestStoreTest {
         val store = ManifestStore()
 
         assertThrows(IllegalArgumentException::class.java) { store.load(taskDirectory) }
-        assertThrows(IllegalArgumentException::class.java) { store.list(temporary) }
+        val scan = store.scan(temporary)
+        kotlin.test.assertTrue(scan.current.isEmpty())
+        kotlin.test.assertEquals(listOf(taskDirectory), scan.ignoredLegacyDirectories)
+        kotlin.test.assertEquals("""{"schemaVersion":1}""", Files.readString(taskDirectory.resolve(ManifestStore.FILE_NAME)))
     }
 
     @Test
@@ -31,5 +34,31 @@ class ManifestStoreTest {
         Files.writeString(taskDirectory.resolve(ManifestStore.FILE_NAME), "{}")
 
         assertThrows(IllegalArgumentException::class.java) { ManifestStore().load(taskDirectory) }
+    }
+
+    @Test
+    fun `corrupt manifest is reported without hiding valid tasks`() {
+        val store = ManifestStore()
+        val validDirectory = temporary.resolve("valid")
+        store.save(
+            validDirectory,
+            TaskManifest(
+                folderName = "valid",
+                taskDirectoryName = "valid",
+                featureBranch = "feature/valid",
+                createdAt = "2026-08-08T00:00:00Z",
+                updatedAt = "2026-08-08T00:00:00Z",
+                status = WorkspaceStatus.READY,
+                services = emptyList(),
+            ),
+        )
+        val brokenDirectory = temporary.resolve("broken")
+        Files.createDirectories(brokenDirectory)
+        Files.writeString(brokenDirectory.resolve(ManifestStore.FILE_NAME), "{not-json")
+
+        val scan = store.scan(temporary)
+
+        kotlin.test.assertEquals(listOf("valid"), scan.current.map { it.second.folderName })
+        kotlin.test.assertEquals(setOf(brokenDirectory), scan.failures.keys)
     }
 }

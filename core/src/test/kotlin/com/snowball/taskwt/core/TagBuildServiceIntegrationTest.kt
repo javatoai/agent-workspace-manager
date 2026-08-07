@@ -116,9 +116,7 @@ Timestamp: 2026-08-07 03:26:08""",
         )
         val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
         val taskDirectory = temporary.resolve("partial-tasks").resolve("TAG-PARTIAL")
-        val featureWorktree = taskDirectory
-            .resolve("TAG-PARTIAL")
-            .resolve("operation-center")
+        val featureWorktree = taskDirectory.resolve("operation-center")
         Files.createDirectories(featureWorktree.parent)
         GitClient().addWorktree(
             repository,

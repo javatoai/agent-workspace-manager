@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $projectRoot
 try {
-    & .\gradlew.bat clean test :cli:distZip :desktop:createDistributable :desktop:packageExe :desktop:packageMsi --no-daemon
+    & .\gradlew.bat clean test :desktop:compileKotlin :desktop:createDistributable :desktop:packageExe :desktop:packageMsi --no-daemon
     if ($LASTEXITCODE -ne 0) {
         throw "Gradle build failed with exit code $LASTEXITCODE"
     }

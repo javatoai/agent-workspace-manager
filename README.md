@@ -1,147 +1,93 @@
 # Task Worktree Manager
 
-多仓库研发任务的 **Git Worktree** 桌面管理器（含 CLI）。按任务编号与 Feature 分支批量创建各服务隔离工作区，一键打开 IDEA / WebStorm，开发完成后可安全合并测试分支并生成 UAT Tag。
+Task Worktree Manager（TaskWT）是面向多业务线、多服务研发任务的桌面管理器。它把每个任务的代码工作区、分支、AGENTS.md 与 UAT Tag 操作集中在一个界面中，并用 Git 安全检查保护用户已有工作。
 
-当前版本：**0.1.4**
+当前版本：**0.2.0**
 
-## 主要能力
+## 0.2.0 主要能力
 
-- 扫描一个或多个目录中的主 Git 仓库（支持 Windows 目录链接 / 符号链接）
-- 自动忽略构建目录、子模块、Linked Worktree、任务根目录及工具自建临时 Worktree
-- 自由字符串 `folderName`，自动生成 Windows 安全且稳定的任务目录名
-- 新建任务需填写需求链接（URL 或文本）；详情页对 http(s) 可点开浏览器
-- 任务目录自动生成 `AGENTS.md`（本任务 worktree、其它本地仓只读表、设置中的自定义追加）
-- 一次需求可为多个服务创建同名 Feature 分支与 Worktree；事后可追加服务
-- 每个服务独立创建 Worktree，并按服务配置独立打开 IDEA 或 WebStorm
-- 创建前检查同名本地/远端分支，支持逐项目确认复用
-- 一键打开服务 IDE、终端、资源管理器；复制任务或服务绝对路径
-- 服务级 Bootstrap：复制规则、顺序命令、超时、平台过滤与 CodeGraph 预设
-- **安全归档 / 恢复**：检查暂存、未提交、未跟踪、未推送及进行中的 Git 操作
-- **永久删除任务**：只删任务目录与 worktree，保留本地 / 远端 Feature 分支；有未提交改动时需勾选确认丢弃（仅未推送不阻断）
-- 单服务或批量 UAT Tag；批量时单个失败不中断其他服务
-- 在隔离临时 Worktree 中检测 / 执行合并，冲突不污染 Feature 工作区
-- 浅色、深色及跟随系统主题
+- 启动直接进入研发任务，不执行仓库扫描、Git Fetch 或外部系统刷新；需要校验最新状态时由用户点击顶部“刷新”。
+- 配置有序的业务组，每个组维护独立的服务列表；只有一个默认组时隐藏组相关界面，保持简洁体验。
+- 从目录选择器人工添加 Git 仓库。工具会解析顶层仓库并按 `git-common-dir` 去重，拒绝非 Git、Bare 仓库和临时 Linked Worktree。
+- 同一物理仓库可加入多个组，但在同一组内只能出现一次。
+- 标准服务可按多个基础分支创建 Worktree；相同基础分支共用一个 Worktree，多模块分支自动增加稳定后缀。
+- 独立克隆服务从 `origin` 完整克隆并切到指定远程分支，不额外创建 Feature 分支、Worktree 或执行 Bootstrap。
+- 组级总开关与模块/克隆子开关共同控制 UAT Tag；独立克隆使用实际克隆分支参与构建。
+- 全局、业务组、任务三级 `AGENTS.md` 合成；任务人工区使用标记保护，外部文件变化可自动同步并检测编辑冲突。
+- 安全归档与删除会检查未提交内容和进行中的 Git 操作，不执行 Force Push、自动 Rebase 或自动解决冲突。
+- 浅色、深色及跟随系统主题。
 
 ## 快速开始
-
-### 绿色免安装包（推荐）
-
-构建后产物：
-
-```text
-desktop/build/compose/binaries/main/app/Task Worktree Manager/
-desktop/build/compose/binaries/main/zip/Task-Worktree-Manager-<version>-portable.zip
-```
-
-解压或进入目录后双击 `Task Worktree Manager.exe` 即可运行（自带 runtime，无需安装 JDK）。
-
-### 从源码运行
 
 要求 **JDK 21**。
 
 ```powershell
-.\gradlew.bat :desktop:run
-.\gradlew.bat :cli:run --args="--help"
 .\gradlew.bat test
+.\gradlew.bat :desktop:compileKotlin
+.\gradlew.bat :desktop:run
 ```
 
-Windows 完整打包（测试 + CLI + 绿色包 + EXE/MSI）：
+Windows 完整构建（测试、绿色包、EXE、MSI）：
 
 ```powershell
 .\scripts\build-windows.ps1
 ```
 
-## 首次配置
+macOS 构建 DMG：
 
-配置文件固定保存在：
+```bash
+./scripts/build-macos.sh
+```
+
+0.2.0 只提供桌面应用，不再包含命令行模块或命令行发布包。
+
+## 数据位置
 
 ```text
-%USERPROFILE%\TaskWorktreeManager\config.json
+~/TaskWorktreeManager/
+├── config.json
+├── agents/
+│   ├── global/AGENTS.md
+│   └── groups/<groupId>/AGENTS.md
+├── locks/
+└── temp/tag-build/
 ```
 
-首次启动需选择：
+每个任务目录包含严格版本的 `taskwt.json`、最终合成的 `AGENTS.md`、Tag 构建历史以及服务 Worktree 或独立克隆。
 
-1. **服务扫描目录**（可后续在设置中继续添加）
-2. **任务根目录**（扫描器会自动排除，避免把任务 worktree 当成主仓）
-
-## 任务目录结构
-
-```text
-<taskRoot>/<taskDirectoryName>/
-├── taskwt.json
-├── AGENTS.md
-├── tag-build-history.jsonl
-├── tag-operations/
-├── <后端服务 worktree>/
-└── <前端服务 worktree>/
-```
-
-建议在 IDEA / WebStorm 中将「打开项目」设为「新窗口」。工具不会修改 JetBrains 全局设置。
-
-## CLI 常用命令
-
-```powershell
-taskwt config init --scan-root <服务目录> --task-root <任务根目录>
-taskwt task create --folder-name "OBT-123 支付" --requirement-link "https://project.feishu.cn/..." --branch feature/OBT-123 --services job-manager,order-center
-创建遇到同名本地或远端分支时，CLI 会逐项目询问是否复用；非交互执行默认终止。
-taskwt task list
-taskwt task reveal "OBT-123 支付"
-taskwt task delete --folder-name "OBT-123 支付"            # 干净时可直接删
-taskwt task delete --folder-name "OBT-123 支付" --force-discard  # 丢弃未提交后删除
-taskwt task archive "OBT-123 支付"
-taskwt tag preflight --folder-name "OBT-123 支付" --service <repositoryId>
-taskwt tag build --folder-name "OBT-123 支付" --services <repositoryId>
-```
-
-## 归档 vs 删除
-
-| 操作 | 任务目录 / manifest | Worktree | Feature 分支 | 脏工作区 |
-|------|---------------------|----------|--------------|----------|
-| 安全归档 | 保留（状态变 ARCHIVED） | 移除 | 保留 | 含未推送也会阻断，需强制确认 |
-| 永久删除 | 整夹删除 | 移除 | 保留 | 仅未提交 / 操作中阻断；勾选丢弃后可删 |
+0.2.0 使用全新的严格数组 schema，不会自动导入或改写旧配置和旧任务。升级已有数据前请阅读[旧数据手工迁移指南](docs/LEGACY-DATA-MIGRATION.md)。
 
 ## 构建产物
 
 | 类型 | 路径 |
-|------|------|
-| 绿色免安装目录 | `desktop/build/compose/binaries/main/app/` |
+|---|---|
+| 绿色目录 | `desktop/build/compose/binaries/main/app/Task Worktree Manager/` |
 | 绿色 Zip | `desktop/build/compose/binaries/main/zip/` |
 | Windows EXE | `desktop/build/compose/binaries/main/exe/` |
 | Windows MSI | `desktop/build/compose/binaries/main/msi/` |
-| CLI ZIP | `cli/build/distributions/` |
+| macOS DMG | `desktop/build/compose/binaries/main/dmg/` |
 
-Compose Desktop 原生安装包不能跨平台生成：EXE / MSI 须在 Windows 构建，DMG 须在 macOS 构建。
+Compose Desktop 原生安装包不能跨平台生成：EXE/MSI 必须在 Windows 构建，DMG 必须在 macOS 构建。
 
 ## CI / GitHub Release
 
-推送到 `main`、打 `v*` 标签，或在 Actions 中手动触发 **Release packages** 工作流后，会自动：
+推送到 `main`、推送 `v*` 标签，或手动运行 **Release packages** 工作流后，会分别构建 Windows 桌面三件套与 macOS DMG，再上传到 GitHub Release。`main` 使用可覆盖的 `continuous` 预发布，`v*` 标签生成正式 Release。
 
-1. 在 `windows-latest` 跑 `scripts/build-windows.ps1`（测试 + 绿色 zip + EXE + MSI + CLI）
-2. 在 `macos-latest` 跑 `scripts/build-macos.sh`（测试 + DMG + CLI）
-3. 上传到 GitHub Releases
-
-| 触发 | Release |
-|------|---------|
-| `main` 推送 / 手动运行 | 预发布标签 `continuous`（每次覆盖更新附件） |
-| 标签 `v*`（如 `v0.1.4`） | 正式版 Release（设为 Latest） |
-
-产物下载：仓库页 **Releases**，或对应 workflow run 的 Artifacts（保留 14 天）。
-
-## 模块结构
+## 模块
 
 ```text
-core/      业务核心（Git、任务、Bootstrap、Tag）
-desktop/  Compose Desktop 界面
-cli/      Picocli 命令行
-docs/     详细文档
-scripts/  打包脚本
+core/      Domain、Application 与 Infrastructure 实现
+desktop/   Compose Desktop 界面与原生安装包
+docs/      配置、架构、安全流程和迁移文档
+scripts/   桌面打包脚本
 ```
 
 ## 文档
 
-- [用户与配置说明](docs/CONFIGURATION.md)
+- [配置与使用](docs/CONFIGURATION.md)
+- [架构与测试](docs/ARCHITECTURE.md)
 - [安全与 UAT Tag 流程](docs/SAFETY-AND-TAG-FLOW.md)
-- [架构与测试说明](docs/ARCHITECTURE.md)
+- [旧数据手工迁移](docs/LEGACY-DATA-MIGRATION.md)
 
 ## License
 

@@ -11,13 +11,25 @@ import java.nio.file.StandardCopyOption
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
+data class ManifestScanResult(
+    val current: List<Pair<Path, TaskManifest>>,
+    val ignoredLegacyDirectories: List<Path>,
+    val failures: Map<Path, String> = emptyMap(),
+)
+
+interface TaskManifestRepository {
+    fun save(taskDirectory: Path, manifest: TaskManifest)
+    fun load(taskDirectory: Path): TaskManifest
+    fun scan(taskRoot: Path): ManifestScanResult
+}
+
 class ManifestStore(
     private val json: Json = Json {
         prettyPrint = true
         encodeDefaults = true
     },
-) {
-    fun save(taskDirectory: Path, manifest: TaskManifest) {
+) : TaskManifestRepository {
+    override fun save(taskDirectory: Path, manifest: TaskManifest) {
         require(manifest.schemaVersion == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
             "不能写入任务 JSON 版本 ${manifest.schemaVersion}，当前版本为 $CURRENT_TASK_MANIFEST_SCHEMA_VERSION"
         }
@@ -37,7 +49,7 @@ class ManifestStore(
         }
     }
 
-    fun load(taskDirectory: Path): TaskManifest {
+    override fun load(taskDirectory: Path): TaskManifest {
         val content = Files.readString(taskDirectory.resolve(FILE_NAME))
         val version = json.parseToJsonElement(content)
             .jsonObject["schemaVersion"]
@@ -50,13 +62,35 @@ class ManifestStore(
         return json.decodeFromString(content)
     }
 
-    fun list(taskRoot: Path): List<Pair<Path, TaskManifest>> {
-        if (!taskRoot.exists()) return emptyList()
+    fun list(taskRoot: Path): List<Pair<Path, TaskManifest>> = scan(taskRoot).current
+
+    /** Legacy task files remain byte-for-byte untouched and are reported rather than imported. */
+    override fun scan(taskRoot: Path): ManifestScanResult {
+        if (!taskRoot.exists()) return ManifestScanResult(emptyList(), emptyList())
         return Files.list(taskRoot).use { children ->
-            children
+            val directories = children
                 .filter { it.resolve(FILE_NAME).exists() }
                 .toList()
-                .map { directory -> directory to load(directory) }
+            val current = mutableListOf<Pair<Path, TaskManifest>>()
+            val legacy = mutableListOf<Path>()
+            val failures = linkedMapOf<Path, String>()
+            directories.forEach { directory ->
+                runCatching {
+                    val content = Files.readString(directory.resolve(FILE_NAME))
+                    val version = json.parseToJsonElement(content)
+                        .jsonObject["schemaVersion"]
+                        ?.jsonPrimitive
+                        ?.intOrNull
+                    if (version == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
+                        current.add(directory to json.decodeFromString(content))
+                    } else {
+                        legacy.add(directory)
+                    }
+                }.onFailure { error ->
+                    failures[directory] = error.message ?: error::class.simpleName ?: "读取失败"
+                }
+            }
+            ManifestScanResult(current, legacy, failures)
         }
     }
 

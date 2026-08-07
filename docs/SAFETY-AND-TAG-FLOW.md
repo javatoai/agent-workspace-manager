@@ -36,6 +36,8 @@
 
 ## Tag 规则
 
+桌面端只展示同时通过两级开关的 Tag 入口：任务所属组的 `createTagEnabled` 为开，且对应标准模块的 `tagEnabled` 或独立克隆的 `cloneTagEnabled` 为开。独立克隆以任务中实际检出的分支参与 UAT，不会为 Tag 再创建 Feature 分支。
+
 有效格式：
 
 ```text
@@ -96,12 +98,12 @@ FAILED
 PARTIAL
 ```
 
-测试分支已推送但 Tag 推送失败时标记为 `PARTIAL`。桌面端“继续”或 CLI `tag retry`
+测试分支已推送但 Tag 推送失败时标记为 `PARTIAL`。桌面端“继续”
 会复用相同本地 Tag，不会错误地跳到下一个版本。
 
 ## 归档
 
-安全归档会检查每个 Worktree：
+安全归档会检查每个标准 Worktree 或独立克隆工作区：
 
 - Staged
 - Unstaged
@@ -109,5 +111,5 @@ PARTIAL
 - 当前分支未推送提交
 - Merge / Rebase / Cherry-pick / Revert
 
-只有全部安全时才移除 Worktree。分支、任务清单和 Tag 历史会保留。
+只有全部安全时才移除工作区。标准 Worktree 通过 Git 安全移除，独立克隆则在路径与状态复核后删除；分支、任务清单和 Tag 历史会保留。
 强制归档必须输入完整 `taskKey`；它可能丢弃未保存的本地文件，应谨慎使用。

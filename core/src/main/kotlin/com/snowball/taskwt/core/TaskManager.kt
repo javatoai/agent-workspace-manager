@@ -42,6 +42,7 @@ data class DeleteRisk(
     val unstaged: Boolean,
     val untracked: Boolean,
     val operationInProgress: String?,
+    val unpushedCommits: Int = 0,
     val statusCheckError: String? = null,
 )
 

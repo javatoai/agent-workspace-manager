@@ -3,6 +3,7 @@ package com.snowball.taskwt.core
 import java.nio.file.Path
 import java.time.Duration
 import kotlin.io.path.Path
+import kotlin.io.path.createDirectories
 
 class GitException(
     message: String,
@@ -69,6 +70,43 @@ class GitClient(
             ?.trim()
             ?.ifBlank { null }
 
+    fun remoteDefaultBranch(repository: Path, remote: String = "origin"): String? {
+        val symbolic = run(
+            repository,
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/$remote/HEAD",
+            check = false,
+        )
+        return symbolic.takeIf { it.succeeded }
+            ?.stdout
+            ?.trim()
+            ?.removePrefix("$remote/")
+            ?.ifBlank { null }
+    }
+
+    /** Performs a full clone and checks out the requested remote branch. */
+    fun cloneRepository(originUrl: String, target: Path, branch: String) {
+        target.parent?.createDirectories()
+        val result = runner.run(
+            listOf(
+                "git",
+                "-c",
+                "core.longpaths=true",
+                "clone",
+                "--branch",
+                branch,
+                originUrl,
+                target.toString(),
+            ),
+            timeout = Duration.ofMinutes(10),
+        )
+        if (!result.succeeded) {
+            throw GitException("Git 克隆失败：$originUrl#$branch", result)
+        }
+    }
+
     fun worktrees(repository: Path): List<WorktreeRecord> {
         val records = mutableListOf<WorktreeRecord>()
         var path: Path? = null
@@ -124,21 +162,34 @@ class GitClient(
         baseRef: String,
         trackingRemote: String = "origin",
     ) {
-        run(
-            repository,
-            "-c",
-            "core.symlinks=false",
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            "--no-track",
-            target.toString(),
-            baseRef,
-            timeout = Duration.ofMinutes(5),
-        )
-        run(repository, "config", "branch.$branch.remote", trackingRemote)
-        run(repository, "config", "branch.$branch.merge", "refs/heads/$branch")
+        var createdByThisCall = false
+        try {
+            run(
+                repository,
+                "-c",
+                "core.symlinks=false",
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                "--no-track",
+                target.toString(),
+                baseRef,
+                timeout = Duration.ofMinutes(5),
+            )
+            createdByThisCall = true
+            run(repository, "config", "branch.$branch.remote", trackingRemote)
+            run(repository, "config", "branch.$branch.merge", "refs/heads/$branch")
+        } catch (error: Throwable) {
+            // A failure after `worktree add` must not leave an invisible partial
+            // checkout that prevents the same task from being retried.
+            if (createdByThisCall) {
+                runCatching { removeWorktree(repository, target, force = true) }
+                run(repository, "branch", "-D", branch, check = false)
+                run(repository, "worktree", "prune", check = false)
+            }
+            throw error
+        }
     }
 
     fun addExistingWorktree(repository: Path, target: Path, branch: String, force: Boolean = false) {
@@ -211,6 +262,18 @@ class GitClient(
             operationInProgress = operationInProgress(repository),
         )
     }
+
+    /** Counts commits on any local branch that are not reachable from any remote ref. */
+    fun localOnlyCommitCount(repository: Path): Int = run(
+        repository,
+        "rev-list",
+        "--count",
+        "HEAD",
+        "--all",
+        "--not",
+        "--remotes",
+    ).stdout.trim().toIntOrNull()
+        ?: error("无法解析本地未推送提交数量：$repository")
 
     private fun operationInProgress(repository: Path): String? {
         val gitDirectory = Path(run(repository, "rev-parse", "--absolute-git-dir").stdout.trim())

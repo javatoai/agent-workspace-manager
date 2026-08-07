@@ -3,441 +3,449 @@ package com.snowball.taskwt.desktop
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.snowball.taskwt.core.*
+import com.snowball.taskwt.core.AgentDocumentService
+import com.snowball.taskwt.core.AgentConflictResolution
+import com.snowball.taskwt.core.AgentFileChange
+import com.snowball.taskwt.core.AgentFileMonitor
+import com.snowball.taskwt.core.AgentDocumentPropagationService
+import com.snowball.taskwt.core.AgentInstructionScope
+import com.snowball.taskwt.core.AppConfig
+import com.snowball.taskwt.core.ApplicationPaths
+import com.snowball.taskwt.core.ConfigStore
+import com.snowball.taskwt.core.CreateGroupedTaskRequest
+import com.snowball.taskwt.core.DeleteRisk
+import com.snowball.taskwt.core.DesktopIntegration
+import com.snowball.taskwt.core.FeishuRequirementInfoClient
+import com.snowball.taskwt.core.FeishuWorkItemLink
+import com.snowball.taskwt.core.GitRepositoryInspector
+import com.snowball.taskwt.core.GroupConfigurationService
+import com.snowball.taskwt.core.GroupServiceConfig
+import com.snowball.taskwt.core.IdeType
+import com.snowball.taskwt.core.ManifestStore
+import com.snowball.taskwt.core.RepositoryConfig
+import com.snowball.taskwt.core.RepositoryInfo
+import com.snowball.taskwt.core.RepositoryInspector
+import com.snowball.taskwt.core.RequirementInfoClient
+import com.snowball.taskwt.core.RequirementParticipants
+import com.snowball.taskwt.core.ServiceWorkspace
+import com.snowball.taskwt.core.TagBuildService
+import com.snowball.taskwt.core.TagOperation
+import com.snowball.taskwt.core.TaskApplicationService
+import com.snowball.taskwt.core.TaskManifest
+import com.snowball.taskwt.core.TaskOperationLock
+import com.snowball.taskwt.core.FileTaskOperationLock
+import com.snowball.taskwt.core.TaskBranchNaming
+import com.snowball.taskwt.core.TaskNaming
+import com.snowball.taskwt.core.ThemePreference
+import com.snowball.taskwt.core.WorkspaceStatus
+import com.snowball.taskwt.core.WorkspaceStrategy
+import com.snowball.taskwt.core.WorkspaceLayout
+import com.snowball.taskwt.core.toInfo
+import com.snowball.taskwt.core.selectionKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
+import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
+import kotlin.io.path.exists
 
-enum class NavigationItem(
-    val title: String,
-    val subtitle: String,
-) {
-    DASHBOARD("工作台", "Dashboard"),
+enum class NavigationItem(val title: String, val subtitle: String) {
     TASKS("研发任务", "Tasks"),
     SERVICES("服务仓库", "Services"),
     UAT("UAT 构建", "UAT Builds"),
     SETTINGS("设置", "Settings"),
 }
 
-sealed interface PendingBranchReuse {
-    val conflicts: List<BranchConflict>
+data class DeleteRiskInspection(
+    val loading: Boolean = true,
+    val risks: List<DeleteRisk> = emptyList(),
+    val error: String? = null,
+)
 
-    data class Create(
-        val request: CreateTaskRequest,
-        override val conflicts: List<BranchConflict>,
-    ) : PendingBranchReuse
+private data class LoadedTasks(
+    val manifests: List<TaskManifest>,
+    val warning: String? = null,
+)
 
-    data class AddServices(
-        val task: TaskManifest,
-        val request: AddServicesRequest,
-        override val conflicts: List<BranchConflict>,
-    ) : PendingBranchReuse
-}
-
+/**
+ * Desktop presentation controller. Compose only calls application services and
+ * receives immutable state; Git, JSON and AGENTS.md file details stay in core.
+ */
 class AppController(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val configStore: ConfigStore = ConfigStore(paths),
-    private val scanner: RepositoryScanner = RepositoryScanner(),
     private val manifests: ManifestStore = ManifestStore(),
-    private val taskManager: TaskManager = TaskManager(events = JsonlEventSink(paths)),
+    private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(),
+    private val groupConfigurations: GroupConfigurationService =
+        GroupConfigurationService(configStore, repositoryInspector),
+    private val operationLock: TaskOperationLock = FileTaskOperationLock(paths),
+    private val tasksApplication: TaskApplicationService = TaskApplicationService(
+        manifests = manifests,
+        agentDocuments = AgentDocumentService(paths),
+        operationLock = operationLock,
+    ),
+    private val agentDocuments: AgentDocumentService = AgentDocumentService(paths),
+    private val agentPropagation: AgentDocumentPropagationService =
+        AgentDocumentPropagationService(manifests, agentDocuments, operationLock),
     private val tagBuildService: TagBuildService = TagBuildService(paths = paths),
     private val requirementInfoClient: RequirementInfoClient = FeishuRequirementInfoClient(),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
-) {
+) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val initialConfigResult = runCatching { configStore.load() }
+    private val initial = runCatching { configStore.load() }
+    private val agentMonitor by lazy {
+        AgentFileMonitor(onChange = { change ->
+            scope.launch { handleAgentFileChange(change) }
+        })
+    }
 
-    var config by mutableStateOf(initialConfigResult.getOrDefault(AppConfig()))
+    var config by mutableStateOf(initial.getOrDefault(AppConfig()))
         private set
-    var repositories by mutableStateOf<List<RepositoryInfo>>(emptyList())
+    var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
         private set
-    var tasks by mutableStateOf<List<TaskManifest>>(emptyList())
+    private val initialTasks = scanTasks(config)
+    var tasks by mutableStateOf(initialTasks.manifests)
         private set
-    var navigation by mutableStateOf(NavigationItem.DASHBOARD)
-    var selectedTask by mutableStateOf<TaskManifest?>(null)
+    var navigation by mutableStateOf(NavigationItem.TASKS)
+    var selectedTask by mutableStateOf(tasks.firstOrNull())
+        private set
     var busy by mutableStateOf(false)
         private set
     var statusMessage by mutableStateOf<String?>(null)
         private set
     var errorMessage by mutableStateOf(
-        initialConfigResult.exceptionOrNull()?.let {
-            "配置文件读取失败：${it.message}。请检查 ${ApplicationPaths.systemDefault().config}"
-        },
+        initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: initialTasks.warning,
     )
-        private set
-    var tagResult by mutableStateOf<TagOperation?>(null)
-        private set
-    var batchSelectionTask by mutableStateOf<TaskManifest?>(null)
-        private set
-    var batchTagResults by mutableStateOf<List<TagOperation>?>(null)
         private set
     var requirementStatuses by mutableStateOf<Map<String, String>>(emptyMap())
         private set
     var requirementParticipants by mutableStateOf<Map<String, RequirementParticipants>>(emptyMap())
         private set
-    var pendingBranchReuse by mutableStateOf<PendingBranchReuse?>(null)
+    var tagResult by mutableStateOf<TagOperation?>(null)
         private set
-    private val pendingRequirementStatusRefreshes = mutableSetOf<String>()
+    var agentRevision by mutableStateOf(0L)
+        private set
+    var agentConflict by mutableStateOf<AgentFileChange.Conflict?>(null)
+        private set
+    var deleteRiskInspections by mutableStateOf<Map<String, DeleteRiskInspection>>(emptyMap())
+        private set
 
-    val needsOnboarding: Boolean
-        get() = config.scanRoots.isEmpty() || config.taskRoot.isNullOrBlank()
+    val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
 
     init {
-        if (!needsOnboarding) refresh()
+        // Register authoritative global/group files without invoking Git or a
+        // remote integration. Subsequent external writes can then propagate
+        // even if the user never opens the Settings editor.
+        runCatching { agentMonitor.track(paths.globalAgents) }.onFailure(::showError)
+        config.groups.forEach { group ->
+            runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
+        }
     }
 
-    fun refresh() = runOperation(
-        successMessage = "已完成刷新",
-        block = {
-            val latestConfig = configStore.load()
-        val scanned = scanner.scan(
-            latestConfig.scanRoots.map(Path::of),
-            latestConfig.taskRoot?.let(Path::of),
-        )
-        val discoveredServices = latestConfig.services.toMutableMap()
-        scanned.forEach { repository ->
-            discoveredServices.putIfAbsent(
-                repository.id,
-                ServiceConfig(
-                    repositoryId = repository.id,
-                    displayName = repository.name,
-                    ideType = guessIde(repository),
-                ),
-            )
+    /**
+     * The only repository validation entry point. Startup deliberately does not
+     * call this method, so opening the app never runs Git or Meegle commands.
+     */
+    fun refresh() = runOperation("手动刷新完成", block = {
+        val latest = configStore.load()
+        val validated = latest.repositories.map { persisted ->
+            val inspected = repositoryInspector.inspect(Path.of(persisted.rootPath))
+            require(samePathIdentity(persisted.gitCommonDirectory, inspected.gitCommonDirectory)) {
+                "仓库身份已变化：${persisted.name} 当前指向 ${inspected.gitCommonDirectory}，" +
+                    "与配置中的 ${persisted.gitCommonDirectory} 不一致"
+            }
+            inspected.copy(id = persisted.id)
         }
-        val updatedConfig = latestConfig.copy(services = discoveredServices)
-        configStore.save(updatedConfig)
-        val taskList = updatedConfig.taskRoot
-            ?.let(Path::of)
-            ?.let(manifests::list)
-            ?.map { it.second }
-            ?.sortedByDescending { it.updatedAt }
-            .orEmpty()
-            Triple(updatedConfig, scanned, taskList)
-        },
-        onSuccess = { (updatedConfig, scanned, taskList) ->
-            config = updatedConfig
-            repositories = scanned
-            tasks = taskList
-            requirementStatuses = requirementStatuses.filterKeys { folderName ->
-                taskList.any { it.folderName == folderName }
-            }
-            requirementParticipants = requirementParticipants.filterKeys { folderName ->
-                taskList.any { it.folderName == folderName }
-            }
-            selectedTask = selectedTask?.let { previous ->
-                taskList.firstOrNull { it.folderName == previous.folderName }
-            }
-            refreshRequirementStatuses(taskList)
-        },
-    )
+        val refreshedConfig = latest.copy(repositories = validated)
+        configStore.save(refreshedConfig)
+        val refreshedTasks = scanTasks(refreshedConfig)
+        refreshedTasks.manifests.forEach { task ->
+            tasksApplication.refreshAgents(refreshedConfig, taskDirectory(refreshedConfig, task))
+        }
+        refreshedConfig to refreshedTasks
+    }, onSuccess = { (refreshedConfig, refreshedTasks) ->
+        applySnapshot(refreshedConfig, refreshedTasks.manifests)
+        refreshRequirementStatuses()
+        refreshedTasks.warning?.let { showError(IllegalStateException(it)) }
+    })
 
     fun selectTask(task: TaskManifest) {
         selectedTask = task
-        refreshRequirementStatus(task)
     }
 
-    fun refreshRequirementStatuses() {
-        refreshRequirementStatuses(tasks)
-    }
+    fun setTheme(theme: ThemePreference) = mutateConfig("主题已更新") { it.copy(theme = theme) }
 
-    private fun refreshRequirementStatuses(taskList: List<TaskManifest>) {
-        taskList.forEach(::refreshRequirementStatus)
-    }
-
-    private fun refreshRequirementStatus(task: TaskManifest) {
-        if (FeishuWorkItemLink.parse(task.requirementLink) == null) {
-            requirementStatuses = requirementStatuses - task.folderName
-            requirementParticipants = requirementParticipants - task.folderName
-            return
-        }
-        if (!pendingRequirementStatusRefreshes.add(task.folderName)) return
-        scope.launch {
-            val info = withContext(Dispatchers.IO) {
-                runCatching { requirementInfoClient.fetch(task.requirementLink) }.getOrNull()
-            }
-            pendingRequirementStatusRefreshes -= task.folderName
-            if (tasks.none { it.folderName == task.folderName && it.requirementLink == task.requirementLink }) {
-                return@launch
-            }
-            val status = info?.status
-            requirementStatuses = if (status == null) {
-                requirementStatuses - task.folderName
-            } else {
-                requirementStatuses + (task.folderName to status)
-            }
-            requirementParticipants = if (info == null || info.participants.isEmpty) {
-                requirementParticipants - task.folderName
-            } else {
-                requirementParticipants + (task.folderName to info.participants)
-            }
-        }
-    }
-
-    fun completeOnboarding(scanRoot: String, taskRoot: String) {
-        require(scanRoot.isNotBlank()) { "请选择服务扫描目录" }
-        require(taskRoot.isNotBlank()) { "请选择任务工作区目录" }
-        val scanPath = Path.of(scanRoot).toAbsolutePath().normalize()
-        require(scanPath.toFile().isDirectory) { "服务扫描目录不存在：$scanPath" }
-        val taskPath = Path.of(taskRoot).toAbsolutePath().normalize()
-        require(taskPath.toFile().isDirectory || taskPath.toFile().mkdirs()) {
-            "无法创建任务工作区目录：$taskPath"
-        }
-        val updated = config.copy(
-            scanRoots = listOf(scanPath.toString()),
-            taskRoot = taskPath.toString(),
-        )
-        configStore.save(updated)
-        config = updated
-        refresh()
-    }
-
-    fun addScanRoot(value: String) {
+    fun updateTaskRoot(value: String) = runOperation("任务根目录已保存", block = {
         val path = Path.of(value).toAbsolutePath().normalize()
-        require(path.toFile().isDirectory) { "目录不存在：$path" }
-        saveConfig(config.copy(scanRoots = (config.scanRoots + path.toString()).distinct()))
-        refresh()
-    }
+        Files.createDirectories(path)
+        config.copy(taskRoot = path.toString()).also(configStore::save)
+    }, onSuccess = {
+        applyConfig(it)
+        reloadTasks()
+    })
 
-    fun removeScanRoot(value: String) {
-        saveConfig(config.copy(scanRoots = config.scanRoots - value))
-        refresh()
-    }
-
-    fun updateTaskRoot(value: String) {
-        val path = Path.of(value).toAbsolutePath().normalize()
-        require(path.toFile().isDirectory || path.toFile().mkdirs()) {
-            "无法创建任务工作区目录：$path"
-        }
-        saveConfig(config.copy(taskRoot = path.toString()))
-        refresh()
-    }
-
-    fun updateIdeExecutables(idea: String, webStorm: String, terminal: String) {
-        saveConfig(
-            config.copy(
+    fun updateExecutables(idea: String, webStorm: String, terminal: String) =
+        mutateConfig("开发工具配置已保存") {
+            it.copy(
                 ideaExecutable = idea.trim().ifBlank { null },
                 webStormExecutable = webStorm.trim().ifBlank { null },
                 terminalExecutable = terminal.trim().ifBlank { null },
-            ),
+            )
+        }
+
+    fun addGroup(name: String) = configurationMutation("业务组已创建") {
+        groupConfigurations.addGroup(name)
+    }
+
+    fun renameGroup(groupId: String, name: String) = configurationMutation("业务组已重命名") {
+        groupConfigurations.renameGroup(groupId, name)
+    }
+
+    fun moveGroup(groupId: String, offset: Int) = configurationMutation("业务组顺序已更新") {
+        groupConfigurations.moveGroup(groupId, offset)
+    }
+
+    fun deleteGroup(groupId: String) = configurationMutation("空业务组已删除") {
+        require(tasks.none { it.groupId == groupId }) { "该组还有研发任务，不能删除" }
+        groupConfigurations.deleteGroup(groupId)
+    }
+
+    fun setGroupTagEnabled(groupId: String, enabled: Boolean) =
+        configurationMutation("组 Tag 开关已更新") {
+            groupConfigurations.setGroupTagEnabled(groupId, enabled)
+        }
+
+    fun addRepository(groupId: String, selectedDirectory: String, strategy: WorkspaceStrategy) =
+        runOperation("服务已添加", block = {
+            groupConfigurations.addRepository(groupId, Path.of(selectedDirectory), strategy)
+        }, onSuccess = ::applyConfig)
+
+    fun updateService(groupId: String, service: GroupServiceConfig) =
+        configurationMutation("服务配置已保存") {
+            groupConfigurations.updateService(groupId, service)
+        }
+
+    fun moveService(groupId: String, serviceId: String, offset: Int) =
+        configurationMutation("服务顺序已更新") {
+            groupConfigurations.moveService(groupId, serviceId, offset)
+        }
+
+    fun removeService(groupId: String, serviceId: String) =
+        configurationMutation("服务已移除") {
+            require(tasks.none { task ->
+                task.groupId == groupId && task.services.any { it.groupServiceId == serviceId }
+            }) { "该服务仍被研发任务引用，不能从组内移除" }
+            groupConfigurations.removeService(groupId, serviceId)
+        }
+
+    fun readGlobalAgents(): String = runCatching { agentMonitor.track(paths.globalAgents).content }.getOrElse {
+        showError(it); ""
+    }
+
+    fun saveGlobalAgents(content: String) = runOperation("全局 AGENTS.md 已保存", block = {
+        requireNoReservedAgentMarkers(content)
+        agentMonitor.save(paths.globalAgents, content)
+        requirePropagationSucceeded(agentPropagation.propagate(config, AgentInstructionScope.Global).failures)
+    })
+
+    fun markGlobalAgentsEdited(content: String) = agentMonitor.markLocalEdit(paths.globalAgents, content)
+
+    fun readGroupAgents(groupId: String): String = runCatching {
+        agentMonitor.track(paths.groupAgents(groupId)).content
+    }.getOrElse {
+        showError(it); ""
+    }
+
+    fun saveGroupAgents(groupId: String, content: String) = runOperation("组 AGENTS.md 已保存", block = {
+        requireNoReservedAgentMarkers(content)
+        agentMonitor.save(paths.groupAgents(groupId), content)
+        requirePropagationSucceeded(
+            agentPropagation.propagate(config, AgentInstructionScope.Group(groupId)).failures,
         )
-        showStatus("开发工具配置已保存")
-    }
+    })
 
-    fun setTheme(theme: ThemePreference) {
-        saveConfig(config.copy(theme = theme))
-    }
+    fun markGroupAgentsEdited(groupId: String, content: String) =
+        agentMonitor.markLocalEdit(paths.groupAgents(groupId), content)
 
-    fun updateAgentsMdAppendix(appendix: String) {
-        saveConfig(config.copy(agentsMdAppendix = appendix))
-        showStatus("AGENTS.md 模板追加已保存")
-    }
-
-    fun updateService(updated: ServiceConfig) {
-        saveConfig(config.copy(services = config.services + (updated.repositoryId to updated)))
-        showStatus("${updated.displayName} 配置已保存")
+    fun previewAgents(
+        folderName: String,
+        branch: String,
+        groupId: String,
+        serviceIds: Set<String>,
+        cloneOverrides: Map<String, String>,
+        notes: String,
+    ): String {
+        val root = config.taskRoot?.let(Path::of) ?: paths.temp
+        val normalizedName = folderName.trim().ifBlank { "任务名称" }
+        val normalizedBranch = branch.trim().ifBlank { "feature/example" }
+        val directoryName = runCatching { TaskNaming.directoryName(normalizedName) }.getOrDefault("preview")
+        val now = Instant.now().toString()
+        val taskDirectory = root.resolve(directoryName)
+        val repositoriesById = config.repositories.associateBy(RepositoryConfig::id)
+        val previewWorkspaces = config.group(groupId).services
+            .filter { it.id in serviceIds }
+            .flatMap { service ->
+                val repository = repositoriesById[service.repositoryId] ?: return@flatMap emptyList()
+                when (service.strategy) {
+                    WorkspaceStrategy.STANDARD_WORKTREE -> {
+                        val branches = runCatching { TaskBranchNaming.derive(normalizedBranch, service.modules) }
+                            .getOrElse { service.modules.associate { it.id to normalizedBranch } }
+                        val distinctBaseCount = service.modules.map(TaskBranchNaming::baseIdentity).distinct().size
+                        service.modules.map { module ->
+                            ServiceWorkspace(
+                                repositoryId = repository.id,
+                                serviceName = service.displayName,
+                                repositoryPath = repository.rootPath,
+                                worktreePath = taskDirectory.resolve(
+                                    WorkspaceLayout.standardDirectoryName(service, module, distinctBaseCount),
+                                ).toString(),
+                                ideType = service.ideType,
+                                branch = branches.getValue(module.id),
+                                groupServiceId = service.id,
+                                moduleId = module.id,
+                                moduleName = module.name,
+                                strategy = service.strategy,
+                                tagEnabled = module.tagEnabled,
+                                baseRef = module.baseRef,
+                            )
+                        }
+                    }
+                    WorkspaceStrategy.INDEPENDENT_CLONE -> listOf(
+                        ServiceWorkspace(
+                            repositoryId = repository.id,
+                            serviceName = service.displayName,
+                            repositoryPath = repository.rootPath,
+                            worktreePath = taskDirectory.resolve(WorkspaceLayout.cloneDirectoryName(service)).toString(),
+                            ideType = service.ideType,
+                            branch = cloneOverrides[service.id].orEmpty().ifBlank {
+                                service.cloneDefaultBranch.orEmpty()
+                            },
+                            groupServiceId = service.id,
+                            moduleId = "clone",
+                            moduleName = service.displayName,
+                            strategy = service.strategy,
+                            tagEnabled = service.cloneTagEnabled,
+                            originUrl = repository.originUrl,
+                        ),
+                    )
+                }
+            }
+        val preview = TaskManifest(
+            folderName = normalizedName,
+            taskDirectoryName = directoryName,
+            featureBranch = normalizedBranch,
+            createdAt = now,
+            updatedAt = now,
+            status = WorkspaceStatus.CREATING,
+            services = previewWorkspaces,
+            groupId = groupId,
+        )
+        return agentDocuments.renderPreview(taskDirectory, preview, repositories, notes)
     }
 
     fun createTask(
         folderName: String,
         branch: String,
-        repositoryIds: List<String>,
+        groupId: String,
+        serviceIds: List<String>,
         requirementLink: String,
-    ) {
-        val request = CreateTaskRequest(folderName, branch, repositoryIds, requirementLink)
-        inspectBranchConflicts(branch, repositoryIds) { conflicts ->
-            if (conflicts.isEmpty()) {
-                executeCreateTask(request)
-            } else {
-                pendingBranchReuse = PendingBranchReuse.Create(request, conflicts)
-            }
+        cloneOverrides: Map<String, String>,
+        notes: String,
+    ) = runOperation("任务已创建", block = {
+        tasksApplication.create(
+            config,
+            CreateGroupedTaskRequest(
+                folderName = folderName,
+                featureBranch = branch,
+                groupId = groupId,
+                serviceIds = serviceIds,
+                requirementLink = requirementLink,
+                cloneBranchOverrides = cloneOverrides,
+                taskNotes = notes,
+            ),
+        )
+    }, onSuccess = { created ->
+        reloadTasks(created.folderName)
+        navigation = NavigationItem.TASKS
+    })
+
+    fun readTaskNotes(task: TaskManifest): String = runCatching {
+        val file = taskDirectory(task).resolve("AGENTS.md")
+        val document = agentMonitor.track(file).content
+        if (document.isNotBlank()) agentDocuments.extractTaskNotes(document) else ""
+    }.getOrElse { showError(it); "" }
+
+    fun saveTaskNotes(task: TaskManifest, notes: String) = runOperation("任务说明已保存", block = {
+        requireNoReservedAgentMarkers(notes)
+        val directory = taskDirectory(task)
+        operationLock.withLock(directory) {
+            val path = directory.resolve("AGENTS.md")
+            val current = agentMonitor.snapshot(path)?.content ?: agentMonitor.track(path).content
+            agentMonitor.save(path, replaceTaskNotes(current, notes))
         }
-    }
+    })
 
-    fun addServices(task: TaskManifest, repositoryIds: List<String>) {
-        val request = AddServicesRequest(repositoryIds)
-        inspectBranchConflicts(task.featureBranch, repositoryIds) { conflicts ->
-            if (conflicts.isEmpty()) {
-                executeAddServices(task, request.repositoryIds, request.reuseExistingBranchRepositoryIds)
-            } else {
-                pendingBranchReuse = PendingBranchReuse.AddServices(task, request, conflicts)
-            }
-        }
-    }
-
-    fun confirmBranchReuse(repositoryIds: Set<String>) {
-        val pending = pendingBranchReuse ?: return
-        pendingBranchReuse = null
-        when (pending) {
-            is PendingBranchReuse.Create -> executeCreateTask(
-                pending.request.copy(reuseExistingBranchRepositoryIds = repositoryIds),
-            )
-            is PendingBranchReuse.AddServices -> executeAddServices(
-                pending.task,
-                pending.request.repositoryIds,
-                repositoryIds,
-            )
-        }
-    }
-
-    fun cancelBranchReuse() {
-        pendingBranchReuse = null
-    }
-
-    private fun executeCreateTask(
-        request: CreateTaskRequest,
-    ) =
-        runOperation(
-            successMessage = "任务已创建",
-            block = {
-                taskManager.create(
-                    config,
-                    repositories,
-                    request,
-                )
-            },
-            onSuccess = { manifest ->
-                selectTask(manifest)
-                reloadTasks()
-                navigation = NavigationItem.TASKS
-            },
-        )
-
-    private fun executeAddServices(
-        task: TaskManifest,
-        repositoryIds: List<String>,
-        reuseExistingBranchRepositoryIds: Set<String> = emptySet(),
-    ) =
-        runOperation(
-            successMessage = "服务已追加",
-            block = {
-                taskManager.addServices(
-                    config,
-                    repositories,
-                    taskDirectory(task),
-                    AddServicesRequest(repositoryIds, reuseExistingBranchRepositoryIds),
-                )
-            },
-            onSuccess = { updated ->
-                selectTask(updated)
-                reloadTasks()
-            },
-        )
-
-    fun archiveTask(task: TaskManifest, force: Boolean = false) =
-        runOperation(
-            successMessage = "任务已归档",
-            block = { taskManager.archive(config, taskDirectory(task), repositories, force) },
-            onSuccess = { updated ->
-                selectTask(updated)
-                reloadTasks()
-            },
-        )
-
-    fun restoreTask(task: TaskManifest) =
-        runOperation(
-            successMessage = "任务已恢复",
-            block = { taskManager.restore(config, taskDirectory(task), repositories) },
-            onSuccess = { updated ->
-                selectTask(updated)
-                reloadTasks()
-            },
-        )
-
-    fun inspectDeleteRisk(task: TaskManifest): List<DeleteRisk> =
-        runCatching { taskManager.inspectDeleteRisk(taskDirectory(task)) }
-            .getOrElse {
-                showError(it)
-                emptyList()
-            }
-
-    fun deleteTask(task: TaskManifest, forceDiscard: Boolean) =
-        runOperation(
-            successMessage = "任务已删除",
-            block = {
-                taskManager.delete(taskDirectory(task), forceDiscard)
-            },
-            onSuccess = {
-                selectedTask = null
-                reloadTasks()
-            },
-        )
-
-    fun initializeTask(task: TaskManifest, failedOnly: Boolean) =
-        runOperation(
-            successMessage = { updated ->
-                val warningServices = updated.services.filter { it.warnings.isNotEmpty() }
-                if (warningServices.isEmpty()) {
-                    "初始化步骤已完成"
-                } else {
-                    "初始化未完成：${warningServices.joinToString("、") { "${it.serviceName}（${it.warnings.size} 项警告）" }}"
-                }
-            },
-            block = {
-                taskManager.initialize(config, taskDirectory(task), repositories, failedOnly)
-            },
-            onSuccess = { updated ->
-                selectTask(updated)
-                reloadTasks()
-            },
-        )
-
-    fun retryFailedServices(task: TaskManifest, repositoryIds: List<String>? = null) =
-        runOperation(
-            successMessage = "失败服务已重试",
-            block = {
-                taskManager.retryFailedServices(
-                    config,
-                    taskDirectory(task),
-                    repositories,
-                    repositoryIds,
-                )
-            },
-            onSuccess = { updated ->
-                selectTask(updated)
-                reloadTasks()
-            },
-        )
-
-    fun refreshAgentsMd(task: TaskManifest) =
-        runOperation(
-            successMessage = "AGENTS.md 已刷新",
-            block = {
-                taskManager.refreshAgentsMd(config, taskDirectory(task), repositories)
-            },
-            onSuccess = {},
-        )
-
-    fun openUrl(url: String) {
-        runCatching { desktopIntegration.openUrl(url) }
-            .onFailure(::showError)
-    }
-
-    fun copyPath(path: String) {
-        copyText(path, "路径已复制")
-    }
-
-    fun copyText(text: String, successMessage: String = "已复制") {
+    fun markTaskNotesEdited(task: TaskManifest, notes: String) {
+        val path = taskDirectory(task).resolve("AGENTS.md")
         runCatching {
-            java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                .setContents(java.awt.datatransfer.StringSelection(text), null)
+            requireNoReservedAgentMarkers(notes)
+            val current = agentMonitor.snapshot(path)?.content ?: agentMonitor.track(path).content
+            agentMonitor.markLocalEdit(path, replaceTaskNotes(current, notes))
+        }.onFailure(::showError)
+    }
+
+    fun refreshTaskAgents(task: TaskManifest) = runOperation("AGENTS.md 已重新生成", block = {
+        tasksApplication.refreshAgents(config, taskDirectory(task))
+    })
+
+    fun archiveTask(task: TaskManifest, force: Boolean = false) = runOperation("任务已归档", block = {
+        tasksApplication.archive(config, taskDirectory(task), force)
+    }, onSuccess = { reloadTasks(it.folderName) })
+
+    fun restoreTask(task: TaskManifest) = runOperation("任务已恢复", block = {
+        tasksApplication.restore(config, taskDirectory(task))
+    }, onSuccess = { reloadTasks(it.folderName) })
+
+    /** Runs Git safety checks away from Compose's event-dispatch thread. */
+    fun requestDeleteRisk(task: TaskManifest) {
+        val key = task.taskDirectoryName
+        if (deleteRiskInspections[key]?.loading == true) return
+        deleteRiskInspections = deleteRiskInspections + (key to DeleteRiskInspection())
+        val configSnapshot = config
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    tasksApplication.inspectDeleteRisk(configSnapshot, taskDirectory(configSnapshot, task))
+                }
+            }
+            deleteRiskInspections = deleteRiskInspections + (
+                key to result.fold(
+                    onSuccess = { DeleteRiskInspection(loading = false, risks = it) },
+                    onFailure = { DeleteRiskInspection(loading = false, error = it.message ?: "删除风险检查失败") },
+                )
+            )
         }
-            .onSuccess { showStatus(successMessage) }
-            .onFailure(::showError)
     }
 
-    fun reveal(path: String) {
-        runCatching { desktopIntegration.reveal(Path.of(path)) }
-            .onFailure(::showError)
+    fun clearDeleteRisk(task: TaskManifest) {
+        deleteRiskInspections = deleteRiskInspections - task.taskDirectoryName
     }
 
-    fun terminal(path: String) {
-        runCatching { desktopIntegration.openTerminal(Path.of(path), config.terminalExecutable) }
-            .onFailure(::showError)
-    }
+    fun deleteTask(task: TaskManifest, forceDiscard: Boolean) = runOperation("任务已删除", block = {
+        tasksApplication.delete(config, taskDirectory(task), forceDiscard)
+    }, onSuccess = { reloadTasks() })
+
+    fun buildTag(task: TaskManifest, workspace: ServiceWorkspace) = runOperation("UAT Tag 操作已完成", block = {
+        // A module key removes ambiguity when one repository contributes multiple workspaces.
+        tagBuildService.build(config, taskDirectory(task), workspace.selectionKey)
+    }, onSuccess = { tagResult = it })
+
+    fun clearTagResult() { tagResult = null }
 
     fun openWorkspace(workspace: ServiceWorkspace) {
         val executable = when (workspace.ideType) {
@@ -445,205 +453,242 @@ class AppController(
             IdeType.WEBSTORM -> config.webStormExecutable
         }
         if (executable.isNullOrBlank()) {
-            showError(
-                IllegalStateException(
-                    "尚未配置 ${if (workspace.ideType == IdeType.IDEA) "IDEA" else "WebStorm"} 可执行文件",
-                ),
-            )
             navigation = NavigationItem.SETTINGS
+            showError(IllegalStateException("请先在设置中配置 IDE 可执行文件"))
             return
         }
-        val directory = Path.of(workspace.worktreePath)
-        if (!directory.toFile().isDirectory) {
-            showError(IllegalStateException("服务 Worktree 不存在：$directory"))
-            return
+        runCatching { desktopIntegration.openIde(Path.of(workspace.worktreePath), executable) }.onFailure(::showError)
+    }
+
+    fun reveal(path: String) = runCatching { desktopIntegration.reveal(Path.of(path)) }.onFailure(::showError)
+    fun terminal(path: String) = runCatching {
+        desktopIntegration.openTerminal(Path.of(path), config.terminalExecutable)
+    }.onFailure(::showError)
+    fun openUrl(url: String) = runCatching { desktopIntegration.openUrl(url) }.onFailure(::showError)
+    fun copyText(text: String, message: String = "已复制") = runCatching {
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+    }.onSuccess { showStatus(message) }.onFailure(::showError)
+
+    /** Called from Window.onFocusEvent as the inexpensive external-file fallback. */
+    fun onWindowFocused() {
+        if (!busy) agentMonitor.checkNow()
+    }
+
+    fun resolveAgentConflict(resolution: AgentConflictResolution) {
+        val conflict = agentConflict ?: return
+        val task = tasks.firstOrNull {
+            taskDirectory(it).resolve("AGENTS.md").toAbsolutePath().normalize() ==
+                conflict.path.toAbsolutePath().normalize()
         }
-        runCatching { desktopIntegration.openIde(directory, executable) }
-            .onFailure(::showError)
+        runOperation("Agent 文件冲突已处理", block = {
+            if (resolution == AgentConflictResolution.USE_LOCAL && task != null) {
+                // Preserve only the authoritative human notes. The generated region
+                // is rebuilt from the latest global/group files instead of restoring
+                // an older local snapshot over a newer external update.
+                val notes = agentDocuments.extractTaskNotes(conflict.localContent)
+                agentMonitor.resolve(conflict.path, AgentConflictResolution.USE_DISK)
+                tasksApplication.saveTaskNotes(config, taskDirectory(task), notes)
+                agentMonitor.checkNow()
+            } else {
+                agentMonitor.resolve(conflict.path, resolution)
+            }
+        }, onSuccess = {
+            agentConflict = null
+            agentRevision++
+            if (resolution == AgentConflictResolution.USE_LOCAL && task == null) {
+                synchronizeTasksForAgentPath(conflict.path)
+            }
+        })
     }
 
-    fun openAiData(task: TaskManifest) {
-        val executable = config.ideaExecutable
-        if (executable.isNullOrBlank()) {
-            showError(IllegalStateException("尚未配置 IDEA 可执行文件"))
-            navigation = NavigationItem.SETTINGS
-            return
+    fun refreshRequirementStatuses() {
+        tasks.filter { FeishuWorkItemLink.parse(it.requirementLink) != null }.forEach { task ->
+            scope.launch {
+                val info = withContext(Dispatchers.IO) {
+                    runCatching { requirementInfoClient.fetch(task.requirementLink) }.getOrNull()
+                }
+                if (tasks.none { it.folderName == task.folderName }) return@launch
+                val status = info?.status
+                requirementStatuses = if (status == null) {
+                    requirementStatuses - task.folderName
+                } else requirementStatuses + (task.folderName to status)
+                requirementParticipants = if (info == null || info.participants.isEmpty) {
+                    requirementParticipants - task.folderName
+                } else requirementParticipants + (task.folderName to info.participants)
+            }
         }
-        runOperation(
-            successMessage = "已打开工作数据目录",
-            block = {
-                val directory = taskManager.ensureAiDataDirectory(taskDirectory(task))
-                desktopIntegration.openIde(directory, executable)
-            },
-            onSuccess = {},
-        )
-    }
-
-    fun buildTag(task: TaskManifest, repositoryId: String) =
-        runOperation(
-            successMessage = "Tag 操作已完成",
-            block = {
-                tagBuildService.build(config, taskDirectory(task), repositoryId)
-            },
-            onSuccess = { operation ->
-                tagResult = operation
-            },
-        )
-
-    fun showBatchSelection(task: TaskManifest) {
-        batchSelectionTask = task
-    }
-
-    fun clearBatchSelection() {
-        batchSelectionTask = null
-    }
-
-    fun buildTags(task: TaskManifest, repositoryIds: List<String>) =
-        runOperation(
-            successMessage = "批量 UAT Tag 操作已结束",
-            block = {
-                tagBuildService.buildBatch(config, taskDirectory(task), repositoryIds)
-            },
-            onSuccess = { results ->
-                batchSelectionTask = null
-                batchTagResults = results
-            },
-        )
-
-    fun clearBatchTagResults() {
-        batchTagResults = null
-    }
-
-    fun resumeTag(operation: TagOperation) {
-        val task = tasks.firstOrNull { it.folderName == operation.folderName }
-        if (task == null) {
-            showError(IllegalStateException("任务已不存在：${operation.folderName}"))
-            return
-        }
-        runOperation(
-            successMessage = "Tag 操作恢复完成",
-            block = {
-                tagBuildService.resumePartial(
-                    config,
-                    taskDirectory(task),
-                    operation.operationId,
-                )
-            },
-            onSuccess = { tagResult = it },
-        )
-    }
-
-    fun openOperationTask(operation: TagOperation) {
-        val task = tasks.firstOrNull { it.folderName == operation.folderName }
-        if (task == null) {
-            showError(IllegalStateException("任务已不存在：${operation.folderName}"))
-            return
-        }
-        selectedTask = task
-        refreshRequirementStatus(task)
-        navigation = NavigationItem.TASKS
-    }
-
-    fun clearTagResult() {
-        tagResult = null
     }
 
     fun dismissMessages() {
-        errorMessage = null
         statusMessage = null
+        errorMessage = null
     }
 
-    private fun inspectBranchConflicts(
-        featureBranch: String,
-        repositoryIds: List<String>,
-        onConflicts: (List<BranchConflict>) -> Unit,
-    ) {
-        if (busy) return
-        busy = true
-        dismissMessages()
+    fun showError(error: Throwable) {
+        errorMessage = error.message ?: error::class.simpleName ?: "操作失败"
+    }
+
+    override fun close() {
+        agentMonitor.close()
+    }
+
+    private fun handleAgentFileChange(change: AgentFileChange) {
+        when (change) {
+            is AgentFileChange.Conflict -> agentConflict = change
+            is AgentFileChange.Reloaded -> {
+                agentRevision++
+                synchronizeTasksForAgentPath(change.path)
+            }
+        }
+    }
+
+    private fun synchronizeTasksForAgentPath(path: Path) {
+        val normalized = path.toAbsolutePath().normalize()
+        val propagationScope = when {
+            normalized == paths.globalAgents.toAbsolutePath().normalize() -> AgentInstructionScope.Global
+            else -> config.groups.firstOrNull {
+                paths.groupAgents(it.id).toAbsolutePath().normalize() == normalized
+            }?.let { AgentInstructionScope.Group(it.id) } ?: return
+        }
+        // File synchronization is independent from button operations. It must not
+        // be dropped merely because a Git operation currently owns the busy flag.
         scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    taskManager.inspectBranchConflicts(config, repositories, featureBranch, repositoryIds)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    requirePropagationSucceeded(agentPropagation.propagate(config, propagationScope).failures)
                 }
             }
-                .onSuccess {
-                    busy = false
-                    onConflicts(it)
-                }
-                .onFailure {
-                    busy = false
-                    showError(it)
-                }
+            result.onSuccess { showStatus("Agent 文件已从磁盘同步") }.onFailure(::showError)
         }
     }
 
-    private fun reloadTasks() {
-        tasks = config.taskRoot
-            ?.let(Path::of)
-            ?.let(manifests::list)
-            ?.map { it.second }
-            ?.sortedByDescending { it.updatedAt }
-            .orEmpty()
-        refreshRequirementStatuses(tasks)
+    private fun replaceTaskNotes(document: String, notes: String): String {
+        // Validate marker integrity before constructing a replacement. If markers
+        // are damaged, AgentDocumentService throws and no disk write is attempted.
+        agentDocuments.extractTaskNotes(document)
+        val begin = document.indexOf(AgentDocumentService.TASK_NOTES_BEGIN) +
+            AgentDocumentService.TASK_NOTES_BEGIN.length
+        val end = document.indexOf(AgentDocumentService.TASK_NOTES_END)
+        return buildString {
+            append(document.substring(0, begin))
+            appendLine()
+            if (notes.isNotBlank()) appendLine(notes.trimEnd())
+            append(document.substring(end))
+        }
     }
 
-    private fun taskDirectory(task: TaskManifest): Path =
-        Path.of(config.taskRoot ?: error("尚未配置任务根目录")).resolve(task.taskDirectoryName)
-
-    private fun saveConfig(updated: AppConfig) {
-        configStore.save(updated)
-        config = updated
+    private fun requireNoReservedAgentMarkers(content: String) {
+        val reserved = listOf(
+            AgentDocumentService.GENERATED_BEGIN,
+            AgentDocumentService.GENERATED_END,
+            AgentDocumentService.TASK_NOTES_BEGIN,
+            AgentDocumentService.TASK_NOTES_END,
+        )
+        val marker = reserved.firstOrNull(content::contains) ?: return
+        require(false) { "内容不能包含 TaskWT 保留标记：$marker" }
     }
 
-    private fun guessIde(repository: RepositoryInfo): IdeType {
-        val root = Path.of(repository.rootPath)
-        return if (root.resolve("package.json").toFile().exists() &&
-            !root.resolve("pom.xml").toFile().exists()
-        ) {
-            IdeType.WEBSTORM
+    private fun samePathIdentity(expected: String, actual: String): Boolean {
+        val expectedPath = Path.of(expected).toAbsolutePath().normalize().toString()
+        val actualPath = Path.of(actual).toAbsolutePath().normalize().toString()
+        return if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            expectedPath.equals(actualPath, ignoreCase = true)
         } else {
-            IdeType.IDEA
+            expectedPath == actualPath
         }
     }
 
-    private fun <T> runOperation(
-        successMessage: String,
-        block: () -> T,
-        onSuccess: (T) -> Unit,
-    ) = runOperation(
-        successMessage = { successMessage },
-        block = block,
-        onSuccess = onSuccess,
-    )
+    private fun requirePropagationSucceeded(failures: Map<Path, String>) {
+        if (failures.isEmpty()) return
+        error(
+            "部分任务 AGENTS.md 同步失败：" + failures.entries.joinToString { (path, reason) ->
+                "${path.fileName}（$reason）"
+            },
+        )
+    }
 
-    private fun <T> runOperation(
-        successMessage: (T) -> String,
-        block: () -> T,
-        onSuccess: (T) -> Unit,
-    ) {
-        if (busy) return
-        busy = true
-        dismissMessages()
-        scope.launch {
-            runCatching { withContext(Dispatchers.IO) { block() } }
-                .onSuccess {
-                    onSuccess(it)
-                    showStatus(successMessage(it))
-                }
-                .onFailure(::showError)
-            busy = false
+    private fun taskDirectory(task: TaskManifest): Path = taskDirectory(config, task)
+
+    private fun taskDirectory(config: AppConfig, task: TaskManifest): Path =
+        Path.of(requireNotNull(config.taskRoot) { "尚未配置任务根目录" }).resolve(task.taskDirectoryName)
+
+    private fun scanTasks(config: AppConfig): LoadedTasks {
+        val root = config.taskRoot?.let(Path::of) ?: return LoadedTasks(emptyList())
+        val scan = runCatching { manifests.scan(root) }.getOrElse { error ->
+            return LoadedTasks(emptyList(), "任务目录扫描失败：${error.message ?: error::class.simpleName}")
+        }
+        val messages = buildList {
+            if (scan.ignoredLegacyDirectories.isNotEmpty()) {
+                add("已忽略 ${scan.ignoredLegacyDirectories.size} 个旧版任务；请参考旧数据迁移文档")
+            }
+            if (scan.failures.isNotEmpty()) {
+                add(
+                    "${scan.failures.size} 个任务清单读取失败：" +
+                        scan.failures.entries.joinToString { (path, reason) -> "${path.fileName}（$reason）" },
+                )
+            }
+        }
+        return LoadedTasks(
+            manifests = scan.current.map { it.second }.sortedByDescending(TaskManifest::updatedAt),
+            warning = messages.takeIf { it.isNotEmpty() }?.joinToString("；"),
+        )
+    }
+
+    private fun reloadTasks(preferredFolder: String? = selectedTask?.folderName) {
+        val loaded = scanTasks(config)
+        tasks = loaded.manifests
+        selectedTask = preferredFolder?.let { folder -> loaded.manifests.firstOrNull { it.folderName == folder } }
+            ?: loaded.manifests.firstOrNull()
+        loaded.warning?.let { showError(IllegalStateException(it)) }
+    }
+
+    private fun applySnapshot(updatedConfig: AppConfig, updatedTasks: List<TaskManifest>) {
+        val selectedFolder = selectedTask?.folderName
+        applyConfig(updatedConfig)
+        tasks = updatedTasks.sortedByDescending(TaskManifest::updatedAt)
+        selectedTask = selectedFolder?.let { folder -> tasks.firstOrNull { it.folderName == folder } }
+            ?: tasks.firstOrNull()
+    }
+
+    private fun applyConfig(updated: AppConfig) {
+        config = updated
+        repositories = updated.repositories.map(RepositoryConfig::toInfo)
+        updated.groups.forEach { group ->
+            runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
         }
     }
+
+    private fun mutateConfig(message: String, transform: (AppConfig) -> AppConfig): Boolean =
+        runOperation(message, block = {
+            transform(config).also(configStore::save)
+        }, onSuccess = ::applyConfig)
+
+    private fun configurationMutation(message: String, block: () -> AppConfig): Boolean =
+        runOperation(message, block = block, onSuccess = ::applyConfig)
 
     private fun showStatus(message: String) {
         statusMessage = message
         errorMessage = null
     }
 
-    private fun showError(error: Throwable) {
-        errorMessage = error.message ?: error::class.simpleName ?: "操作失败"
-        statusMessage = null
+    private fun <T> runOperation(
+        successMessage: String,
+        block: () -> T,
+        onSuccess: (T) -> Unit = {},
+    ): Boolean {
+        if (busy) {
+            showError(IllegalStateException("另一个操作正在执行，请稍候"))
+            return false
+        }
+        busy = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching(block) }
+            busy = false
+            result.onSuccess {
+                showStatus(successMessage)
+                onSuccess(it)
+            }.onFailure(::showError)
+        }
+        return true
     }
-
 }

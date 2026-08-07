@@ -17,5 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "task-worktree-manager"
 
 include(":core")
-include(":cli")
 include(":desktop")

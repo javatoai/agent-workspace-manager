@@ -5,11 +5,6 @@ import org.junit.jupiter.api.Test
 
 class TagOutputFormatterTest {
     @Test
-    fun `batch builder default concurrency is six`() {
-        assertEquals(6, TagBuildService.MAX_BATCH_CONCURRENCY)
-    }
-
-    @Test
     fun `formats successful tags in input order without a success heading`() {
         val first = operation("android-transit-service", "3.11.69.beta-1")
         val second = operation("api-service", "2.4.34.beta-6")
@@ -30,7 +25,7 @@ Tag已构建完毕，辛苦UAT环境发布以上版本""",
     }
 
     @Test
-    fun `omits blank requirement link and includes failures for cli output`() {
+    fun `omits blank requirement link and includes failures in detailed output`() {
         val success = operation("api-service", "2.4.34.beta-6")
         val failure = operation("job-manager", null).copy(
             state = TagOperationState.FAILED,

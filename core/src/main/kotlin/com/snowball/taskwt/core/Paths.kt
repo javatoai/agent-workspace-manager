@@ -10,6 +10,13 @@ data class ApplicationPaths(
     val logs: Path = home.resolve("logs")
     val locks: Path = home.resolve("locks")
     val temp: Path = home.resolve("temp")
+    val agents: Path = home.resolve("agents")
+    val globalAgents: Path = agents.resolve("global").resolve("AGENTS.md")
+
+    fun groupAgents(groupId: String): Path {
+        require(groupId.matches(Regex("[A-Za-z0-9._-]+"))) { "组 ID 不能用于文件路径：$groupId" }
+        return agents.resolve("groups").resolve(groupId).resolve("AGENTS.md")
+    }
 
     companion object {
         fun systemDefault(

@@ -67,10 +67,6 @@ jobs:
           if (-not $msi) { throw 'MSI installer not found' }
           Copy-Item $msi.FullName (Join-Path $out "Task-Worktree-Manager-$version-windows.msi")
 
-          $cli = Get-ChildItem 'cli\build\distributions\*.zip' | Select-Object -First 1
-          if (-not $cli) { throw 'CLI zip not found' }
-          Copy-Item $cli.FullName (Join-Path $out "taskwt-$version-windows-cli.zip")
-
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Get-ChildItem $out | ForEach-Object { Write-Host $_.FullName }
 
@@ -104,7 +100,7 @@ jobs:
           # Normalize them before executing them on the macOS runner.
           perl -pi -e 's/\r$//' ./gradlew ./scripts/build-macos.sh
           chmod +x ./gradlew ./scripts/build-macos.sh
-          MAC_PACKAGE_VERSION=1.4.0 ./scripts/build-macos.sh
+          MAC_PACKAGE_VERSION=2.0.0 ./scripts/build-macos.sh
 
       - name: Show macOS packaging diagnostics
         if: always()
@@ -123,9 +119,7 @@ jobs:
           version=$(sed -n 's/.*version *= *"\([^"]*\)".*/\1/p' build.gradle.kts | head -n1)
           mkdir -p dist/macos
           dmg=$(ls desktop/build/compose/binaries/main/dmg/*.dmg | head -n1)
-          cli=$(ls cli/build/distributions/*.zip | head -n1)
           cp "$dmg" "dist/macos/Task-Worktree-Manager-${version}-macos.dmg"
-          cp "$cli" "dist/macos/taskwt-${version}-macos-cli.zip"
           ls -la dist/macos
 
       - name: Upload macOS artifacts
@@ -181,10 +175,10 @@ jobs:
           make_latest: ${{ steps.meta.outputs.make_latest }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           body: |
-            自动构建产物（Compose Desktop + CLI）。
+            自动构建 Task Worktree Manager 桌面产物。
 
-            - **Windows**：绿色 portable zip、Setup EXE、MSI、CLI zip
-            - **macOS**：DMG、CLI zip
+            - **Windows**：绿色 portable zip、Setup EXE、MSI
+            - **macOS**：DMG
 
             Commit: `${{ github.sha }}`
           files: release-assets/*

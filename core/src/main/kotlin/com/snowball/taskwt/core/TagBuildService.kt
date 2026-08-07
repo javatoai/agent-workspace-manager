@@ -11,8 +11,6 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.UUID
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
@@ -56,9 +54,10 @@ class TagBuildService(
     private val operations: TagOperationStore = TagOperationStore(),
     private val clock: Clock = Clock.systemUTC(),
     private val events: EventSink = JsonlEventSink(paths, clock),
+    private val workspaceLifecycle: WorkspaceLifecycle = GitWorkspaceLifecycle(git),
+    private val taskLock: TaskOperationLock = FileTaskOperationLock(paths),
 ) {
     companion object {
-        const val MAX_BATCH_CONCURRENCY = 6
         private val auditTimestampFormatter = DateTimeFormatter
             .ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneOffset.UTC)
@@ -70,44 +69,42 @@ class TagBuildService(
         repositoryIds: List<String>,
     ): List<TagOperation> {
         if (repositoryIds.isEmpty()) return emptyList()
-        val executor = Executors.newFixedThreadPool(
-            minOf(MAX_BATCH_CONCURRENCY, repositoryIds.size),
-        )
-        return try {
-            executor.invokeAll(
-                repositoryIds.map { repositoryId ->
-                    Callable { buildSafely(config, taskDirectory, repositoryId) }
-                },
-            ).map { it.get() }
-        } finally {
-            executor.shutdown()
+        // Task lifecycle uses an exclusive lock. Batch operations intentionally
+        // serialize within one task so archive/delete cannot interleave and a
+        // non-blocking file lock does not turn sibling entries into false failures.
+        return taskLock.withLock(taskDirectory) {
+            repositoryIds.map { repositoryId ->
+                buildSafelyUnlocked(config, taskDirectory, repositoryId)
+            }
         }
     }
 
-    private fun buildSafely(
+    private fun buildSafelyUnlocked(
         config: AppConfig,
         taskDirectory: Path,
         repositoryId: String,
     ): TagOperation = runCatching {
-        build(config, taskDirectory, repositoryId)
+        buildUnlocked(config, taskDirectory, repositoryId)
     }.getOrElse { error ->
         val manifest = manifests.load(taskDirectory)
-        val workspace = manifest.services.firstOrNull { it.repositoryId == repositoryId }
+        val workspace = resolveWorkspace(manifest, repositoryId)
             ?: throw error
-        val service = config.services[repositoryId]
+        val target = runCatching { TagPolicy.resolve(config, manifest, repositoryId) }.getOrNull()
         val now = Instant.now(clock).toString()
         TagOperation(
             operationId = UUID.randomUUID().toString(),
             folderName = manifest.folderName,
             serviceName = workspace.serviceName,
-            repositoryId = repositoryId,
+            repositoryId = workspace.repositoryId,
             featureBranch = workspace.branch,
-            testBranch = service?.uatBranch.orEmpty(),
-            remote = service?.uatRemote.orEmpty(),
+            testBranch = target?.uatBranch.orEmpty(),
+            remote = target?.remote.orEmpty(),
             state = TagOperationState.FAILED,
             createdAt = now,
             updatedAt = now,
             message = error.message ?: error::class.simpleName ?: "构建失败",
+            groupServiceId = workspace.groupServiceId,
+            moduleId = workspace.moduleId,
         ).also { operations.save(taskDirectory, it) }
     }
 
@@ -115,16 +112,16 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         repositoryId: String,
-    ): TagPreflight {
+    ): TagPreflight = taskLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
-        val workspace = manifest.services.firstOrNull { it.repositoryId == repositoryId }
-            ?: throw IllegalArgumentException("任务中不存在服务：$repositoryId")
-        val service = config.services[repositoryId]
-            ?: throw IllegalStateException("服务配置不存在：${workspace.serviceName}")
-        val repository = Path.of(workspace.repositoryPath)
-        val worktree = Path.of(workspace.worktreePath)
+        val target = TagPolicy.resolve(config, manifest, repositoryId)
+        val workspace = target.workspace
+        val service = target.asLegacyServiceConfig()
+        val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
+        val repository = validated.repository
+        val worktree = validated.worktree
 
-        return withRepositoryLock(repository) {
+        withRepositoryLock(repository) {
             ensureCleanFeatureWorktree(worktree)
             git.fetch(repository, service.uatRemote)
             val featureSha = git.resolve(repository, workspace.branch)
@@ -171,25 +168,35 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         repositoryId: String,
+    ): TagOperation = taskLock.withLock(taskDirectory) {
+        buildUnlocked(config, taskDirectory, repositoryId)
+    }
+
+    private fun buildUnlocked(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositoryId: String,
     ): TagOperation {
         val manifest = manifests.load(taskDirectory)
-        val workspace = manifest.services.firstOrNull { it.repositoryId == repositoryId }
-            ?: throw IllegalArgumentException("任务中不存在服务：$repositoryId")
-        val service = config.services[repositoryId]
-            ?: throw IllegalStateException("服务配置不存在：${workspace.serviceName}")
-        val repository = Path.of(workspace.repositoryPath)
+        val target = TagPolicy.resolve(config, manifest, repositoryId)
+        val workspace = target.workspace
+        val service = target.asLegacyServiceConfig()
+        val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
+        val repository = validated.repository
         val now = Instant.now(clock).toString()
         var operation = TagOperation(
             operationId = UUID.randomUUID().toString(),
             folderName = manifest.folderName,
             serviceName = workspace.serviceName,
-            repositoryId = repositoryId,
+            repositoryId = workspace.repositoryId,
             featureBranch = workspace.branch,
             testBranch = service.uatBranch,
             remote = service.uatRemote,
             state = TagOperationState.CREATED,
             createdAt = now,
             updatedAt = now,
+            groupServiceId = workspace.groupServiceId,
+            moduleId = workspace.moduleId,
         )
         operations.save(taskDirectory, operation)
         events.info(
@@ -205,7 +212,7 @@ class TagBuildService(
 
         return withRepositoryLock(repository) {
             try {
-                val preview = preflightUnlocked(service, manifest, workspace)
+                val preview = preflightUnlocked(service, manifest, workspace, validated.repository, validated.worktree)
                 operation = transition(
                     taskDirectory,
                     operation,
@@ -312,18 +319,19 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation {
+    ): TagOperation = taskLock.withLock(taskDirectory) {
         var operation = operations.load(taskDirectory, operationId)
         require(operation.state == TagOperationState.PARTIAL) { "只有 PARTIAL 操作可以恢复" }
-        val service = config.services[operation.repositoryId]
-            ?: throw IllegalStateException("服务配置不存在：${operation.repositoryId}")
         val manifest = manifests.load(taskDirectory)
-        val workspace = manifest.services.first { it.repositoryId == operation.repositoryId }
-        val repository = Path.of(workspace.repositoryPath)
+        val target = TagPolicy.resolve(config, manifest, "${operation.groupServiceId}:${operation.moduleId}")
+        val service = target.asLegacyServiceConfig()
+        val workspace = target.workspace
+        val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
+        val repository = validated.repository
         val tag = operation.tag ?: throw IllegalStateException("操作没有可恢复的本地 Tag")
         val testSha = operation.testSha ?: throw IllegalStateException("操作没有测试分支提交")
 
-        return withRepositoryLock(repository) {
+        withRepositoryLock(repository) {
             try {
                 createOrValidateLocalTag(
                     repository,
@@ -358,9 +366,9 @@ class TagBuildService(
         service: ServiceConfig,
         manifest: TaskManifest,
         workspace: ServiceWorkspace,
+        repository: Path,
+        worktree: Path,
     ): TagPreflight {
-        val repository = Path.of(workspace.repositoryPath)
-        val worktree = Path.of(workspace.worktreePath)
         ensureCleanFeatureWorktree(worktree)
         git.fetch(repository, service.uatRemote)
         val featureSha = git.resolve(repository, workspace.branch)
@@ -397,6 +405,12 @@ class TagBuildService(
             diffStat = git.run(repository, "diff", "--stat", testSha, featureSha).stdout.trim(),
             estimatedTag = nextTag(repository, testSha, service.initialUatTag),
         )
+    }
+
+    private fun resolveWorkspace(manifest: TaskManifest, selection: String): ServiceWorkspace? {
+        val matches = manifest.services.filter { it.selectionKey == selection || it.repositoryId == selection }
+        if (matches.size > 1) throw IllegalArgumentException("Tag 目标不唯一，请选择具体模块：$selection")
+        return matches.singleOrNull()
     }
 
     private data class MergePushResult(

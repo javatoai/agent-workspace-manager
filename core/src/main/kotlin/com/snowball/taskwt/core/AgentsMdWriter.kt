@@ -50,14 +50,14 @@ object AgentsMdWriter {
             appendLine()
             appendLine("## 本任务可改动的 Worktree")
             appendLine()
-            appendLine("| 服务名 | 仓库路径 | Worktree 路径 | 分支 | 状态 |")
-            appendLine("|--------|----------|---------------|------|------|")
+            appendLine("| 服务名 | 模块/克隆入口 | 策略 | 仓库路径 | Worktree 路径 | 分支 | 状态 |")
+            appendLine("|--------|---------------|------|----------|---------------|------|------|")
             if (manifest.services.isEmpty()) {
-                appendLine("| （无） |  |  |  |  |")
+                appendLine("| （无） |  |  |  |  |  |  |")
             } else {
                 manifest.services.forEach { workspace ->
                     appendLine(
-                        "| ${escapeCell(workspace.serviceName)} | `${workspace.repositoryPath}` | " +
+                        "| ${escapeCell(workspace.serviceName)} | ${escapeCell(workspace.moduleName)} | ${workspace.strategy.name} | `${workspace.repositoryPath}` | " +
                             "`${workspace.worktreePath}` | `${workspace.branch}` | ${workspace.status.name} |",
                     )
                 }
@@ -88,7 +88,7 @@ object AgentsMdWriter {
                 "- **范围不够时**：若评估改动需要额外服务仓库，**不要擅自改主仓**；应明确告知用户，" +
                     "请其在 Task Worktree Manager 中「添加服务」为本任务增加对应 Worktree 后再改。",
             )
-            appendLine("- 所有本任务服务共用同一 Feature 分支名（见上表）。")
+            appendLine("- 每个工作区的实际分支以上表为准；多模块可能按基础分支派生后缀，独立克隆使用创建任务时选择的远程分支。")
             appendLine("- 需求上下文以「需求链接」为准：")
             appendLine(
                 "  - 飞书项目链接（`project.feishu.cn` obt/rta）：优先用飞书项目 skill/CLI" +

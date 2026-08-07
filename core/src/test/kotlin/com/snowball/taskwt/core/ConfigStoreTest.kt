@@ -8,64 +8,88 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.test.assertFailsWith
 
 class ConfigStoreTest {
     @TempDir
     lateinit var temporary: Path
 
     @Test
-    fun `missing config returns empty first launch state`() {
+    fun `missing config returns one hidden default group`() {
         val store = ConfigStore(ApplicationPaths(temporary.resolve("home")))
+
+        val config = store.load()
+
         assertFalse(store.exists())
-        assertEquals(emptyList<String>(), store.load().scanRoots)
-        assertEquals(null, store.load().taskRoot)
+        assertEquals(null, config.taskRoot)
+        assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
+        assertEquals(emptyList<RepositoryConfig>(), config.repositories)
     }
 
     @Test
-    fun `round trips user configuration`() {
-        val store = ConfigStore(ApplicationPaths(temporary.resolve("home")))
+    fun `round trip preserves group and service array order`() {
+        val paths = ApplicationPaths(temporary.resolve("home"))
+        val store = ConfigStore(paths)
+        val repository = RepositoryConfig(
+            id = "repo-api",
+            name = "api",
+            rootPath = "D:\\code\\api",
+            gitCommonDirectory = "D:\\code\\api\\.git",
+            originUrl = "git@example.com:team/api.git",
+        )
         val expected = AppConfig(
-            scanRoots = listOf("D:\\workspace_idea"),
-            taskRoot = "D:\\task-worktrees",
+            taskRoot = "D:\\tasks",
+            repositories = listOf(repository),
+            groups = listOf(
+                ServiceGroupConfig(id = "payments", name = "支付", services = emptyList()),
+                ServiceGroupConfig(
+                    id = "growth",
+                    name = "增长",
+                    services = listOf(
+                        GroupServiceConfig.standard(
+                            id = "growth-api",
+                            repositoryId = repository.id,
+                            displayName = "增长 API",
+                        ),
+                    ),
+                ),
+            ),
             theme = ThemePreference.DARK,
         )
+
         store.save(expected)
+
         assertEquals(expected, store.load())
+        assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
     }
 
     @Test
-    fun `accepts legacy missing and future config schema versions`() {
+    fun `legacy config is rejected without being rewritten`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         Files.createDirectories(paths.home)
+        val legacy = """{"schemaVersion":2,"services":{}}"""
+        Files.writeString(paths.config, legacy)
+
         val store = ConfigStore(paths)
-
-        Files.writeString(paths.config, """{"schemaVersion":1}""")
-        assertEquals(1, store.load().schemaVersion)
-
-        Files.writeString(paths.config, """{}""")
-        assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)
-
-        Files.writeString(paths.config, """{"schemaVersion":99}""")
-        assertEquals(99, store.load().schemaVersion)
+        assertThrows(UnsupportedConfigVersionException::class.java) { store.load() }
+        assertEquals(legacy, Files.readString(paths.config))
+        assertFailsWith<UnsupportedConfigVersionException> { store.save(AppConfig()) }
+        assertEquals(legacy, Files.readString(paths.config))
     }
 
     @Test
-    fun `saves configuration with a non current schema version`() {
-        val store = ConfigStore(ApplicationPaths(temporary.resolve("home")))
-        store.save(AppConfig(schemaVersion = 1))
-
-        assertEquals(1, store.load().schemaVersion)
-    }
-
-    @Test
-    fun `rejects unknown config fields`() {
+    fun `unknown fields remain an error`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":$CURRENT_APP_CONFIG_SCHEMA_VERSION,"legacyField":true}""",
+            """{"schemaVersion":$CURRENT_APP_CONFIG_SCHEMA_VERSION,"groups":[],"legacyField":true}""",
         )
 
-        assertThrows(SerializationException::class.java) { ConfigStore(paths).load() }
+        val original = Files.readString(paths.config)
+        val store = ConfigStore(paths)
+        assertThrows(SerializationException::class.java) { store.load() }
+        assertThrows(SerializationException::class.java) { store.save(AppConfig()) }
+        assertEquals(original, Files.readString(paths.config))
     }
 }
