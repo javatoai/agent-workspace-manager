@@ -14,7 +14,7 @@ class TaskManagerIntegrationTest {
     lateinit var temporary: Path
 
     @Test
-    fun `creates aggregates archives safely and restores existing branch`() {
+    fun `creates independent worktrees archives safely and restores existing branch`() {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("source"))
         val repository = GitTestSupport.clone(remote, temporary.resolve("services").resolve("job-manager"))
         Files.writeString(repository.resolve("local.template"), "local")
@@ -46,6 +46,11 @@ class TaskManagerIntegrationTest {
 
         assertEquals(WorkspaceStatus.READY, created.status)
         assertEquals("https://example.com/req", created.requirementLink)
+        val aiDataDirectory = taskRoot.resolve(created.taskDirectoryName).resolve("ai-data")
+        assertTrue(Files.isDirectory(aiDataDirectory))
+        Files.delete(aiDataDirectory)
+        assertEquals(aiDataDirectory, manager.ensureAiDataDirectory(taskRoot.resolve(created.taskDirectoryName)))
+        assertTrue(Files.isDirectory(aiDataDirectory))
         val agentsMd = Files.readString(
             taskRoot.resolve(created.taskDirectoryName).resolve(AgentsMdWriter.FILE_NAME),
         )
@@ -62,12 +67,10 @@ class TaskManagerIntegrationTest {
             "refs/heads/feature/OBT-123",
             GitTestSupport.run(repository, "config", "--get", "branch.feature/OBT-123.merge"),
         )
-        val ideaProject = taskRoot.resolve(created.taskDirectoryName).resolve("idea-${created.taskDirectoryName}")
-        assertTrue(Files.exists(ideaProject.resolve("pom.xml")))
-        assertEquals(
-            "TaskWT - OBT/123 支付 - IDEA",
-            Files.readString(ideaProject.resolve(".idea").resolve(".name")),
-        )
+        val aggregateDirectory = taskRoot.resolve(created.taskDirectoryName)
+            .resolve("idea-${created.taskDirectoryName}")
+        assertFalse(Files.exists(aggregateDirectory))
+        assertTrue(Files.exists(worktree.resolve(".git")))
 
         val archived = manager.archive(config, taskRoot.resolve(created.taskDirectoryName))
         assertEquals(WorkspaceStatus.ARCHIVED, archived.status)
@@ -86,7 +89,133 @@ class TaskManagerIntegrationTest {
     }
 
     @Test
-    fun `addServices appends worktree and updates idea pom`() {
+    fun `requires explicit confirmation before reusing a local branch`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-local-source"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("reuse-local-services").resolve("svc"))
+        GitTestSupport.run(repository, "checkout", "-b", "feature/existing")
+        GitTestSupport.run(repository, "checkout", "master")
+        val info = RepositoryScanner().scan(listOf(repository.parent), null).single()
+        val taskRoot = temporary.resolve("reuse-local-tasks")
+        val config = AppConfig(
+            taskRoot = taskRoot.toString(),
+            services = mapOf(info.id to ServiceConfig(info.id, displayName = info.name)),
+        )
+        val manager = TaskManager()
+        val request = CreateTaskRequest(
+            "reuse-local",
+            "feature/existing",
+            listOf(info.id),
+            "https://example.com/req",
+        )
+
+        val conflict = manager.inspectBranchConflicts(config, listOf(info), request.featureBranch, request.repositoryIds)
+        assertTrue(conflict.single().localBranchExists)
+        assertThrows(IllegalArgumentException::class.java) {
+            manager.create(config, listOf(info), request)
+        }
+        assertFalse(Files.exists(taskRoot.resolve("reuse-local").resolve(ManifestStore.FILE_NAME)))
+
+        val created = manager.create(
+            config,
+            listOf(info),
+            request.copy(reuseExistingBranchRepositoryIds = setOf(info.id)),
+        )
+        assertTrue(Files.isDirectory(Path.of(created.services.single().worktreePath)))
+        assertEquals("feature/existing", GitClient().currentBranch(Path.of(created.services.single().worktreePath)))
+        assertEquals("origin", GitTestSupport.run(repository, "config", "--get", "branch.feature/existing.remote"))
+    }
+
+    @Test
+    fun `reuses a remote branch and tracks the remote feature branch`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-remote-source"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("reuse-remote-services").resolve("svc"))
+        GitTestSupport.run(seed, "checkout", "-b", "feature/remote-existing")
+        GitTestSupport.run(seed, "push", "-u", "origin", "feature/remote-existing")
+        GitTestSupport.run(seed, "checkout", "master")
+        val info = RepositoryScanner().scan(listOf(repository.parent), null).single()
+        val taskRoot = temporary.resolve("reuse-remote-tasks")
+        val config = AppConfig(
+            taskRoot = taskRoot.toString(),
+            services = mapOf(info.id to ServiceConfig(info.id, displayName = info.name)),
+        )
+        val manager = TaskManager()
+        val request = CreateTaskRequest(
+            "reuse-remote",
+            "feature/remote-existing",
+            listOf(info.id),
+            "https://example.com/req",
+            setOf(info.id),
+        )
+
+        val created = manager.create(config, listOf(info), request)
+        val worktree = Path.of(created.services.single().worktreePath)
+        assertEquals("origin", GitTestSupport.run(repository, "config", "--get", "branch.feature/remote-existing.remote"))
+        assertEquals(
+            "refs/heads/feature/remote-existing",
+            GitTestSupport.run(repository, "config", "--get", "branch.feature/remote-existing.merge"),
+        )
+        assertEquals("feature/remote-existing", GitClient().currentBranch(worktree))
+    }
+
+    @Test
+    fun `rejecting one conflicting service prevents a multi-service task from starting`() {
+        val servicesRoot = temporary.resolve("atomic-conflict-services")
+        val alpha = cloneNamedService(servicesRoot, "alpha-service")
+        cloneNamedService(servicesRoot, "beta-service")
+        GitTestSupport.run(alpha, "checkout", "-b", "feature/atomic-conflict")
+        GitTestSupport.run(alpha, "checkout", "master")
+        val repositories = RepositoryScanner().scan(listOf(servicesRoot), null)
+        val taskRoot = temporary.resolve("atomic-conflict-tasks")
+        val config = AppConfig(
+            taskRoot = taskRoot.toString(),
+            services = repositories.associate { it.id to ServiceConfig(it.id, displayName = it.name) },
+        )
+        val request = CreateTaskRequest(
+            "atomic-conflict",
+            "feature/atomic-conflict",
+            repositories.map { it.id },
+            "https://example.com/req",
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            TaskManager().create(config, repositories, request)
+        }
+        assertFalse(Files.exists(taskRoot.resolve("atomic-conflict").resolve(ManifestStore.FILE_NAME)))
+    }
+
+    @Test
+    fun `force reuses a branch already attached to another worktree`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-occupied-source"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("reuse-occupied-services").resolve("svc"))
+        GitTestSupport.run(repository, "checkout", "-b", "feature/occupied")
+        GitTestSupport.run(repository, "checkout", "master")
+        val existingWorktree = temporary.resolve("existing-worktree")
+        GitTestSupport.run(repository, "worktree", "add", existingWorktree.toString(), "feature/occupied")
+        val info = RepositoryScanner().scan(listOf(repository.parent), null).single()
+        val taskRoot = temporary.resolve("reuse-occupied-tasks")
+        val config = AppConfig(
+            taskRoot = taskRoot.toString(),
+            services = mapOf(info.id to ServiceConfig(info.id, displayName = info.name)),
+        )
+        val created = TaskManager().create(
+            config,
+            listOf(info),
+            CreateTaskRequest(
+                "reuse-occupied",
+                "feature/occupied",
+                listOf(info.id),
+                "https://example.com/req",
+                setOf(info.id),
+            ),
+        )
+
+        val worktrees = GitClient().worktrees(repository).filter { it.branch == "feature/occupied" }
+        assertEquals(2, worktrees.size)
+        assertTrue(Files.isDirectory(Path.of(created.services.single().worktreePath)))
+    }
+
+    @Test
+    fun `addServices appends independent worktree`() {
         val servicesRoot = temporary.resolve("services")
         cloneNamedService(servicesRoot, "alpha-service")
         cloneNamedService(servicesRoot, "beta-service")
@@ -120,13 +249,8 @@ class TaskManagerIntegrationTest {
         assertTrue(added.services.all { it.status == WorkspaceStatus.READY })
         assertTrue(Files.isDirectory(Path.of(added.services.first { it.repositoryId == secondInfo.id }.worktreePath)))
 
-        val pom = Files.readString(
-            taskRoot.resolve(created.taskDirectoryName)
-                .resolve("idea-${created.taskDirectoryName}")
-                .resolve("pom.xml"),
-        )
-        assertTrue(pom.contains("alpha-service"))
-        assertTrue(pom.contains("beta-service"))
+        assertTrue(Files.exists(Path.of(added.services.first { it.repositoryId == firstInfo.id }.worktreePath)))
+        assertTrue(Files.exists(Path.of(added.services.first { it.repositoryId == secondInfo.id }.worktreePath)))
 
         assertThrows(IllegalArgumentException::class.java) {
             manager.addServices(
@@ -227,13 +351,18 @@ class TaskManagerIntegrationTest {
         val created = manager.create(
             config,
             repositories,
-            CreateTaskRequest("OBT-shared", branch, listOf(firstInfo.id), "https://example.com/req"),
+            CreateTaskRequest(
+                "OBT-shared",
+                branch,
+                listOf(firstInfo.id),
+                "https://example.com/req",
+            ),
         )
         val added = manager.addServices(
             config,
             repositories,
             taskRoot.resolve(created.taskDirectoryName),
-            AddServicesRequest(listOf(secondInfo.id)),
+            AddServicesRequest(listOf(secondInfo.id), setOf(secondInfo.id)),
         )
         assertEquals(2, added.services.size)
         val beta = added.services.single { it.repositoryId == secondInfo.id }

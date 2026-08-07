@@ -18,7 +18,7 @@ macOS：
 ~/TaskWorktreeManager/
 ```
 
-`config.json` 使用原子替换写入。程序能忽略未来版本增加的未知字段。
+`config.json` 使用原子替换写入。主配置不强制校验 `schemaVersion` 数值，缺少、旧版或未来版本号都可以读取；但字段集合仍严格校验，未知字段会直接报错。任务清单仍严格校验 `schemaVersion`，不执行迁移或兼容读取。
 
 可选字段 `agentsMdAppendix`：写入设置页「AGENTS.md 模板追加」的多行文本；生成/刷新任务目录 `AGENTS.md` 时拼接到「自定义说明」章节。
 

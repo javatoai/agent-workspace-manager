@@ -3,6 +3,7 @@ package com.snowball.taskwt.desktop
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -31,6 +33,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.snowball.taskwt.core.*
+import kotlinx.coroutines.delay
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -48,8 +51,11 @@ fun main() = application {
         state = windowState,
         icon = painterResource(Res.drawable.app_icon),
     ) {
-        LaunchedEffect(Unit) {
-            window.minimumSize = Dimension(1180, 720)
+        val density = LocalDensity.current
+        LaunchedEffect(density) {
+            window.minimumSize = with(density) {
+                Dimension(1400.dp.roundToPx(), 720.dp.roundToPx())
+            }
         }
         TaskWtTheme(controller.config.theme) {
             TaskWorktreeApp(controller)
@@ -62,6 +68,13 @@ private fun TaskWorktreeApp(controller: AppController) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateTask by remember { mutableStateOf(false) }
     var addServicesTask by remember { mutableStateOf<TaskManifest?>(null) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(10 * 60 * 1000L)
+            controller.refreshRequirementStatuses()
+        }
+    }
 
     LaunchedEffect(controller.statusMessage, controller.errorMessage) {
         val message = controller.errorMessage ?: controller.statusMessage
@@ -145,6 +158,13 @@ private fun TaskWorktreeApp(controller: AppController) {
             },
         )
     }
+    controller.pendingBranchReuse?.let { pending ->
+        BranchReuseDialog(
+            conflicts = pending.conflicts,
+            onCancel = controller::cancelBranchReuse,
+            onConfirm = controller::confirmBranchReuse,
+        )
+    }
     controller.batchSelectionTask?.let { task ->
         BatchServiceSelectionDialog(
             task = task,
@@ -155,10 +175,19 @@ private fun TaskWorktreeApp(controller: AppController) {
     controller.batchTagResults?.let { results ->
         BatchTagResultDialog(
             results = results,
+            requirementLink = controller.tasks
+                .firstOrNull { it.folderName == results.firstOrNull()?.folderName }
+                ?.requirementLink
+                .orEmpty(),
             onCopy = {
-                val text = results
-                    .filter { it.state == TagOperationState.SUCCESS && !it.tag.isNullOrBlank() }
-                    .joinToString(System.lineSeparator()) { formatTagCopyText(it.serviceName, it.tag!!) }
+                val text = TagOutputFormatter.format(
+                    requirementLink = controller.tasks
+                        .firstOrNull { it.folderName == results.firstOrNull()?.folderName }
+                        ?.requirementLink
+                        .orEmpty(),
+                    operations = results,
+                    includeFailures = false,
+                )
                 controller.copyText(text, "Tag 已复制")
             },
             onDismiss = controller::clearBatchTagResults,
@@ -167,9 +196,23 @@ private fun TaskWorktreeApp(controller: AppController) {
     controller.tagResult?.let { result ->
         TagResultDialog(
             result = result,
+            requirementLink = controller.tasks
+                .firstOrNull { it.folderName == result.folderName }
+                ?.requirementLink
+                .orEmpty(),
             onCopy = {
-                result.tag?.let { tag ->
-                    controller.copyText(formatTagCopyText(result.serviceName, tag), "Tag 已复制")
+                if (result.state == TagOperationState.SUCCESS && !result.tag.isNullOrBlank()) {
+                    controller.copyText(
+                        TagOutputFormatter.format(
+                            requirementLink = controller.tasks
+                                .firstOrNull { it.folderName == result.folderName }
+                                ?.requirementLink
+                                .orEmpty(),
+                            operations = listOf(result),
+                            includeFailures = false,
+                        ),
+                        "Tag 已复制",
+                    )
                 }
             },
             onDismiss = controller::clearTagResult,
@@ -177,12 +220,12 @@ private fun TaskWorktreeApp(controller: AppController) {
     }
 }
 
-private fun formatTagCopyText(serviceName: String, tag: String): String =
-    "$serviceName · $tag"
-
 private fun AppController.copyPathText(text: String) {
     copyText(text, "已复制")
 }
+
+private fun formatTagCopyText(serviceName: String, tag: String): String =
+    "$serviceName · $tag"
 
 @Composable
 private fun AppSidebar(
@@ -444,9 +487,10 @@ private fun DashboardScreen(controller: AppController) {
                     task = task,
                     selected = false,
                     onClick = {
-                        controller.selectedTask = task
+                        controller.selectTask(task)
                         controller.navigation = NavigationItem.TASKS
                     },
+                    requirementStatus = controller.requirementStatuses[task.folderName],
                 )
             }
         }
@@ -516,7 +560,8 @@ private fun TasksScreen(
                         TaskRow(
                             task = task,
                             selected = controller.selectedTask?.folderName == task.folderName,
-                            onClick = { controller.selectedTask = task },
+                            onClick = { controller.selectTask(task) },
+                            requirementStatus = controller.requirementStatuses[task.folderName],
                             compact = true,
                         )
                     }
@@ -544,6 +589,7 @@ private fun TaskRow(
     task: TaskManifest,
     selected: Boolean,
     onClick: () -> Unit,
+    requirementStatus: String? = null,
     compact: Boolean = false,
 ) {
     Surface(
@@ -580,7 +626,7 @@ private fun TaskRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            StatusPill(task.status.name)
+            requirementStatus?.let { status -> StatusPill(status) }
         }
     }
 }
@@ -593,6 +639,7 @@ private fun TaskDetail(
 ) {
     var showArchiveDialog by remember(task.folderName) { mutableStateOf(false) }
     var showDeleteDialog by remember(task.folderName) { mutableStateOf(false) }
+    var showBranchInfoDialog by remember(task.folderName) { mutableStateOf(false) }
     val availableServices = task.services.filter { workspace ->
         workspace.status != WorkspaceStatus.ARCHIVED &&
             workspace.status != WorkspaceStatus.FAILED &&
@@ -611,82 +658,103 @@ private fun TaskDetail(
                     task.featureBranch,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable {
+                        controller.copyText(task.featureBranch, "分支已复制")
+                    },
                 )
                 if (task.requirementLink.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     val linkClickable = isHttpUrl(task.requirementLink)
-                    Text(
-                        text = task.requirementLink,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (linkClickable) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = if (linkClickable) {
-                            Modifier.clickable { controller.openUrl(task.requirementLink) }
-                        } else {
-                            Modifier
-                        },
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = task.requirementLink,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (linkClickable) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = if (linkClickable) {
+                                Modifier.clickable { controller.openUrl(task.requirementLink) }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        IconButton(
+                            onClick = { controller.copyText(task.requirementLink, "需求链接已复制") },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(Icons.Outlined.ContentCopy, "复制需求链接")
+                        }
+                    }
                 }
-            }
-            OutlinedButton(onClick = { controller.copyPath(taskRootPath(controller, task)) }) {
-                Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("复制路径")
-            }
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = { controller.terminal(taskRootPath(controller, task)) }) {
-                Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("终端")
-            }
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = { controller.reveal(taskRootPath(controller, task)) }) {
-                Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("打开文件夹")
-            }
-            if (availableServices.any { it.ideType == IdeType.IDEA }) {
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { controller.openTask(task, IdeType.IDEA) }) {
-                    Icon(Icons.AutoMirrored.Outlined.Launch, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("IDEA 打开")
-                }
-            }
-            if (availableServices.any { it.ideType == IdeType.WEBSTORM }) {
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { controller.openTask(task, IdeType.WEBSTORM) }) {
-                    Icon(Icons.AutoMirrored.Outlined.Launch, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("WebStorm 打开")
+                controller.requirementParticipants[task.folderName]?.let { participants ->
+                    Spacer(Modifier.height(4.dp))
+                    val names = (participants.qcOwners + participants.productManagers)
+                        .map { it.name }
+                        .distinct()
+                    if (names.isNotEmpty()) {
+                        Text(
+                            names.joinToString("  "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(
-                onClick = {},
-                label = { Text("${task.services.size} 个服务") },
-                leadingIcon = { Icon(Icons.Outlined.Dns, null, Modifier.size(17.dp)) },
-            )
-            if (availableServices.size > 1) {
-                AssistChip(
-                    onClick = { controller.showBatchSelection(task) },
-                    label = { Text("批量 UAT Tag") },
-                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.PlaylistAddCheck, null, Modifier.size(17.dp)) },
-                )
-            }
-            if (task.status != WorkspaceStatus.ARCHIVED) {
-                AssistChip(
-                    onClick = onAddServices,
-                    label = { Text("添加服务") },
-                    leadingIcon = { Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)) },
-                )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val contentWidth = maxOf(maxWidth, 720.dp)
+            Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                Row(
+                    modifier = Modifier.width(contentWidth),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AssistChip(
+                        onClick = { controller.copyPath(taskRootPath(controller, task)) },
+                        label = { Text("复制路径") },
+                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)) },
+                    )
+                    AssistChip(
+                        onClick = { controller.terminal(taskRootPath(controller, task)) },
+                        label = { Text("终端") },
+                        leadingIcon = { Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp)) },
+                    )
+                    AssistChip(
+                        onClick = { controller.reveal(taskRootPath(controller, task)) },
+                        label = { Text("打开文件夹") },
+                        leadingIcon = { Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp)) },
+                    )
+                    if (availableServices.size > 1) {
+                        AssistChip(
+                            onClick = { controller.showBatchSelection(task) },
+                            label = { Text("批量 UAT Tag") },
+                            leadingIcon = {
+                                Icon(Icons.AutoMirrored.Outlined.PlaylistAddCheck, null, Modifier.size(17.dp))
+                            },
+                        )
+                    }
+                    if (task.status != WorkspaceStatus.ARCHIVED) {
+                        AssistChip(
+                            onClick = onAddServices,
+                            label = { Text("添加服务") },
+                            leadingIcon = { Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)) },
+                        )
+                    }
+                    AssistChip(
+                        onClick = { showBranchInfoDialog = true },
+                        label = { Text("分支信息") },
+                        leadingIcon = { Icon(Icons.Outlined.AccountTree, null, Modifier.size(17.dp)) },
+                    )
+                    AssistChip(
+                        onClick = { controller.openAiData(task) },
+                        label = { Text("打开工作数据") },
+                        leadingIcon = { Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp)) },
+                    )
+                }
             }
         }
 
@@ -760,6 +828,15 @@ private fun TaskDetail(
             },
         )
     }
+    if (showBranchInfoDialog) {
+        BranchInfoDialog(
+            task = task,
+            onCopy = {
+                controller.copyText(TaskBranchInfoFormatter.format(task), "分支信息已复制")
+            },
+            onDismiss = { showBranchInfoDialog = false },
+        )
+    }
 }
 
 private fun taskRootPath(controller: AppController, task: TaskManifest): String =
@@ -771,6 +848,9 @@ private fun WorkspaceCard(
     task: TaskManifest,
     workspace: ServiceWorkspace,
 ) {
+    var warningDismissed by remember(task.folderName, workspace.repositoryId, workspace.warnings) {
+        mutableStateOf(false)
+    }
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(15.dp),
@@ -804,63 +884,91 @@ private fun WorkspaceCard(
                 }
                 StatusPill(workspace.status.name)
             }
-            if (workspace.warnings.isNotEmpty()) {
+            if (workspace.warnings.isNotEmpty() && !warningDismissed) {
                 Surface(
                     color = WarningAmber.copy(alpha = 0.1f),
                     shape = RoundedCornerShape(10.dp),
                 ) {
-                    Column(Modifier.padding(12.dp)) {
-                        workspace.warnings.forEach {
-                            Text("• $it", style = MaterialTheme.typography.bodySmall, color = WarningAmber)
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp, top = 8.dp, end = 6.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            workspace.warnings.forEach {
+                                Text("• $it", style = MaterialTheme.typography.bodySmall, color = WarningAmber)
+                            }
+                        }
+                        IconButton(
+                            onClick = { warningDismissed = true },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(Icons.Outlined.Close, "关闭提示", tint = WarningAmber)
                         }
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val worktreeExists = Path.of(workspace.worktreePath).toFile().isDirectory
-                val workspaceAvailable = workspace.status != WorkspaceStatus.ARCHIVED &&
-                    workspace.status != WorkspaceStatus.FAILED &&
-                    worktreeExists
-                if (workspace.status == WorkspaceStatus.FAILED && task.status != WorkspaceStatus.ARCHIVED) {
-                    Button(
-                        onClick = {
-                            controller.retryFailedServices(task, listOf(workspace.repositoryId))
-                        },
+            val worktreeExists = Path.of(workspace.worktreePath).toFile().isDirectory
+            val workspaceAvailable = workspace.status != WorkspaceStatus.ARCHIVED &&
+                workspace.status != WorkspaceStatus.FAILED &&
+                worktreeExists
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val contentWidth = maxOf(maxWidth, 760.dp)
+                Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    Row(
+                        modifier = Modifier.width(contentWidth),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Outlined.Replay, null, Modifier.size(17.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("重试创建")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (workspace.status == WorkspaceStatus.FAILED &&
+                                task.status != WorkspaceStatus.ARCHIVED
+                            ) {
+                                Button(
+                                    onClick = {
+                                        controller.retryFailedServices(task, listOf(workspace.repositoryId))
+                                    },
+                                ) {
+                                    Icon(Icons.Outlined.Replay, null, Modifier.size(17.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("重试创建")
+                                }
+                            }
+                            TextButton(
+                                onClick = { controller.terminal(workspace.worktreePath) },
+                                enabled = workspaceAvailable,
+                            ) {
+                                Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("终端")
+                            }
+                            TextButton(onClick = { controller.copyPath(workspace.worktreePath) }) {
+                                Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("复制路径")
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Row(
+                            modifier = Modifier.padding(end = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(
+                                onClick = { controller.buildTag(task, workspace.repositoryId) },
+                                enabled = workspaceAvailable,
+                            ) {
+                                Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("创建Tag")
+                            }
+                            Button(
+                                onClick = { controller.openWorkspace(workspace) },
+                                enabled = workspaceAvailable,
+                            ) {
+                                Icon(Icons.AutoMirrored.Outlined.Launch, null, Modifier.size(17.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(if (workspace.ideType == IdeType.IDEA) "IDEA 打开" else "WebStorm 打开")
+                            }
+                        }
                     }
-                }
-                TextButton(
-                    onClick = { controller.openWorkspace(workspace) },
-                    enabled = workspaceAvailable,
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.Launch, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("打开")
-                }
-                TextButton(
-                    onClick = { controller.terminal(workspace.worktreePath) },
-                    enabled = workspaceAvailable,
-                ) {
-                    Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("终端")
-                }
-                TextButton(onClick = { controller.copyPath(workspace.worktreePath) }) {
-                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("复制路径")
-                }
-                Spacer(Modifier.weight(1f))
-                Button(
-                    onClick = { controller.buildTag(task, workspace.repositoryId) },
-                    enabled = workspaceAvailable,
-                ) {
-                    Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("创建Tag")
                 }
             }
         }
@@ -1341,6 +1449,77 @@ private fun CreateTaskDialog(
 }
 
 @Composable
+private fun BranchReuseDialog(
+    conflicts: List<BranchConflict>,
+    onCancel: () -> Unit,
+    onConfirm: (Set<String>) -> Unit,
+) {
+    var selected by remember(conflicts) { mutableStateOf(emptySet<String>()) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("发现同名分支") },
+        text = {
+            Column(
+                Modifier.widthIn(min = 620.dp).heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("以下项目已存在同名本地或远端分支，请逐项确认是否复用。取消任一项目将终止本次创建。")
+                conflicts.forEach { conflict ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = conflict.repositoryId in selected,
+                                onCheckedChange = { checked ->
+                                    selected = if (checked) {
+                                        selected + conflict.repositoryId
+                                    } else {
+                                        selected - conflict.repositoryId
+                                    }
+                                },
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(conflict.serviceName, fontWeight = FontWeight.SemiBold)
+                                Text(conflict.repositoryPath, style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    buildString {
+                                        if (conflict.localBranchExists) append("本地分支")
+                                        if (conflict.remoteBranchExists) {
+                                            if (isNotEmpty()) append("、")
+                                            append("远端 ${conflict.remoteRef}")
+                                        }
+                                        if (conflict.occupiedWorktreePath != null) {
+                                            if (isNotEmpty()) append("、")
+                                            append("已被 Worktree 占用：${conflict.occupiedWorktreePath}")
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (selected.size == conflicts.size) onConfirm(selected)
+                    else onCancel()
+                },
+            ) { Text("复用并创建") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("终止创建") } },
+    )
+}
+
+@Composable
 private fun AddServicesDialog(
     task: TaskManifest,
     repositories: List<RepositoryInfo>,
@@ -1749,10 +1928,13 @@ private fun BatchServiceSelectionDialog(
 @Composable
 private fun BatchTagResultDialog(
     results: List<TagOperation>,
+    requirementLink: String,
     onCopy: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val successes = results.filter { it.state == TagOperationState.SUCCESS }
+    val successes = results.filter {
+        it.state == TagOperationState.SUCCESS && !it.tag.isNullOrBlank()
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
@@ -1773,7 +1955,22 @@ private fun BatchTagResultDialog(
                     "成功 ${successes.size} / ${results.size}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                results.forEach { result ->
+                if (successes.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(11.dp),
+                    ) {
+                        Text(
+                            TagOutputFormatter.format(
+                                requirementLink = requirementLink,
+                                operations = successes,
+                                includeFailures = false,
+                            ),
+                            Modifier.padding(13.dp),
+                        )
+                    }
+                }
+                if (successes.isEmpty()) results.forEach { result ->
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(11.dp),
@@ -1813,8 +2010,36 @@ private fun BatchTagResultDialog(
 }
 
 @Composable
+private fun BranchInfoDialog(
+    task: TaskManifest,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val branches = task.services.joinToString("\n") { workspace ->
+        "${workspace.serviceName}：${workspace.branch}"
+    }.ifBlank { "暂无服务" }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Outlined.AccountTree, null, tint = BrandBlue, modifier = Modifier.size(38.dp)) },
+        title = { Text("分支信息", fontWeight = FontWeight.Bold) },
+        text = {
+            Surface(
+                Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(11.dp),
+            ) {
+                Text(branches, Modifier.padding(13.dp), fontWeight = FontWeight.Medium)
+            }
+        },
+        confirmButton = { Button(onClick = onCopy) { Text("复制") } },
+        shape = RoundedCornerShape(20.dp),
+    )
+}
+
+@Composable
 private fun TagResultDialog(
     result: TagOperation,
+    requirementLink: String,
     onCopy: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1840,7 +2065,15 @@ private fun TagResultDialog(
                 ) {
                     Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            result.message ?: "${result.serviceName}：${result.state}",
+                            if (success) {
+                                TagOutputFormatter.format(
+                                    requirementLink = requirementLink,
+                                    operations = listOf(result),
+                                    includeFailures = false,
+                                )
+                            } else {
+                                result.message ?: "${result.serviceName}：${result.state}"
+                            },
                             Modifier.weight(1f),
                             fontWeight = FontWeight.Medium,
                         )

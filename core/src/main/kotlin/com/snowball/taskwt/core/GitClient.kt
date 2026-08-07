@@ -141,17 +141,22 @@ class GitClient(
         run(repository, "config", "branch.$branch.merge", "refs/heads/$branch")
     }
 
-    fun addExistingWorktree(repository: Path, target: Path, branch: String) {
-        run(
-            repository,
-            "-c",
-            "core.symlinks=false",
-            "worktree",
-            "add",
-            target.toString(),
-            branch,
-            timeout = Duration.ofMinutes(5),
-        )
+    fun addExistingWorktree(repository: Path, target: Path, branch: String, force: Boolean = false) {
+        val args = buildList {
+            add("-c")
+            add("core.symlinks=false")
+            add("worktree")
+            add("add")
+            if (force) add("--force")
+            add(target.toString())
+            add(branch)
+        }
+        run(repository, *args.toTypedArray(), timeout = Duration.ofMinutes(5))
+    }
+
+    fun setBranchUpstream(repository: Path, branch: String, remote: String) {
+        run(repository, "config", "branch.$branch.remote", remote)
+        run(repository, "config", "branch.$branch.merge", "refs/heads/$branch")
     }
 
     fun addDetachedWorktree(repository: Path, target: Path, ref: String) {

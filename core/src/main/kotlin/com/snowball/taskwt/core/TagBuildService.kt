@@ -8,7 +8,11 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.time.Clock
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.UUID
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
@@ -53,6 +57,60 @@ class TagBuildService(
     private val clock: Clock = Clock.systemUTC(),
     private val events: EventSink = JsonlEventSink(paths, clock),
 ) {
+    companion object {
+        const val MAX_BATCH_CONCURRENCY = 6
+        private val auditTimestampFormatter = DateTimeFormatter
+            .ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneOffset.UTC)
+    }
+
+    fun buildBatch(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositoryIds: List<String>,
+    ): List<TagOperation> {
+        if (repositoryIds.isEmpty()) return emptyList()
+        val executor = Executors.newFixedThreadPool(
+            minOf(MAX_BATCH_CONCURRENCY, repositoryIds.size),
+        )
+        return try {
+            executor.invokeAll(
+                repositoryIds.map { repositoryId ->
+                    Callable { buildSafely(config, taskDirectory, repositoryId) }
+                },
+            ).map { it.get() }
+        } finally {
+            executor.shutdown()
+        }
+    }
+
+    private fun buildSafely(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositoryId: String,
+    ): TagOperation = runCatching {
+        build(config, taskDirectory, repositoryId)
+    }.getOrElse { error ->
+        val manifest = manifests.load(taskDirectory)
+        val workspace = manifest.services.firstOrNull { it.repositoryId == repositoryId }
+            ?: throw error
+        val service = config.services[repositoryId]
+        val now = Instant.now(clock).toString()
+        TagOperation(
+            operationId = UUID.randomUUID().toString(),
+            folderName = manifest.folderName,
+            serviceName = workspace.serviceName,
+            repositoryId = repositoryId,
+            featureBranch = workspace.branch,
+            testBranch = service?.uatBranch.orEmpty(),
+            remote = service?.uatRemote.orEmpty(),
+            state = TagOperationState.FAILED,
+            createdAt = now,
+            updatedAt = now,
+            message = error.message ?: error::class.simpleName ?: "构建失败",
+        ).also { operations.save(taskDirectory, it) }
+    }
+
     fun preflight(
         config: AppConfig,
         taskDirectory: Path,
@@ -539,11 +597,11 @@ class TagBuildService(
     ): String = buildString {
         appendLine("${service.tagMessagePrefix} build")
         appendLine("Task: ${manifest.folderName}")
-        appendLine("Service: ${workspace.serviceName}")
-        appendLine("Feature: ${workspace.branch}@$featureSha")
-        appendLine("Test: ${service.uatBranch}@$testSha")
+        if (manifest.requirementLink.isNotBlank()) {
+            appendLine("需求链接：${manifest.requirementLink.trim()}")
+        }
         appendLine("Builder: ${System.getProperty("user.name")}")
-        append("Timestamp: ${Instant.now(clock)}")
+        append("Timestamp: ${auditTimestampFormatter.format(Instant.now(clock))}")
     }
 
     private fun temporaryWorktreePath(repository: Path, label: String): Path {

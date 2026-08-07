@@ -1,6 +1,9 @@
 package com.snowball.taskwt.core
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -11,11 +14,13 @@ import kotlin.io.path.exists
 class ManifestStore(
     private val json: Json = Json {
         prettyPrint = true
-        ignoreUnknownKeys = true
         encodeDefaults = true
     },
 ) {
     fun save(taskDirectory: Path, manifest: TaskManifest) {
+        require(manifest.schemaVersion == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
+            "不能写入任务 JSON 版本 ${manifest.schemaVersion}，当前版本为 $CURRENT_TASK_MANIFEST_SCHEMA_VERSION"
+        }
         taskDirectory.createDirectories()
         val target = taskDirectory.resolve(FILE_NAME)
         val temporary = Files.createTempFile(taskDirectory, ".$FILE_NAME-", ".tmp")
@@ -32,8 +37,18 @@ class ManifestStore(
         }
     }
 
-    fun load(taskDirectory: Path): TaskManifest =
-        json.decodeFromString(Files.readString(taskDirectory.resolve(FILE_NAME)))
+    fun load(taskDirectory: Path): TaskManifest {
+        val content = Files.readString(taskDirectory.resolve(FILE_NAME))
+        val version = json.parseToJsonElement(content)
+            .jsonObject["schemaVersion"]
+            ?.jsonPrimitive
+            ?.intOrNull
+        require(version == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
+            "任务 JSON 版本不受支持：${version ?: "缺少 schemaVersion"}，当前版本为 " +
+                CURRENT_TASK_MANIFEST_SCHEMA_VERSION
+        }
+        return json.decodeFromString(content)
+    }
 
     fun list(taskRoot: Path): List<Pair<Path, TaskManifest>> {
         if (!taskRoot.exists()) return emptyList()
@@ -41,9 +56,7 @@ class ManifestStore(
             children
                 .filter { it.resolve(FILE_NAME).exists() }
                 .toList()
-                .mapNotNull { directory ->
-                    runCatching { directory to load(directory) }.getOrNull()
-                }
+                .map { directory -> directory to load(directory) }
         }
     }
 

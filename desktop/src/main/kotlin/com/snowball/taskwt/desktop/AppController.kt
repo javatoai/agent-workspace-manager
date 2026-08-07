@@ -22,6 +22,21 @@ enum class NavigationItem(
     SETTINGS("设置", "Settings"),
 }
 
+sealed interface PendingBranchReuse {
+    val conflicts: List<BranchConflict>
+
+    data class Create(
+        val request: CreateTaskRequest,
+        override val conflicts: List<BranchConflict>,
+    ) : PendingBranchReuse
+
+    data class AddServices(
+        val task: TaskManifest,
+        val request: AddServicesRequest,
+        override val conflicts: List<BranchConflict>,
+    ) : PendingBranchReuse
+}
+
 class AppController(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val configStore: ConfigStore = ConfigStore(paths),
@@ -29,6 +44,7 @@ class AppController(
     private val manifests: ManifestStore = ManifestStore(),
     private val taskManager: TaskManager = TaskManager(events = JsonlEventSink(paths)),
     private val tagBuildService: TagBuildService = TagBuildService(paths = paths),
+    private val requirementInfoClient: RequirementInfoClient = FeishuRequirementInfoClient(),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -58,6 +74,13 @@ class AppController(
         private set
     var batchTagResults by mutableStateOf<List<TagOperation>?>(null)
         private set
+    var requirementStatuses by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+    var requirementParticipants by mutableStateOf<Map<String, RequirementParticipants>>(emptyMap())
+        private set
+    var pendingBranchReuse by mutableStateOf<PendingBranchReuse?>(null)
+        private set
+    private val pendingRequirementStatusRefreshes = mutableSetOf<String>()
 
     val needsOnboarding: Boolean
         get() = config.scanRoots.isEmpty() || config.taskRoot.isNullOrBlank()
@@ -99,11 +122,60 @@ class AppController(
             config = updatedConfig
             repositories = scanned
             tasks = taskList
+            requirementStatuses = requirementStatuses.filterKeys { folderName ->
+                taskList.any { it.folderName == folderName }
+            }
+            requirementParticipants = requirementParticipants.filterKeys { folderName ->
+                taskList.any { it.folderName == folderName }
+            }
             selectedTask = selectedTask?.let { previous ->
                 taskList.firstOrNull { it.folderName == previous.folderName }
             }
+            refreshRequirementStatuses(taskList)
         },
     )
+
+    fun selectTask(task: TaskManifest) {
+        selectedTask = task
+        refreshRequirementStatus(task)
+    }
+
+    fun refreshRequirementStatuses() {
+        refreshRequirementStatuses(tasks)
+    }
+
+    private fun refreshRequirementStatuses(taskList: List<TaskManifest>) {
+        taskList.forEach(::refreshRequirementStatus)
+    }
+
+    private fun refreshRequirementStatus(task: TaskManifest) {
+        if (FeishuWorkItemLink.parse(task.requirementLink) == null) {
+            requirementStatuses = requirementStatuses - task.folderName
+            requirementParticipants = requirementParticipants - task.folderName
+            return
+        }
+        if (!pendingRequirementStatusRefreshes.add(task.folderName)) return
+        scope.launch {
+            val info = withContext(Dispatchers.IO) {
+                runCatching { requirementInfoClient.fetch(task.requirementLink) }.getOrNull()
+            }
+            pendingRequirementStatusRefreshes -= task.folderName
+            if (tasks.none { it.folderName == task.folderName && it.requirementLink == task.requirementLink }) {
+                return@launch
+            }
+            val status = info?.status
+            requirementStatuses = if (status == null) {
+                requirementStatuses - task.folderName
+            } else {
+                requirementStatuses + (task.folderName to status)
+            }
+            requirementParticipants = if (info == null || info.participants.isEmpty) {
+                requirementParticipants - task.folderName
+            } else {
+                requirementParticipants + (task.folderName to info.participants)
+            }
+        }
+    }
 
     fun completeOnboarding(scanRoot: String, taskRoot: String) {
         require(scanRoot.isNotBlank()) { "请选择服务扫描目录" }
@@ -174,6 +246,49 @@ class AppController(
         branch: String,
         repositoryIds: List<String>,
         requirementLink: String,
+    ) {
+        val request = CreateTaskRequest(folderName, branch, repositoryIds, requirementLink)
+        inspectBranchConflicts(branch, repositoryIds) { conflicts ->
+            if (conflicts.isEmpty()) {
+                executeCreateTask(request)
+            } else {
+                pendingBranchReuse = PendingBranchReuse.Create(request, conflicts)
+            }
+        }
+    }
+
+    fun addServices(task: TaskManifest, repositoryIds: List<String>) {
+        val request = AddServicesRequest(repositoryIds)
+        inspectBranchConflicts(task.featureBranch, repositoryIds) { conflicts ->
+            if (conflicts.isEmpty()) {
+                executeAddServices(task, request.repositoryIds, request.reuseExistingBranchRepositoryIds)
+            } else {
+                pendingBranchReuse = PendingBranchReuse.AddServices(task, request, conflicts)
+            }
+        }
+    }
+
+    fun confirmBranchReuse(repositoryIds: Set<String>) {
+        val pending = pendingBranchReuse ?: return
+        pendingBranchReuse = null
+        when (pending) {
+            is PendingBranchReuse.Create -> executeCreateTask(
+                pending.request.copy(reuseExistingBranchRepositoryIds = repositoryIds),
+            )
+            is PendingBranchReuse.AddServices -> executeAddServices(
+                pending.task,
+                pending.request.repositoryIds,
+                repositoryIds,
+            )
+        }
+    }
+
+    fun cancelBranchReuse() {
+        pendingBranchReuse = null
+    }
+
+    private fun executeCreateTask(
+        request: CreateTaskRequest,
     ) =
         runOperation(
             successMessage = "任务已创建",
@@ -181,17 +296,21 @@ class AppController(
                 taskManager.create(
                     config,
                     repositories,
-                    CreateTaskRequest(folderName, branch, repositoryIds, requirementLink),
+                    request,
                 )
             },
             onSuccess = { manifest ->
-                selectedTask = manifest
+                selectTask(manifest)
                 reloadTasks()
                 navigation = NavigationItem.TASKS
             },
         )
 
-    fun addServices(task: TaskManifest, repositoryIds: List<String>) =
+    private fun executeAddServices(
+        task: TaskManifest,
+        repositoryIds: List<String>,
+        reuseExistingBranchRepositoryIds: Set<String> = emptySet(),
+    ) =
         runOperation(
             successMessage = "服务已追加",
             block = {
@@ -199,11 +318,11 @@ class AppController(
                     config,
                     repositories,
                     taskDirectory(task),
-                    AddServicesRequest(repositoryIds),
+                    AddServicesRequest(repositoryIds, reuseExistingBranchRepositoryIds),
                 )
             },
             onSuccess = { updated ->
-                selectedTask = updated
+                selectTask(updated)
                 reloadTasks()
             },
         )
@@ -213,7 +332,7 @@ class AppController(
             successMessage = "任务已归档",
             block = { taskManager.archive(config, taskDirectory(task), repositories, force) },
             onSuccess = { updated ->
-                selectedTask = updated
+                selectTask(updated)
                 reloadTasks()
             },
         )
@@ -223,7 +342,7 @@ class AppController(
             successMessage = "任务已恢复",
             block = { taskManager.restore(config, taskDirectory(task), repositories) },
             onSuccess = { updated ->
-                selectedTask = updated
+                selectTask(updated)
                 reloadTasks()
             },
         )
@@ -249,12 +368,19 @@ class AppController(
 
     fun initializeTask(task: TaskManifest, failedOnly: Boolean) =
         runOperation(
-            successMessage = "初始化步骤已完成",
+            successMessage = { updated ->
+                val warningServices = updated.services.filter { it.warnings.isNotEmpty() }
+                if (warningServices.isEmpty()) {
+                    "初始化步骤已完成"
+                } else {
+                    "初始化未完成：${warningServices.joinToString("、") { "${it.serviceName}（${it.warnings.size} 项警告）" }}"
+                }
+            },
             block = {
                 taskManager.initialize(config, taskDirectory(task), repositories, failedOnly)
             },
             onSuccess = { updated ->
-                selectedTask = updated
+                selectTask(updated)
                 reloadTasks()
             },
         )
@@ -271,7 +397,7 @@ class AppController(
                 )
             },
             onSuccess = { updated ->
-                selectedTask = updated
+                selectTask(updated)
                 reloadTasks()
             },
         )
@@ -313,34 +439,6 @@ class AppController(
             .onFailure(::showError)
     }
 
-    fun openTask(task: TaskManifest, ideType: IdeType) {
-        val executable = when (ideType) {
-            IdeType.IDEA -> config.ideaExecutable
-            IdeType.WEBSTORM -> config.webStormExecutable
-        }
-        if (executable.isNullOrBlank()) {
-            showError(
-                IllegalStateException(
-                    "尚未配置 ${if (ideType == IdeType.IDEA) "IDEA" else "WebStorm"} 可执行文件",
-                ),
-            )
-            navigation = NavigationItem.SETTINGS
-            return
-        }
-        val directory = taskDirectory(task).resolve(
-            when (ideType) {
-                IdeType.IDEA -> "idea-${task.taskDirectoryName}"
-                IdeType.WEBSTORM -> "webstorm-${task.taskDirectoryName}"
-            },
-        )
-        if (!directory.toFile().isDirectory) {
-            showError(IllegalStateException("开发工具工作区不存在：$directory"))
-            return
-        }
-        runCatching { desktopIntegration.openIde(directory, executable) }
-            .onFailure(::showError)
-    }
-
     fun openWorkspace(workspace: ServiceWorkspace) {
         val executable = when (workspace.ideType) {
             IdeType.IDEA -> config.ideaExecutable
@@ -362,6 +460,23 @@ class AppController(
         }
         runCatching { desktopIntegration.openIde(directory, executable) }
             .onFailure(::showError)
+    }
+
+    fun openAiData(task: TaskManifest) {
+        val executable = config.ideaExecutable
+        if (executable.isNullOrBlank()) {
+            showError(IllegalStateException("尚未配置 IDEA 可执行文件"))
+            navigation = NavigationItem.SETTINGS
+            return
+        }
+        runOperation(
+            successMessage = "已打开工作数据目录",
+            block = {
+                val directory = taskManager.ensureAiDataDirectory(taskDirectory(task))
+                desktopIntegration.openIde(directory, executable)
+            },
+            onSuccess = {},
+        )
     }
 
     fun buildTag(task: TaskManifest, repositoryId: String) =
@@ -387,9 +502,7 @@ class AppController(
         runOperation(
             successMessage = "批量 UAT Tag 操作已结束",
             block = {
-                repositoryIds.map { repositoryId ->
-                    tagBuildService.build(config, taskDirectory(task), repositoryId)
-                }
+                tagBuildService.buildBatch(config, taskDirectory(task), repositoryIds)
             },
             onSuccess = { results ->
                 batchSelectionTask = null
@@ -427,6 +540,7 @@ class AppController(
             return
         }
         selectedTask = task
+        refreshRequirementStatus(task)
         navigation = NavigationItem.TASKS
     }
 
@@ -439,6 +553,31 @@ class AppController(
         statusMessage = null
     }
 
+    private fun inspectBranchConflicts(
+        featureBranch: String,
+        repositoryIds: List<String>,
+        onConflicts: (List<BranchConflict>) -> Unit,
+    ) {
+        if (busy) return
+        busy = true
+        dismissMessages()
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    taskManager.inspectBranchConflicts(config, repositories, featureBranch, repositoryIds)
+                }
+            }
+                .onSuccess {
+                    busy = false
+                    onConflicts(it)
+                }
+                .onFailure {
+                    busy = false
+                    showError(it)
+                }
+        }
+    }
+
     private fun reloadTasks() {
         tasks = config.taskRoot
             ?.let(Path::of)
@@ -446,6 +585,7 @@ class AppController(
             ?.map { it.second }
             ?.sortedByDescending { it.updatedAt }
             .orEmpty()
+        refreshRequirementStatuses(tasks)
     }
 
     private fun taskDirectory(task: TaskManifest): Path =
@@ -471,6 +611,16 @@ class AppController(
         successMessage: String,
         block: () -> T,
         onSuccess: (T) -> Unit,
+    ) = runOperation(
+        successMessage = { successMessage },
+        block = block,
+        onSuccess = onSuccess,
+    )
+
+    private fun <T> runOperation(
+        successMessage: (T) -> String,
+        block: () -> T,
+        onSuccess: (T) -> Unit,
     ) {
         if (busy) return
         busy = true
@@ -479,7 +629,7 @@ class AppController(
             runCatching { withContext(Dispatchers.IO) { block() } }
                 .onSuccess {
                     onSuccess(it)
-                    showStatus(successMessage)
+                    showStatus(successMessage(it))
                 }
                 .onFailure(::showError)
             busy = false

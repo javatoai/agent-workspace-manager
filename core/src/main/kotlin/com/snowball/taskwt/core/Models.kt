@@ -2,6 +2,9 @@ package com.snowball.taskwt.core
 
 import kotlinx.serialization.Serializable
 
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 2
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 2
+
 @Serializable
 enum class IdeType {
     IDEA,
@@ -55,7 +58,7 @@ data class ServiceConfig(
 
 @Serializable
 data class AppConfig(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = CURRENT_APP_CONFIG_SCHEMA_VERSION,
     val scanRoots: List<String> = emptyList(),
     val taskRoot: String? = null,
     val services: Map<String, ServiceConfig> = emptyMap(),
@@ -101,7 +104,7 @@ data class ServiceWorkspace(
 
 @Serializable
 data class TaskManifest(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = CURRENT_TASK_MANIFEST_SCHEMA_VERSION,
     val folderName: String,
     val taskDirectoryName: String,
     val featureBranch: String,

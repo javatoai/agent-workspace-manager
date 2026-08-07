@@ -59,6 +59,33 @@ class RuntimeContext(
     }
 }
 
+private fun confirmBranchReuse(
+    conflicts: List<BranchConflict>,
+): Set<String> {
+    if (conflicts.isEmpty()) return emptySet()
+    val console = System.console()
+        ?: throw IllegalStateException("检测到同名分支，但当前 CLI 不是交互终端；已终止创建")
+    val reused = mutableSetOf<String>()
+    conflicts.forEach { conflict ->
+        println()
+        println("项目：${conflict.serviceName}")
+        println("仓库：${conflict.repositoryPath}")
+        println("分支：${conflict.branch}")
+        val sources = buildList {
+            if (conflict.localBranchExists) add("本地分支")
+            if (conflict.remoteBranchExists) add("远端 ${conflict.remoteRef}")
+            conflict.occupiedWorktreePath?.let { add("已被 Worktree 占用：$it") }
+        }
+        println("冲突来源：${sources.joinToString("、")}")
+        val answer = console.readLine("是否复用该分支？[y/N] ").trim().lowercase(Locale.ROOT)
+        if (answer !in setOf("y", "yes")) {
+            throw IllegalStateException("用户拒绝复用 ${conflict.serviceName} 的分支，已终止创建")
+        }
+        reused += conflict.repositoryId
+    }
+    return reused
+}
+
 @Command(
     name = "taskwt",
     mixinStandardHelpOptions = true,
@@ -478,10 +505,12 @@ class TaskCreateCommand : Callable<Int> {
         val config = context.config()
         val repositories = context.repositories(config)
         val repositoryIds = services.map { resolveServiceId(repositories, config, it) }
+        val conflicts = context.tasks.inspectBranchConflicts(config, repositories, branch, repositoryIds)
+        val reuseIds = confirmBranchReuse(conflicts)
         val manifest = context.tasks.create(
             config,
             repositories,
-            CreateTaskRequest(folderName, branch, repositoryIds, requirementLink),
+            CreateTaskRequest(folderName, branch, repositoryIds, requirementLink, reuseIds),
         )
         if (asJson) println(context.json.encodeToString(manifest))
         else printManifestSummary(manifest)
@@ -509,11 +538,19 @@ class TaskAddServicesCommand : Callable<Int> {
         val repositories = context.repositories(config)
         val repositoryIds = services.map { resolveServiceId(repositories, config, it) }
         val taskDirectory = context.taskDirectory(folderName, config)
+        val existingManifest = context.manifests.load(taskDirectory)
+        val conflicts = context.tasks.inspectBranchConflicts(
+            config,
+            repositories,
+            existingManifest.featureBranch,
+            repositoryIds,
+        )
+        val reuseIds = confirmBranchReuse(conflicts)
         val manifest = context.tasks.addServices(
             config,
             repositories,
             taskDirectory,
-            AddServicesRequest(repositoryIds),
+            AddServicesRequest(repositoryIds, reuseIds),
         )
         if (asJson) println(context.json.encodeToString(manifest))
         else printManifestSummary(manifest)
@@ -577,16 +614,26 @@ class TaskOpenCommand : Callable<Int> {
         val taskDirectory = context.taskDirectory(folderName, config)
         val manifest = context.manifests.load(taskDirectory)
         val requested = ide.uppercase()
-        if (requested == "ALL" || requested == "IDEA") {
-            val executable = config.ideaExecutable ?: error("尚未配置 IDEA 可执行文件")
-            val directory = taskDirectory.resolve("idea-${manifest.taskDirectoryName}")
-            if (directory.exists()) context.desktop.openIde(directory, executable)
+        require(requested == "ALL" || requested == "IDEA" || requested == "WEBSTORM") {
+            "--ide 只能是 ALL、IDEA 或 WEBSTORM"
         }
-        if (requested == "ALL" || requested == "WEBSTORM") {
-            val executable = config.webStormExecutable ?: error("尚未配置 WebStorm 可执行文件")
-            val directory = taskDirectory.resolve("webstorm-${manifest.taskDirectoryName}")
-            if (directory.exists()) context.desktop.openIde(directory, executable)
-        }
+        manifest.services
+            .filter {
+                (requested == "ALL" || it.ideType.name == requested) &&
+                    it.status != WorkspaceStatus.FAILED &&
+                    it.status != WorkspaceStatus.ARCHIVED
+            }
+            .forEach { workspace ->
+                val executable = when (workspace.ideType) {
+                    IdeType.IDEA -> config.ideaExecutable ?: error("尚未配置 IDEA 可执行文件")
+                    IdeType.WEBSTORM -> config.webStormExecutable ?: error("尚未配置 WebStorm 可执行文件")
+                }
+                val directory = Path.of(workspace.worktreePath)
+                require(directory.toFile().isDirectory) {
+                    "服务 Worktree 不存在：$directory"
+                }
+                context.desktop.openIde(directory, executable)
+            }
         return 0
     }
 }
@@ -853,9 +900,19 @@ class TagBuildCommand : Callable<Int> {
         val context = parent.root.context
         val config = context.config()
         val taskDirectory = context.taskDirectory(folderName, config)
-        val results = services.map { context.tags.build(config, taskDirectory, it) }
-        if (asJson) println(context.json.encodeToString(results))
-        else results.forEach { println(it.message ?: "${it.serviceName}：${it.state}") }
+        val results = context.tags.buildBatch(config, taskDirectory, services.toList())
+        if (asJson) {
+            println(context.json.encodeToString(results))
+        } else {
+            val manifest = context.manifests.load(taskDirectory)
+            println(
+                TagOutputFormatter.format(
+                    requirementLink = manifest.requirementLink,
+                    operations = results,
+                    includeFailures = true,
+                ),
+            )
+        }
         return if (results.all { it.state == TagOperationState.SUCCESS }) 0 else PARTIAL_EXIT_CODE
     }
 }

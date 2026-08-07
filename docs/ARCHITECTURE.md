@@ -36,7 +36,7 @@ desktop  Compose Desktop 图形客户端与原生安装包
 - `taskKey` Windows 安全目录名
 - 仓库扫描、任务根目录排除和 Linked Worktree 排除
 - Bootstrap 复制、命令失败继续及路径穿越阻断
-- 多仓库任务创建、IDEA 聚合工程、归档与恢复
+- 多仓库任务创建、服务独立 Worktree、归档与恢复
 - 脏 Worktree 阻止归档
 - UAT Feature/Test/Annotated Tag 真实推送
 - 合并冲突文件检测及 Feature Worktree 不受污染

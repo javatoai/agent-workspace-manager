@@ -22,7 +22,7 @@ class TagConflictIntegrationTest {
         val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
 
         val featureWorktree = temporary.resolve("tasks").resolve("CONFLICT-1")
-            .resolve("idea-CONFLICT-1").resolve("conflict-service")
+            .resolve("conflict-service")
         Files.createDirectories(featureWorktree.parent)
         GitClient().addWorktree(repository, featureWorktree, "feature/CONFLICT-1", "origin/master")
         GitTestSupport.configureIdentity(featureWorktree)

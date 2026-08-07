@@ -12,8 +12,9 @@
 - 新建任务需填写需求链接（URL 或文本）；详情页对 http(s) 可点开浏览器
 - 任务目录自动生成 `AGENTS.md`（本任务 worktree、其它本地仓只读表、设置中的自定义追加）
 - 一次需求可为多个服务创建同名 Feature 分支与 Worktree；事后可追加服务
-- 生成 IDEA 聚合 Maven 工程、WebStorm 工程及唯一 JetBrains 项目显示名
-- 一键打开 IDEA / WebStorm、终端、资源管理器；复制任务或服务绝对路径
+- 每个服务独立创建 Worktree，并按服务配置独立打开 IDEA 或 WebStorm
+- 创建前检查同名本地/远端分支，支持逐项目确认复用
+- 一键打开服务 IDE、终端、资源管理器；复制任务或服务绝对路径
 - 服务级 Bootstrap：复制规则、顺序命令、超时、平台过滤与 CodeGraph 预设
 - **安全归档 / 恢复**：检查暂存、未提交、未跟踪、未推送及进行中的 Git 操作
 - **永久删除任务**：只删任务目录与 worktree，保留本地 / 远端 Feature 分支；有未提交改动时需勾选确认丢弃（仅未推送不阻断）
@@ -71,20 +72,8 @@ Windows 完整打包（测试 + CLI + 绿色包 + EXE/MSI）：
 ├── AGENTS.md
 ├── tag-build-history.jsonl
 ├── tag-operations/
-├── idea-<taskDirectoryName>/
-│   ├── pom.xml
-│   ├── .idea/.name
-│   └── <各 Java 服务 worktree>/
-└── webstorm-<taskDirectoryName>/
-    ├── .idea/.name
-    └── <前端服务 worktree>/
-```
-
-JetBrains 项目显示名：
-
-```text
-TaskWT - <folderName> - IDEA
-TaskWT - <folderName> - WebStorm
+├── <后端服务 worktree>/
+└── <前端服务 worktree>/
 ```
 
 建议在 IDEA / WebStorm 中将「打开项目」设为「新窗口」。工具不会修改 JetBrains 全局设置。
@@ -94,6 +83,7 @@ TaskWT - <folderName> - WebStorm
 ```powershell
 taskwt config init --scan-root <服务目录> --task-root <任务根目录>
 taskwt task create --folder-name "OBT-123 支付" --requirement-link "https://project.feishu.cn/..." --branch feature/OBT-123 --services job-manager,order-center
+创建遇到同名本地或远端分支时，CLI 会逐项目询问是否复用；非交互执行默认终止。
 taskwt task list
 taskwt task reveal "OBT-123 支付"
 taskwt task delete --folder-name "OBT-123 支付"            # 干净时可直接删

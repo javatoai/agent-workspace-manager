@@ -12,7 +12,6 @@ class ConfigStore(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val json: Json = Json {
         prettyPrint = true
-        ignoreUnknownKeys = true
         encodeDefaults = true
     },
 ) {
@@ -20,7 +19,8 @@ class ConfigStore(
 
     fun load(): AppConfig {
         if (!exists()) return AppConfig()
-        return json.decodeFromString(Files.readString(paths.config))
+        val content = Files.readString(paths.config)
+        return json.decodeFromString(content)
     }
 
     fun save(config: AppConfig) {

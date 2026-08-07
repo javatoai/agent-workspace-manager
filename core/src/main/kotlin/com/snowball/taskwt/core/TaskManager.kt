@@ -17,10 +17,23 @@ data class CreateTaskRequest(
     val featureBranch: String,
     val repositoryIds: List<String>,
     val requirementLink: String,
+    val reuseExistingBranchRepositoryIds: Set<String> = emptySet(),
 )
 
 data class AddServicesRequest(
     val repositoryIds: List<String>,
+    val reuseExistingBranchRepositoryIds: Set<String> = emptySet(),
+)
+
+data class BranchConflict(
+    val repositoryId: String,
+    val serviceName: String,
+    val repositoryPath: String,
+    val branch: String,
+    val localBranchExists: Boolean,
+    val remoteBranchExists: Boolean,
+    val remoteRef: String,
+    val occupiedWorktreePath: String? = null,
 )
 
 data class DeleteRisk(
@@ -40,6 +53,11 @@ class TaskManager(
     private val events: EventSink = NoOpEventSink,
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
 ) {
+    fun ensureAiDataDirectory(taskDirectory: Path): Path = withTaskLock(taskDirectory) {
+        manifests.load(taskDirectory)
+        ensureAiDataDirectoryUnlocked(taskDirectory)
+    }
+
     fun create(
         config: AppConfig,
         repositories: List<RepositoryInfo>,
@@ -50,6 +68,46 @@ class TaskManager(
         val taskDirectory = taskRoot.resolve(TaskNaming.directoryName(request.folderName))
         return withTaskLock(taskDirectory) {
             createUnlocked(config, repositories, request)
+        }
+    }
+
+    fun inspectBranchConflicts(
+        config: AppConfig,
+        repositories: List<RepositoryInfo>,
+        featureBranch: String,
+        repositoryIds: List<String>,
+    ): List<BranchConflict> {
+        require(featureBranch.isNotBlank()) { "分支名不能为空" }
+        require(featureBranch.none { it.isWhitespace() }) { "分支名不能包含空白字符" }
+        return resolveRepositories(repositories, repositoryIds).mapNotNull { repository ->
+            val service = config.services[repository.id] ?: ServiceConfig(
+                repositoryId = repository.id,
+                displayName = repository.name,
+            )
+            require(service.enabled) { "服务已禁用：${service.displayName}" }
+            val repoPath = Path.of(repository.rootPath)
+            git.fetch(repoPath, service.uatRemote)
+            require(git.run(repoPath, "check-ref-format", "--branch", featureBranch, check = false).succeeded) {
+                "分支名不合法：$featureBranch"
+            }
+            val localExists = git.refExists(repoPath, "refs/heads/$featureBranch")
+            val remoteRef = "refs/remotes/${service.uatRemote}/$featureBranch"
+            val remoteExists = git.refExists(repoPath, remoteRef)
+            val occupied = git.worktrees(repoPath).firstOrNull { it.branch == featureBranch }
+            if (!localExists && !remoteExists && occupied == null) {
+                null
+            } else {
+                BranchConflict(
+                    repositoryId = repository.id,
+                    serviceName = service.displayName,
+                    repositoryPath = repository.rootPath,
+                    branch = featureBranch,
+                    localBranchExists = localExists,
+                    remoteBranchExists = remoteExists,
+                    remoteRef = "${service.uatRemote}/$featureBranch",
+                    occupiedWorktreePath = occupied?.path?.toString(),
+                )
+            }
         }
     }
 
@@ -87,7 +145,7 @@ class TaskManager(
                 config = config,
                 repository = repository,
                 featureBranch = request.featureBranch,
-                requireAbsent = true,
+                allowReuse = repository.id in request.reuseExistingBranchRepositoryIds,
             )
         }
 
@@ -97,7 +155,6 @@ class TaskManager(
             selected = selected,
             existing = emptyList(),
             taskDirectory = taskDirectory,
-            taskDirectoryName = taskDirectoryName,
             featureBranch = request.featureBranch,
         )
         var manifest = TaskManifest(
@@ -111,12 +168,15 @@ class TaskManager(
             services = workspaces,
         )
         manifests.save(taskDirectory, manifest)
+        ensureAiDataDirectoryUnlocked(taskDirectory)
 
         val results = workspaces.map { workspace ->
-            createWorkspace(config, workspace)
+            createWorkspace(
+                config,
+                workspace,
+                forceReuse = workspace.repositoryId in request.reuseExistingBranchRepositoryIds,
+            )
         }
-        writeIdeaAggregate(taskDirectory, taskDirectoryName, results)
-        writeJetBrainsProjectNames(taskDirectory, manifest.folderName, taskDirectoryName, results)
         manifest = manifest.copy(
             updatedAt = Instant.now(clock).toString(),
             status = aggregateStatus(results),
@@ -174,7 +234,7 @@ class TaskManager(
                 config = config,
                 repository = repository,
                 featureBranch = manifest.featureBranch,
-                requireAbsent = false,
+                allowReuse = repository.id in request.reuseExistingBranchRepositoryIds,
             )
         }
 
@@ -183,20 +243,16 @@ class TaskManager(
             selected = selected,
             existing = manifest.services,
             taskDirectory = taskDirectory,
-            taskDirectoryName = manifest.taskDirectoryName,
             featureBranch = manifest.featureBranch,
         )
         val results = newWorkspaces.map { workspace ->
-            createWorkspace(config, workspace)
+            createWorkspace(
+                config,
+                workspace,
+                forceReuse = workspace.repositoryId in request.reuseExistingBranchRepositoryIds,
+            )
         }
         val merged = manifest.services + results
-        writeIdeaAggregate(taskDirectory, manifest.taskDirectoryName, merged)
-        writeJetBrainsProjectNames(
-            taskDirectory,
-            manifest.folderName,
-            manifest.taskDirectoryName,
-            merged,
-        )
         return manifest.copy(
             updatedAt = Instant.now(clock).toString(),
             status = aggregateStatus(merged),
@@ -308,13 +364,6 @@ class TaskManager(
                 retryCreateWorkspace(config, workspace)
             }
         }
-        writeIdeaAggregate(taskDirectory, manifest.taskDirectoryName, updated)
-        writeJetBrainsProjectNames(
-            taskDirectory,
-            manifest.folderName,
-            manifest.taskDirectoryName,
-            updated,
-        )
         return manifest.copy(
             updatedAt = Instant.now(clock).toString(),
             status = aggregateStatus(updated),
@@ -564,13 +613,6 @@ class TaskManager(
                 workspace.copy(status = WorkspaceStatus.FAILED, warnings = listOf(it.message ?: "恢复失败"))
             }
         }
-        writeIdeaAggregate(taskDirectory, manifest.taskDirectoryName, restored)
-        writeJetBrainsProjectNames(
-            taskDirectory,
-            manifest.folderName,
-            manifest.taskDirectoryName,
-            restored,
-        )
         return manifest.copy(
             status = aggregateStatus(restored),
             updatedAt = Instant.now(clock).toString(),
@@ -603,6 +645,13 @@ class TaskManager(
         AgentsMdWriter.write(taskDirectory, manifest, repositories, config.agentsMdAppendix)
     }
 
+    private fun ensureAiDataDirectoryUnlocked(taskDirectory: Path): Path =
+        taskDirectory.resolve(AI_DATA_DIRECTORY).createDirectories()
+
+    private companion object {
+        const val AI_DATA_DIRECTORY = "ai-data"
+    }
+
     private fun resolveRepositories(
         repositories: List<RepositoryInfo>,
         repositoryIds: List<String>,
@@ -618,7 +667,7 @@ class TaskManager(
         config: AppConfig,
         repository: RepositoryInfo,
         featureBranch: String,
-        requireAbsent: Boolean,
+        allowReuse: Boolean,
     ) {
         val service = config.services[repository.id] ?: ServiceConfig(
             repositoryId = repository.id,
@@ -630,15 +679,20 @@ class TaskManager(
         require(git.run(repoPath, "check-ref-format", "--branch", featureBranch, check = false).succeeded) {
             "分支名不合法：$featureBranch"
         }
+        val localExists = git.refExists(repoPath, "refs/heads/$featureBranch")
+        val remoteExists = git.refExists(
+            repoPath,
+            "refs/remotes/${service.uatRemote}/$featureBranch",
+        )
         val usedBy = git.worktrees(repoPath).firstOrNull { it.branch == featureBranch }
-        require(usedBy == null) { "分支 $featureBranch 已被工作树占用：${usedBy?.path}" }
-        if (requireAbsent) {
-            require(!git.refExists(repoPath, "refs/heads/$featureBranch")) {
-                "本地分支已存在：$featureBranch"
-            }
-            val remotes = git.run(repoPath, "for-each-ref", "--format=%(refname)", "refs/remotes").stdout
-            require(remotes.lineSequence().none { it.endsWith("/$featureBranch") }) {
-                "远端分支已存在：$featureBranch"
+        if (localExists || remoteExists || usedBy != null) {
+            require(allowReuse) {
+                val source = buildList {
+                    if (localExists) add("本地分支")
+                    if (remoteExists) add("${service.uatRemote}/$featureBranch")
+                    if (usedBy != null) add("已被 Worktree 占用：${usedBy.path}")
+                }.joinToString("、")
+                "分支 $featureBranch 已存在（$source），请先确认复用"
             }
         }
     }
@@ -656,7 +710,6 @@ class TaskManager(
         selected: List<RepositoryInfo>,
         existing: List<ServiceWorkspace>,
         taskDirectory: Path,
-        taskDirectoryName: String,
         featureBranch: String,
     ): List<ServiceWorkspace> {
         val nameCounts = mutableMapOf<String, Int>()
@@ -683,10 +736,6 @@ class TaskManager(
                 repositoryId = repository.id,
                 displayName = repository.name,
             )
-            val ideDirectory = when (service.ideType) {
-                IdeType.IDEA -> taskDirectory.resolve("idea-$taskDirectoryName")
-                IdeType.WEBSTORM -> taskDirectory.resolve("webstorm-$taskDirectoryName")
-            }
             val baseName = if (nameCounts.getOrDefault(repository.name.lowercase(Locale.ROOT), 0) > 1) {
                 "${repository.name}-${repository.id.removePrefix("repo-").take(6)}"
             } else {
@@ -703,14 +752,18 @@ class TaskManager(
                 repositoryId = repository.id,
                 serviceName = service.displayName,
                 repositoryPath = repository.rootPath,
-                worktreePath = ideDirectory.resolve(directoryName).toString(),
+                worktreePath = taskDirectory.resolve(directoryName).toString(),
                 ideType = service.ideType,
                 branch = featureBranch,
             )
         }
     }
 
-    private fun createWorkspace(config: AppConfig, workspace: ServiceWorkspace): ServiceWorkspace {
+    private fun createWorkspace(
+        config: AppConfig,
+        workspace: ServiceWorkspace,
+        forceReuse: Boolean = false,
+    ): ServiceWorkspace {
         val repository = Path.of(workspace.repositoryPath)
         val target = Path.of(workspace.worktreePath)
         val service = config.services[workspace.repositoryId] ?: ServiceConfig(
@@ -719,18 +772,15 @@ class TaskManager(
         )
         return runCatching {
             target.parent.createDirectories()
-            require(
-                git.run(
-                    repository,
-                    "rev-parse",
-                    "--verify",
-                    "${service.defaultBaseRef}^{commit}",
-                    check = false,
-                ).succeeded,
-            ) {
-                "基础分支不存在：${service.defaultBaseRef}"
-            }
-            attachWorktree(config, workspace, repository, target, allowCreateFromBase = true)
+            validateBaseRefIfNeeded(repository, service, workspace.branch)
+            attachWorktree(
+                config,
+                workspace,
+                repository,
+                target,
+                allowCreateFromBase = true,
+                forceReuse = forceReuse,
+            )
             val result = bootstrap.initialize(repository, target, service.bootstrap)
             workspace.copy(
                 status = if (result.succeeded) WorkspaceStatus.READY else WorkspaceStatus.READY_WITH_WARNINGS,
@@ -755,17 +805,7 @@ class TaskManager(
         return runCatching {
             cleanupFailedTarget(repository, target)
             target.parent.createDirectories()
-            require(
-                git.run(
-                    repository,
-                    "rev-parse",
-                    "--verify",
-                    "${service.defaultBaseRef}^{commit}",
-                    check = false,
-                ).succeeded,
-            ) {
-                "基础分支不存在：${service.defaultBaseRef}"
-            }
+            validateBaseRefIfNeeded(repository, service, workspace.branch)
             attachWorktree(config, workspace, repository, target, allowCreateFromBase = true)
             val result = bootstrap.initialize(repository, target, service.bootstrap)
             workspace.copy(
@@ -781,20 +821,49 @@ class TaskManager(
         }
     }
 
+    private fun validateBaseRefIfNeeded(
+        repository: Path,
+        service: ServiceConfig,
+        branch: String,
+    ) {
+        val localBranchExists = git.refExists(repository, "refs/heads/$branch")
+        val remoteBranchExists = git.refExists(repository, "refs/remotes/${service.uatRemote}/$branch")
+        if (!localBranchExists && !remoteBranchExists) {
+            require(
+                git.run(
+                    repository,
+                    "rev-parse",
+                    "--verify",
+                    "${service.defaultBaseRef}^{commit}",
+                    check = false,
+                ).succeeded,
+            ) {
+                "基础分支不存在：${service.defaultBaseRef}"
+            }
+        }
+    }
+
     private fun attachWorktree(
         config: AppConfig,
         workspace: ServiceWorkspace,
         repository: Path,
         target: Path,
         allowCreateFromBase: Boolean = false,
+        forceReuse: Boolean = false,
     ) {
         val localRef = "refs/heads/${workspace.branch}"
         if (git.refExists(repository, localRef)) {
             val usedBy = git.worktrees(repository).firstOrNull { it.branch == workspace.branch }
-            require(usedBy == null || usedBy.path == target.toAbsolutePath().normalize()) {
+            require(forceReuse || usedBy == null || usedBy.path == target.toAbsolutePath().normalize()) {
                 "分支 ${workspace.branch} 已被工作树占用：${usedBy?.path}"
             }
-            git.addExistingWorktree(repository, target, workspace.branch)
+            val forceAttach = forceReuse && usedBy != null
+            git.addExistingWorktree(repository, target, workspace.branch, force = forceAttach)
+            if (forceReuse) {
+                val service = config.services[workspace.repositoryId]
+                    ?: throw IllegalStateException("服务配置不存在：${workspace.serviceName}")
+                git.setBranchUpstream(repository, workspace.branch, service.uatRemote)
+            }
             return
         }
         val service = config.services[workspace.repositoryId]
@@ -853,64 +922,6 @@ class TaskManager(
         )
     }
 
-    private fun writeIdeaAggregate(
-        taskDirectory: Path,
-        taskDirectoryName: String,
-        workspaces: List<ServiceWorkspace>,
-    ) {
-        val ideaWorkspaces = workspaces.filter {
-            it.ideType == IdeType.IDEA &&
-                it.status != WorkspaceStatus.FAILED &&
-                Path.of(it.worktreePath).exists()
-        }
-        if (ideaWorkspaces.isEmpty()) return
-        val ideaDirectory = taskDirectory.resolve("idea-$taskDirectoryName")
-        ideaDirectory.createDirectories()
-        val modules = ideaWorkspaces.joinToString("\n") {
-            "        <module>${xmlEscape(Path.of(it.worktreePath).fileName.toString())}</module>"
-        }
-        Files.writeString(
-            ideaDirectory.resolve("pom.xml"),
-            """
-            |<?xml version="1.0" encoding="UTF-8"?>
-            |<project xmlns="http://maven.apache.org/POM/4.0.0"
-            |         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-            |         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
-            |    <modelVersion>4.0.0</modelVersion>
-            |    <groupId>com.snowball.taskwt</groupId>
-            |    <artifactId>idea-$taskDirectoryName</artifactId>
-            |    <version>1.0-SNAPSHOT</version>
-            |    <packaging>pom</packaging>
-            |    <modules>
-            |$modules
-            |    </modules>
-            |</project>
-            |
-            """.trimMargin(),
-        )
-    }
-
-    private fun writeJetBrainsProjectNames(
-        taskDirectory: Path,
-        folderName: String,
-        taskDirectoryName: String,
-        workspaces: List<ServiceWorkspace>,
-    ) {
-        val ready = workspaces.filter {
-            it.status != WorkspaceStatus.FAILED && Path.of(it.worktreePath).exists()
-        }
-        if (ready.any { it.ideType == IdeType.IDEA }) {
-            val metadata = taskDirectory.resolve("idea-$taskDirectoryName").resolve(".idea")
-            metadata.createDirectories()
-            Files.writeString(metadata.resolve(".name"), "TaskWT - $folderName - IDEA")
-        }
-        if (ready.any { it.ideType == IdeType.WEBSTORM }) {
-            val metadata = taskDirectory.resolve("webstorm-$taskDirectoryName").resolve(".idea")
-            metadata.createDirectories()
-            Files.writeString(metadata.resolve(".name"), "TaskWT - $folderName - WebStorm")
-        }
-    }
-
     private fun aggregateStatus(workspaces: List<ServiceWorkspace>): WorkspaceStatus = when {
         workspaces.any { it.status == WorkspaceStatus.FAILED } -> WorkspaceStatus.FAILED
         workspaces.any { it.status == WorkspaceStatus.READY_WITH_WARNINGS } -> WorkspaceStatus.READY_WITH_WARNINGS
@@ -918,10 +929,4 @@ class TaskManager(
         else -> WorkspaceStatus.READY
     }
 
-    private fun xmlEscape(value: String): String = value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
 }

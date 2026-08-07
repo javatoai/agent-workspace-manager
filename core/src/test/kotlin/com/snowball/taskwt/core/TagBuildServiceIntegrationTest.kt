@@ -7,6 +7,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.time.Clock
+import java.time.ZoneOffset
 
 class TagBuildServiceIntegrationTest {
     @TempDir
@@ -23,7 +25,7 @@ class TagBuildServiceIntegrationTest {
         GitTestSupport.run(seed, "push", "origin", "--tags")
         val repository = GitTestSupport.clone(remote, temporary.resolve("services").resolve("operation-center"))
         val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
-        val featureWorktree = temporary.resolve("tasks").resolve("TAG-1").resolve("idea-TAG-1").resolve("operation-center")
+        val featureWorktree = temporary.resolve("tasks").resolve("TAG-1").resolve("operation-center")
         Files.createDirectories(featureWorktree.parent)
         GitClient().addWorktree(repository, featureWorktree, "feature/TAG-1", "origin/master")
         GitTestSupport.configureIdentity(featureWorktree)
@@ -39,6 +41,7 @@ class TagBuildServiceIntegrationTest {
                 folderName = "TAG-1",
                 taskDirectoryName = "TAG-1",
                 featureBranch = "feature/TAG-1",
+                requirementLink = "https://example.com/req",
                 createdAt = now,
                 updatedAt = now,
                 status = WorkspaceStatus.READY,
@@ -66,6 +69,7 @@ class TagBuildServiceIntegrationTest {
         )
         val builder = TagBuildService(
             paths = ApplicationPaths(temporary.resolve("app-home")),
+            clock = Clock.fixed(Instant.parse("2026-08-07T03:26:08Z"), ZoneOffset.UTC),
         )
 
         val preview = builder.preflight(config, taskDirectory, repositoryInfo.id)
@@ -86,6 +90,19 @@ class TagBuildServiceIntegrationTest {
                 .isNotBlank(),
         )
         assertTrue(Files.exists(taskDirectory.resolve("tag-build-history.jsonl")))
+        val annotation = GitTestSupport.run(repository, "cat-file", "tag", "1.6.89.beta-11")
+        assertTrue(
+            annotation.contains(
+                """UAT build
+Task: TAG-1
+需求链接：https://example.com/req
+Builder: ${System.getProperty("user.name")}
+Timestamp: 2026-08-07 03:26:08""",
+            ),
+        )
+        assertTrue(!annotation.contains("Service:"))
+        assertTrue(!annotation.contains("Feature:"))
+        assertTrue(!annotation.contains("Test:"))
     }
 
     @Test
@@ -100,7 +117,7 @@ class TagBuildServiceIntegrationTest {
         val repositoryInfo = RepositoryScanner().scan(listOf(repository.parent), null).single()
         val taskDirectory = temporary.resolve("partial-tasks").resolve("TAG-PARTIAL")
         val featureWorktree = taskDirectory
-            .resolve("idea-TAG-PARTIAL")
+            .resolve("TAG-PARTIAL")
             .resolve("operation-center")
         Files.createDirectories(featureWorktree.parent)
         GitClient().addWorktree(
