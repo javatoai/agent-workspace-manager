@@ -20,11 +20,13 @@ import com.snowball.taskwt.core.FeishuWorkItemLink
 import com.snowball.taskwt.core.GitRepositoryInspector
 import com.snowball.taskwt.core.GroupConfigurationService
 import com.snowball.taskwt.core.GroupServiceConfig
+import com.snowball.taskwt.core.GitRemoteBranchCatalog
 import com.snowball.taskwt.core.IdeType
 import com.snowball.taskwt.core.ManifestStore
 import com.snowball.taskwt.core.RepositoryConfig
 import com.snowball.taskwt.core.RepositoryInfo
 import com.snowball.taskwt.core.RepositoryInspector
+import com.snowball.taskwt.core.RemoteBranchCatalog
 import com.snowball.taskwt.core.RequirementInfoClient
 import com.snowball.taskwt.core.RequirementParticipants
 import com.snowball.taskwt.core.ServiceWorkspace
@@ -37,15 +39,18 @@ import com.snowball.taskwt.core.FileTaskOperationLock
 import com.snowball.taskwt.core.TaskBranchNaming
 import com.snowball.taskwt.core.TaskNaming
 import com.snowball.taskwt.core.ThemePreference
+import com.snowball.taskwt.core.TagNavigationPolicy
 import com.snowball.taskwt.core.WorkspaceStatus
 import com.snowball.taskwt.core.WorkspaceStrategy
 import com.snowball.taskwt.core.WorkspaceLayout
 import com.snowball.taskwt.core.toInfo
 import com.snowball.taskwt.core.selectionKey
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -66,6 +71,13 @@ data class DeleteRiskInspection(
     val risks: List<DeleteRisk> = emptyList(),
     val error: String? = null,
 )
+
+sealed interface RemoteBranchesState {
+    data object Idle : RemoteBranchesState
+    data object Loading : RemoteBranchesState
+    data class Loaded(val branches: List<String>) : RemoteBranchesState
+    data class Failed(val message: String) : RemoteBranchesState
+}
 
 private data class LoadedTasks(
     val manifests: List<TaskManifest>,
@@ -95,6 +107,9 @@ class AppController(
     private val tagBuildService: TagBuildService = TagBuildService(paths = paths),
     private val requirementInfoClient: RequirementInfoClient = FeishuRequirementInfoClient(),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
+    private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
+    private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val initial = runCatching { configStore.load() }
@@ -134,8 +149,15 @@ class AppController(
         private set
     var deleteRiskInspections by mutableStateOf<Map<String, DeleteRiskInspection>>(emptyMap())
         private set
+    var pathPickerBusy by mutableStateOf(false)
+        private set
+    var remoteBranches by mutableStateOf<Map<String, RemoteBranchesState>>(emptyMap())
+        private set
 
     val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
+    val showsUatNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
+    val globalAgentsPath: String get() = paths.globalAgents.toAbsolutePath().normalize().toString()
+    fun groupAgentsPath(groupId: String): String = paths.groupAgents(groupId).toAbsolutePath().normalize().toString()
 
     init {
         // Register authoritative global/group files without invoking Git or a
@@ -219,6 +241,50 @@ class AppController(
         configurationMutation("组 Tag 开关已更新") {
             groupConfigurations.setGroupTagEnabled(groupId, enabled)
         }
+
+    /** Opens one native dialog at a time and leaves the field untouched on cancellation. */
+    fun chooseDirectory(initialPath: String? = null, onSelected: (String) -> Unit) {
+        choosePath(
+            pick = { nativePathPicker.pickDirectory(initialPath) },
+            onComplete = { selected -> selected?.let(onSelected) },
+        )
+    }
+
+    fun chooseFile(initialPath: String? = null, onSelected: (String) -> Unit) {
+        choosePath(
+            pick = { nativePathPicker.pickFile(initialPath) },
+            onComplete = { selected -> selected?.let(onSelected) },
+        )
+    }
+
+    private fun choosePath(pick: suspend () -> String?, onComplete: (String?) -> Unit) {
+        if (pathPickerBusy) return
+        pathPickerBusy = true
+        scope.launch {
+            runCatching { pick() }
+                .onSuccess(onComplete)
+                .onFailure(::showError)
+            pathPickerBusy = false
+        }
+    }
+
+    /** Loads origin heads on demand. No startup path calls this method. */
+    fun loadRemoteBranches(repositoryId: String, force: Boolean = false) {
+        val current = remoteBranches[repositoryId]
+        if (!force && (current is RemoteBranchesState.Loading || current is RemoteBranchesState.Loaded)) return
+        val repository = config.repositories.firstOrNull { it.id == repositoryId }
+            ?: return showError(IllegalArgumentException("找不到仓库：$repositoryId"))
+        remoteBranches = remoteBranches + (repositoryId to RemoteBranchesState.Loading)
+        scope.launch {
+            val result = withContext(ioDispatcher) {
+                runCatching { remoteBranchCatalog.list(Path.of(repository.rootPath), "origin") }
+            }
+            remoteBranches = remoteBranches + (repositoryId to result.fold(
+                onSuccess = { RemoteBranchesState.Loaded(it) },
+                onFailure = { RemoteBranchesState.Failed(it.message ?: "远程分支加载失败") },
+            ))
+        }
+    }
 
     fun addRepository(groupId: String, selectedDirectory: String, strategy: WorkspaceStrategy) =
         runOperation("服务已添加", block = {
@@ -308,7 +374,9 @@ class AppController(
                                 branch = branches.getValue(module.id),
                                 groupServiceId = service.id,
                                 moduleId = module.id,
-                                moduleName = module.name,
+                                moduleName = com.snowball.taskwt.core.ModuleDisplayNaming.resolve(
+                                    module.name, service.displayName, module.baseRef, service.modules.size,
+                                ),
                                 strategy = service.strategy,
                                 tagEnabled = module.tagEnabled,
                                 baseRef = module.baseRef,
@@ -418,7 +486,7 @@ class AppController(
         deleteRiskInspections = deleteRiskInspections + (key to DeleteRiskInspection())
         val configSnapshot = config
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
+            val result = withContext(ioDispatcher) {
                 runCatching {
                     tasksApplication.inspectDeleteRisk(configSnapshot, taskDirectory(configSnapshot, task))
                 }
@@ -504,7 +572,7 @@ class AppController(
     fun refreshRequirementStatuses() {
         tasks.filter { FeishuWorkItemLink.parse(it.requirementLink) != null }.forEach { task ->
             scope.launch {
-                val info = withContext(Dispatchers.IO) {
+                val info = withContext(ioDispatcher) {
                     runCatching { requirementInfoClient.fetch(task.requirementLink) }.getOrNull()
                 }
                 if (tasks.none { it.folderName == task.folderName }) return@launch
@@ -530,6 +598,7 @@ class AppController(
 
     override fun close() {
         agentMonitor.close()
+        scope.cancel()
     }
 
     private fun handleAgentFileChange(change: AgentFileChange) {
@@ -553,7 +622,7 @@ class AppController(
         // File synchronization is independent from button operations. It must not
         // be dropped merely because a Git operation currently owns the busy flag.
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
+            val result = withContext(ioDispatcher) {
                 runCatching {
                     requirePropagationSucceeded(agentPropagation.propagate(config, propagationScope).failures)
                 }
@@ -652,6 +721,9 @@ class AppController(
 
     private fun applyConfig(updated: AppConfig) {
         config = updated
+        if (navigation == NavigationItem.UAT && !TagNavigationPolicy.isVisible(updated)) {
+            navigation = NavigationItem.TASKS
+        }
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
         updated.groups.forEach { group ->
             runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
@@ -682,7 +754,7 @@ class AppController(
         }
         busy = true
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching(block) }
+            val result = withContext(ioDispatcher) { runCatching(block) }
             busy = false
             result.onSuccess {
                 showStatus(successMessage)

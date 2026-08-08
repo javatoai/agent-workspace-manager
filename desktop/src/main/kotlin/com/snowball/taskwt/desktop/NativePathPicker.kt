@@ -1,0 +1,53 @@
+package com.snowball.taskwt.desktop
+
+import io.github.vinceglb.filekit.FileKit
+import io.github.vinceglb.filekit.PlatformFile
+import io.github.vinceglb.filekit.dialogs.FileKitType
+import io.github.vinceglb.filekit.dialogs.openDirectoryPicker
+import io.github.vinceglb.filekit.dialogs.openFilePicker
+import java.io.File
+
+/**
+ * Desktop port for native path dialogs. Callers receive `null` on cancellation,
+ * allowing editors to retain the current value without special UI branching.
+ */
+interface NativePathPicker {
+    suspend fun pickDirectory(initialPath: String? = null): String?
+    suspend fun pickFile(initialPath: String? = null, extensions: List<String> = emptyList()): String?
+}
+
+class FileKitNativePathPicker : NativePathPicker {
+    override suspend fun pickDirectory(initialPath: String?): String? = FileKit
+        .openDirectoryPicker(directory = initialPath.asInitialPlatformFile())
+        ?.file
+        ?.absolutePath
+
+    override suspend fun pickFile(initialPath: String?, extensions: List<String>): String? = FileKit
+        .openFilePicker(
+            type = FileKitType.File(extensions),
+            directory = initialPath.asInitialDirectory(),
+        )
+        ?.file
+        ?.absolutePath
+
+    private fun String?.asInitialPlatformFile(): PlatformFile? =
+        this?.trim()?.takeIf(String::isNotEmpty)?.let(::File)?.let(::PlatformFile)
+
+    private fun String?.asInitialDirectory(): PlatformFile? = this
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.let(::File)
+        ?.let { selected -> if (selected.isDirectory) selected else selected.parentFile ?: selected }
+        ?.let(::PlatformFile)
+}
+
+/** Small testable coordinator that guarantees cancellation never clears a field. */
+class PathSelectionCoordinator(
+    private val picker: NativePathPicker,
+) {
+    suspend fun directory(currentValue: String, initialPath: String? = currentValue): String =
+        picker.pickDirectory(initialPath) ?: currentValue
+
+    suspend fun file(currentValue: String, initialPath: String? = currentValue): String =
+        picker.pickFile(initialPath) ?: currentValue
+}

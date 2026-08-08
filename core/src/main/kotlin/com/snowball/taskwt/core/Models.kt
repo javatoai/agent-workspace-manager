@@ -3,7 +3,7 @@ package com.snowball.taskwt.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 3
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 4
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 3
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
@@ -78,20 +78,16 @@ data class RepositoryConfig(
 @Serializable
 data class ServiceModuleConfig(
     val id: String,
-    val name: String,
+    val name: String = "",
     val baseRef: String = "origin/master",
     val baseRemote: String = "origin",
     val tagEnabled: Boolean = true,
-    val uatRemote: String = "origin",
-    val uatBranch: String = "release/test",
+    val uatRef: String = "origin/release/test",
     val initialUatTag: String? = null,
     val tagMessagePrefix: String = "UAT",
 ) {
     init {
         require(id.isNotBlank()) { "模块 ID 不能为空" }
-        require(name.isNotBlank()) { "模块名不能为空" }
-        require(baseRef.isNotBlank()) { "模块基础分支不能为空" }
-        require(baseRemote.isNotBlank()) { "模块基础远程不能为空" }
     }
 }
 
@@ -105,12 +101,11 @@ data class GroupServiceConfig(
     val ideType: IdeType = IdeType.IDEA,
     val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
     val modules: List<ServiceModuleConfig> = listOf(
-        ServiceModuleConfig(id = "default", name = "默认模块"),
+        ServiceModuleConfig(id = "default"),
     ),
     val cloneDefaultBranch: String? = null,
     val cloneTagEnabled: Boolean = false,
-    val cloneUatRemote: String = "origin",
-    val cloneUatBranch: String = "release/test",
+    val cloneUatRef: String = "origin/release/test",
     val cloneInitialUatTag: String? = null,
     val cloneTagMessagePrefix: String = "UAT",
     val bootstrap: BootstrapConfig = BootstrapConfig(),
@@ -143,7 +138,7 @@ data class GroupServiceConfig(
             repositoryId = repositoryId,
             displayName = displayName,
             ideType = ideType,
-            modules = listOf(ServiceModuleConfig(id = "default", name = "默认模块", baseRef = baseRef)),
+            modules = listOf(ServiceModuleConfig(id = "default", baseRef = baseRef)),
         )
     }
 }
@@ -168,7 +163,7 @@ data class ServiceGroupConfig(
 }
 
 /**
- * Version 3 is intentionally a clean schema. Legacy scan roots and service maps
+ * Version 4 is intentionally a clean schema. Legacy scan roots and service maps
  * remain transient constructor aids while the old implementation is removed;
  * they are never written to config.json and are not accepted from legacy JSON.
  */
@@ -199,6 +194,12 @@ data class AppConfig(
         groups.flatMap(ServiceGroupConfig::services).forEach { service ->
             val repository = repositoryById[service.repositoryId]
                 ?: throw IllegalArgumentException("服务 ${service.displayName} 引用了不存在的仓库：${service.repositoryId}")
+            RemoteBranchRef.parse(service.cloneUatRef)
+            service.modules.forEach { module ->
+                require(module.baseRef.isNotBlank()) { "模块基础分支不能为空" }
+                require(module.baseRemote.isNotBlank()) { "模块基础远程不能为空" }
+                RemoteBranchRef.parse(module.uatRef)
+            }
             if (service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
                 require(!repository.originUrl.isNullOrBlank()) { "独立克隆服务 ${service.displayName} 的仓库没有 origin" }
             }

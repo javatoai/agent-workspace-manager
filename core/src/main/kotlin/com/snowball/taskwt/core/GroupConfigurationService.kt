@@ -15,6 +15,7 @@ class GroupConfigurationService(
     private val configurations: ConfigurationRepository = ConfigStore(),
     private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(),
     private val taskUsage: TaskGroupUsage = ManifestTaskGroupUsage(),
+    private val ideRecommendation: IdeRecommendationService = RootMarkerIdeRecommendationService(),
 ) {
     fun load(): AppConfig = configurations.load()
 
@@ -78,12 +79,14 @@ class GroupConfigurationService(
                     id = "service-${repository.id.removePrefix("repo-")}",
                     repositoryId = repository.id,
                     displayName = repository.name,
+                    ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
                     baseRef = "origin/${repository.defaultRemoteBranch ?: "master"}",
                 )
                 WorkspaceStrategy.INDEPENDENT_CLONE -> GroupServiceConfig(
                     id = "service-${repository.id.removePrefix("repo-")}",
                     repositoryId = repository.id,
                     displayName = repository.name,
+                    ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
                     strategy = strategy,
                     modules = emptyList(),
                     cloneDefaultBranch = cloneDefaultBranch?.trim()?.ifBlank { null } ?: repository.defaultRemoteBranch

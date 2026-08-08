@@ -54,23 +54,25 @@ object TagPolicy {
             WorkspaceStrategy.STANDARD_WORKTREE -> {
                 val module = service.modules.firstOrNull { it.id == workspace.moduleId }
                     ?: error("模块配置不存在：${workspace.moduleId}")
-                check(module.tagEnabled) { "模块 ${module.name} 已关闭 Tag" }
+                check(module.tagEnabled) { "模块 ${ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, service.modules.size)} 已关闭 Tag" }
+                val target = RemoteBranchRef.parse(module.uatRef)
                 EffectiveTagTarget(
                     workspace,
                     workspace.branch,
-                    module.uatRemote,
-                    module.uatBranch,
+                    target.remote,
+                    target.branch,
                     module.initialUatTag,
                     module.tagMessagePrefix,
                 )
             }
             WorkspaceStrategy.INDEPENDENT_CLONE -> {
                 check(service.cloneTagEnabled) { "独立克隆 ${service.displayName} 已关闭 Tag" }
+                val target = RemoteBranchRef.parse(service.cloneUatRef)
                 EffectiveTagTarget(
                     workspace,
                     workspace.branch,
-                    service.cloneUatRemote,
-                    service.cloneUatBranch,
+                    target.remote,
+                    target.branch,
                     service.cloneInitialUatTag,
                     service.cloneTagMessagePrefix,
                 )

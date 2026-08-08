@@ -18,7 +18,7 @@ class UnsupportedConfigVersionException(
         "当前版本为 $CURRENT_APP_CONFIG_SCHEMA_VERSION。请参照 docs/LEGACY-DATA-MIGRATION.md 手工迁移。",
 )
 
-/** Strict version-3 configuration repository backed by an atomic JSON file. */
+/** Strict version-4 configuration repository backed by an atomic JSON file. */
 interface ConfigurationRepository {
     fun load(): AppConfig
     fun save(config: AppConfig)

@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.2.0 的 `config.json` 使用 schema 3。顶层仓库和业务组均为数组，数组顺序就是界面顺序：
+0.2.0 的 `config.json` 使用严格 schema 4。顶层仓库和业务组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {
@@ -35,7 +35,37 @@ agents/groups/<groupId>/AGENTS.md
       "id": "default",
       "name": "默认组",
       "createTagEnabled": true,
-      "services": []
+      "services": [
+        {
+          "id": "service-order",
+          "repositoryId": "repo-…",
+          "displayName": "订单服务",
+          "enabled": true,
+          "ideType": "IDEA",
+          "strategy": "STANDARD_WORKTREE",
+          "modules": [
+            {
+              "id": "default",
+              "name": "",
+              "baseRef": "origin/master",
+              "baseRemote": "origin",
+              "tagEnabled": true,
+              "uatRef": "origin/release/test",
+              "initialUatTag": null,
+              "tagMessagePrefix": "UAT"
+            }
+          ],
+          "cloneDefaultBranch": null,
+          "cloneTagEnabled": false,
+          "cloneUatRef": "origin/release/test",
+          "cloneInitialUatTag": null,
+          "cloneTagMessagePrefix": "UAT",
+          "bootstrap": {
+            "copyRules": [],
+            "commands": []
+          }
+        }
+      ]
     }
   ],
   "theme": "SYSTEM"
@@ -68,7 +98,7 @@ agents/groups/<groupId>/AGENTS.md
 
 ### 标准 Worktree
 
-标准服务至少有一个模块。每个模块指定 `baseRemote`、基础 Ref 和 Tag 子开关；基础远程与 UAT remote 相互独立：
+标准服务至少有一个模块。每个模块指定 `baseRemote`、基础 Ref、`uatRef` 和 Tag 子开关；基础远程与 UAT 目标引用相互独立。`uatRef` 统一使用 `<remote>/<branch>` 格式，例如 `origin/release/test`：
 
 - 不同基础 Ref 分别创建 Worktree；
 - 相同基础 Ref 只创建一个 Worktree，具体模块的修改边界写入组级 `AGENTS.md`；

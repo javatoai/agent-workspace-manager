@@ -51,6 +51,23 @@ class GroupConfigurationServiceTest {
     }
 
     @Test
+    fun `new service starts with IDE recommendation while later saved choice remains authoritative`() {
+        val repository = InMemoryConfigurationRepository(AppConfig())
+        val service = GroupConfigurationService(
+            repository,
+            StubRepositoryInspector(),
+            ideRecommendation = IdeRecommendationService { IdeType.WEBSTORM },
+        )
+
+        val added = service.addRepository(DEFAULT_GROUP_ID, Path.of("C:/repo-web"))
+            .group(DEFAULT_GROUP_ID).services.single()
+        assertEquals(IdeType.WEBSTORM, added.ideType)
+
+        service.updateService(DEFAULT_GROUP_ID, added.copy(ideType = IdeType.IDEA))
+        assertEquals(IdeType.IDEA, repository.load().group(DEFAULT_GROUP_ID).services.single().ideType)
+    }
+
+    @Test
     fun `task scan failures block destructive group changes`() {
         val extraGroup = ServiceGroupConfig(id = "extra", name = "Extra")
         val repository = InMemoryConfigurationRepository(

@@ -6,13 +6,25 @@ import com.snowball.taskwt.core.ConfigStore
 import com.snowball.taskwt.core.ManifestStore
 import com.snowball.taskwt.core.RepositoryConfig
 import com.snowball.taskwt.core.RepositoryInspector
+import com.snowball.taskwt.core.RemoteBranchCatalog
+import com.snowball.taskwt.core.GroupServiceConfig
+import com.snowball.taskwt.core.ServiceGroupConfig
+import com.snowball.taskwt.core.WorkspaceStrategy
 import com.snowball.taskwt.core.RequirementInfoClient
 import com.snowball.taskwt.core.TaskManifest
 import com.snowball.taskwt.core.WorkspaceStatus
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 class AppControllerTest {
     @Test
@@ -54,6 +66,81 @@ class AppControllerTest {
         assertEquals(0, repositoryInspections)
         assertEquals(0, remoteRequests)
         controller.close()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `remote branch loading exposes loading success and failure without startup request`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("taskwt-branches")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val repository = RepositoryConfig("repo", "repo", root.resolve("repo").toString(), root.resolve("repo/.git").toString(), "https://example.test/repo.git")
+        val service = GroupServiceConfig(
+            id = "clone",
+            repositoryId = repository.id,
+            displayName = "Clone",
+            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+            modules = emptyList(),
+            cloneDefaultBranch = "main",
+        )
+        store.save(AppConfig(repositories = listOf(repository), groups = listOf(ServiceGroupConfig("g", "G", services = listOf(service)))))
+        var requests = 0
+        var shouldFail = false
+        val controller = AppController(
+            paths = paths,
+            configStore = store,
+            remoteBranchCatalog = object : RemoteBranchCatalog {
+                override fun list(repository: Path, remote: String): List<String> {
+                    requests++
+                    if (shouldFail) error("offline")
+                    return listOf("main", "release/test")
+                }
+            },
+            ioDispatcher = dispatcher,
+        )
+        try {
+            assertEquals(0, requests)
+            controller.loadRemoteBranches("repo")
+            assertIs<RemoteBranchesState.Loading>(controller.remoteBranches["repo"])
+            advanceUntilIdle()
+            assertEquals(listOf("main", "release/test"), assertIs<RemoteBranchesState.Loaded>(controller.remoteBranches["repo"]).branches)
+            shouldFail = true
+            controller.loadRemoteBranches("repo", force = true)
+            assertIs<RemoteBranchesState.Loading>(controller.remoteBranches["repo"])
+            advanceUntilIdle()
+            assertEquals("offline", assertIs<RemoteBranchesState.Failed>(controller.remoteBranches["repo"]).message)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `closing the last effective Tag gate returns UAT page to tasks`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("taskwt-uat-navigation")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val repository = RepositoryConfig("repo", "repo", root.resolve("repo").toString(), root.resolve("repo/.git").toString())
+        store.save(AppConfig(repositories = listOf(repository), groups = listOf(
+            ServiceGroupConfig("g", "G", services = listOf(GroupServiceConfig.standard("service", "repo", "Service"))),
+        )))
+        val controller = AppController(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            controller.navigation = NavigationItem.UAT
+            controller.setGroupTagEnabled("g", false)
+            advanceUntilIdle()
+
+            assertEquals(false, controller.showsUatNavigation)
+            assertEquals(NavigationItem.TASKS, controller.navigation)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
     }
 
     private fun task(name: String, updatedAt: String) = TaskManifest(

@@ -67,7 +67,7 @@ class ConfigStoreTest {
     fun `legacy config is rejected without being rewritten`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         Files.createDirectories(paths.home)
-        val legacy = """{"schemaVersion":2,"services":{}}"""
+        val legacy = """{"schemaVersion":3,"groups":[]}"""
         Files.writeString(paths.config, legacy)
 
         val store = ConfigStore(paths)

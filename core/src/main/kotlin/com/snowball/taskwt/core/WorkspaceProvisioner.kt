@@ -73,7 +73,7 @@ class StandardWorktreeProvisioner(
                     "分支名不合法：$branch"
                 }
                 require(!git.refExists(repositoryPath, "refs/heads/$branch")) { "本地分支已存在：$branch" }
-                modules.map(ServiceModuleConfig::uatRemote).distinct().forEach { featureRemote ->
+                modules.map { RemoteBranchRef.parse(it.uatRef).remote }.distinct().forEach { featureRemote ->
                     if (featureRemote != representative.baseRemote) git.fetch(repositoryPath, featureRemote)
                     require(!git.refExists(repositoryPath, "refs/remotes/$featureRemote/$branch")) {
                         "远程分支已存在：$featureRemote/$branch"
@@ -94,7 +94,12 @@ class StandardWorktreeProvisioner(
                         warnings = initialization.warnings,
                         groupServiceId = request.service.id,
                         moduleId = module.id,
-                        moduleName = module.name,
+                        moduleName = ModuleDisplayNaming.resolve(
+                            module.name,
+                            request.service.displayName,
+                            module.baseRef,
+                            request.service.modules.size,
+                        ),
                         strategy = strategy,
                         tagEnabled = module.tagEnabled,
                         originUrl = request.repository.originUrl,

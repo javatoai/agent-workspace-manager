@@ -14,7 +14,7 @@ TaskWT 0.2.0 使用严格的新数组 schema，不会自动读取、迁移或改
 
 ## 配置迁移
 
-旧配置通常包含 `scanRoots`、以仓库 ID 为键的 `services` 对象和 `agentsMdAppendix`。新配置的 `schemaVersion` 为 `3`，使用 `repositories` 与 `groups` 数组。
+旧配置通常包含 `scanRoots`、以仓库 ID 为键的 `services` 对象和 `agentsMdAppendix`。新配置的 `schemaVersion` 为 `4`，使用 `repositories` 与 `groups` 数组，并用 `uatRef` / `cloneUatRef` 保存 `<remote>/<branch>`。
 
 逐个旧服务执行：
 

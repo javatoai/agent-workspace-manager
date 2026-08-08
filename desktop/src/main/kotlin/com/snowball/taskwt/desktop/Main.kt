@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
@@ -53,9 +54,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -85,6 +89,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -94,9 +99,11 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.snowball.taskwt.core.AgentConflictResolution
 import com.snowball.taskwt.core.BootstrapConfig
+import com.snowball.taskwt.core.BootstrapPresets
 import com.snowball.taskwt.core.GroupServiceConfig
 import com.snowball.taskwt.core.IdeType
 import com.snowball.taskwt.core.RepositoryConfig
+import com.snowball.taskwt.core.RemoteBranchSearch
 import com.snowball.taskwt.core.ServiceGroupConfig
 import com.snowball.taskwt.core.ServiceModuleConfig
 import com.snowball.taskwt.core.ServiceWorkspace
@@ -106,6 +113,7 @@ import com.snowball.taskwt.core.WorkspaceStatus
 import com.snowball.taskwt.core.WorkspaceStrategy
 import com.snowball.taskwt.desktop.generated.resources.Res
 import com.snowball.taskwt.desktop.generated.resources.app_icon
+import io.github.vinceglb.filekit.FileKit
 import org.jetbrains.compose.resources.painterResource
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -114,34 +122,35 @@ import java.awt.Dimension
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.util.UUID
-import javax.swing.JFileChooser
-import javax.swing.UIManager
 
-fun main() = application {
-    val controller = remember { AppController() }
-    val state = rememberWindowState(width = 1440.dp, height = 900.dp)
-    Window(
-        onCloseRequest = {
-            if (controller.busy) {
-                controller.showError(IllegalStateException("操作正在执行，完成前不能关闭应用"))
-            } else {
-                controller.close()
-                exitApplication()
+fun main() {
+    FileKit.init(appId = "com.snowball.taskwt")
+    application {
+        val controller = remember { AppController() }
+        val state = rememberWindowState(width = 1440.dp, height = 900.dp)
+        Window(
+            onCloseRequest = {
+                if (controller.busy) {
+                    controller.showError(IllegalStateException("操作正在执行，完成前不能关闭应用"))
+                } else {
+                    controller.close()
+                    exitApplication()
+                }
+            },
+            title = "Task Worktree Manager 0.2.0",
+            state = state,
+            icon = painterResource(Res.drawable.app_icon),
+        ) {
+            DisposableEffect(window) {
+                window.minimumSize = Dimension(1180, 720)
+                val listener = object : WindowAdapter() {
+                    override fun windowGainedFocus(event: WindowEvent?) = controller.onWindowFocused()
+                }
+                window.addWindowFocusListener(listener)
+                onDispose { window.removeWindowFocusListener(listener) }
             }
-        },
-        title = "Task Worktree Manager 0.2.0",
-        state = state,
-        icon = painterResource(Res.drawable.app_icon),
-    ) {
-        DisposableEffect(window) {
-            window.minimumSize = Dimension(1180, 720)
-            val listener = object : WindowAdapter() {
-                override fun windowGainedFocus(event: WindowEvent?) = controller.onWindowFocused()
-            }
-            window.addWindowFocusListener(listener)
-            onDispose { window.removeWindowFocusListener(listener) }
+            TaskWtTheme(controller.config.theme) { TaskWorktreeApp(controller) }
         }
-        TaskWtTheme(controller.config.theme) { TaskWorktreeApp(controller) }
     }
 }
 
@@ -250,7 +259,7 @@ private fun Sidebar(controller: AppController, onSelected: (NavigationItem) -> U
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            NavigationItem.entries.forEach { item ->
+            NavigationItem.entries.filter { it != NavigationItem.UAT || controller.showsUatNavigation }.forEach { item ->
                 val selectedItem = item == controller.navigation
                 val icon = when (item) {
                     NavigationItem.TASKS -> Icons.Outlined.Workspaces
@@ -286,14 +295,12 @@ private fun Sidebar(controller: AppController, onSelected: (NavigationItem) -> U
                 Spacer(Modifier.height(6.dp))
             }
             Spacer(Modifier.weight(1f))
-            Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f), shape = RoundedCornerShape(13.dp)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-                    Icon(Icons.Outlined.Info, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text("本地优先", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                        Text("配置与任务均保存在本机", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Security, null, Modifier.size(22.dp), tint = SuccessGreen)
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("本地安全执行", style = MaterialTheme.typography.labelMedium)
+                    Text("不上传源代码", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -617,10 +624,10 @@ private fun ServicesScreen(controller: AppController) {
             }
         }
     }
-    addToGroup?.let { groupId -> AddRepositoryDialog(onDismiss = { addToGroup = null }) { path, strategy ->
+    addToGroup?.let { groupId -> AddRepositoryDialog(controller, onDismiss = { addToGroup = null }) { path, strategy ->
         if (controller.addRepository(groupId, path, strategy)) addToGroup = null
     } }
-    editTarget?.let { (groupId, service) -> ServiceEditorDialog(service, onDismiss = { editTarget = null }) {
+    editTarget?.let { (groupId, service) -> ServiceEditorDialog(controller, service, onDismiss = { editTarget = null }) {
         if (controller.updateService(groupId, it)) editTarget = null
     } }
 }
@@ -761,8 +768,13 @@ private fun SettingsScreen(controller: AppController) {
     var newGroup by remember { mutableStateOf(false) }
     var renameGroup by remember { mutableStateOf<ServiceGroupConfig?>(null) }
     var agentGroupId by remember(controller.config.groups) { mutableStateOf(controller.config.groups.first().id) }
+    var agentScope by remember { mutableStateOf("global") }
     var globalAgents by remember(controller.agentRevision) { mutableStateOf(controller.readGlobalAgents()) }
-    var groupAgents by remember(agentGroupId, controller.agentRevision) { mutableStateOf(controller.readGroupAgents(agentGroupId)) }
+    val groupAgentDrafts = remember(controller.config.groups, controller.agentRevision) {
+        mutableStateMapOf<String, String>().apply {
+            controller.config.groups.forEach { group -> put(group.id, controller.readGroupAgents(group.id)) }
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -771,7 +783,9 @@ private fun SettingsScreen(controller: AppController) {
         ) {
             item {
             SettingsCard("基础设置", "启动只读取这些本地配置，不扫描仓库。") {
-                PathField("任务根目录", taskRoot, { taskRoot = it }, onChoose = { chooseDirectory("选择任务根目录")?.let { taskRoot = it } })
+                PathField("任务根目录", taskRoot, { taskRoot = it }, !controller.pathPickerBusy) {
+                    controller.chooseDirectory(taskRoot) { taskRoot = it }
+                }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("界面主题", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.width(14.dp))
@@ -784,32 +798,25 @@ private fun SettingsScreen(controller: AppController) {
             }
             item {
             SettingsCard("业务组", "组和组内服务均按数组顺序展示；只能删除没有服务和任务的空组。") {
-                if (controller.config.groups.size == 1) {
-                    val group = controller.config.groups.single()
+                controller.config.groups.forEachIndexed { index, group ->
                     OutlinedCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("单组模式", fontWeight = FontWeight.SemiBold)
-                                Text("未创建额外业务组时，任务和服务界面不会显示组层级。", style = MaterialTheme.typography.labelSmall)
-                            }
-                            Text("UAT Tag 总开关")
-                            Spacer(Modifier.width(8.dp))
-                            Switch(group.createTagEnabled, { controller.setGroupTagEnabled(group.id, it) })
-                        }
-                    }
-                } else controller.config.groups.forEachIndexed { index, group ->
-                    OutlinedCard(Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(group.name, fontWeight = FontWeight.SemiBold)
-                                Text("${group.services.size} 个服务", style = MaterialTheme.typography.labelSmall)
+                                Text(if (controller.config.groups.size == 1) "单组模式" else group.name, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (controller.config.groups.size == 1) "任务和服务界面隐藏组层级 · ${group.services.size} 个服务" else "${group.services.size} 个服务",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
                             }
                             Text("Tag")
+                            Spacer(Modifier.width(8.dp))
                             Switch(group.createTagEnabled, { controller.setGroupTagEnabled(group.id, it) })
-                            IconButton(onClick = { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
-                            IconButton(onClick = { controller.moveGroup(group.id, 1) }, enabled = index < controller.config.groups.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
-                            IconButton(onClick = { renameGroup = group }) { Icon(Icons.Outlined.Edit, "重命名") }
-                            IconButton(onClick = { runCatching { controller.deleteGroup(group.id) }.onFailure(controller::showError) }, enabled = group.services.isEmpty()) { Icon(Icons.Outlined.Delete, "删除") }
+                            if (controller.config.groups.size > 1) {
+                                IconButton(onClick = { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
+                                IconButton(onClick = { controller.moveGroup(group.id, 1) }, enabled = index < controller.config.groups.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
+                                IconButton(onClick = { renameGroup = group }) { Icon(Icons.Outlined.Edit, "重命名") }
+                                IconButton(onClick = { runCatching { controller.deleteGroup(group.id) }.onFailure(controller::showError) }, enabled = group.services.isEmpty()) { Icon(Icons.Outlined.Delete, "删除") }
+                            }
                         }
                     }
                 }
@@ -820,45 +827,57 @@ private fun SettingsScreen(controller: AppController) {
             }
             item {
             SettingsCard("Agent 说明", "磁盘中的全局/组 AGENTS.md 是唯一准确来源，保存后会同步相关任务。") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("全局说明", style = MaterialTheme.typography.titleSmall)
-                        Text("对所有任务生效", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedTextField(globalAgents, {
-                            globalAgents = it
-                            controller.markGlobalAgentsEdited(it)
-                        }, Modifier.fillMaxWidth(), minLines = 7, readOnly = controller.busy)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            Button(onClick = { controller.saveGlobalAgents(globalAgents) }, enabled = !controller.busy) { Text("保存全局说明") }
-                        }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(agentScope == "global", { agentScope = "global" }, label = { Text("全局") })
+                    controller.config.groups.forEach { group ->
+                        FilterChip(agentScope == group.id, {
+                            agentScope = group.id
+                            agentGroupId = group.id
+                        }, label = { Text(group.name) })
                     }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (controller.config.groups.size > 1) "组说明" else "当前服务说明", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                            if (controller.config.groups.size > 1) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                controller.config.groups.forEach { group -> FilterChip(agentGroupId == group.id, {
-                                    agentGroupId = group.id
-                                    groupAgents = controller.readGroupAgents(group.id)
-                                }, label = { Text(group.name) }) }
-                            }
-                        }
-                        Text("仅对当前业务组的任务生效", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedTextField(groupAgents, {
-                            groupAgents = it
-                            controller.markGroupAgentsEdited(agentGroupId, it)
-                        }, Modifier.fillMaxWidth(), minLines = 7, readOnly = controller.busy)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            Button(onClick = { controller.saveGroupAgents(agentGroupId, groupAgents) }, enabled = !controller.busy) { Text("保存组说明") }
-                        }
+                }
+                val isGlobal = agentScope == "global"
+                val agentPath = if (isGlobal) controller.globalAgentsPath else controller.groupAgentsPath(agentGroupId)
+                Text(
+                    if (isGlobal) "对所有任务生效；也可直接编辑 ~/TaskWorktreeManager/agents/global/AGENTS.md，程序会自动同步。"
+                    else "仅对当前业务组生效；也可直接编辑 ~/TaskWorktreeManager/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), shape = RoundedCornerShape(10.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(agentPath, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                        TextButton(onClick = { controller.reveal(agentPath) }) { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("打开位置") }
+                        IconButton(onClick = { controller.copyText(agentPath, "完整路径已复制") }) { Icon(Icons.Outlined.ContentCopy, "复制完整路径") }
                     }
+                }
+                if (isGlobal) {
+                    OutlinedTextField(globalAgents, {
+                        globalAgents = it
+                        controller.markGlobalAgentsEdited(it)
+                    }, Modifier.fillMaxWidth(), minLines = 10, readOnly = controller.busy)
+                } else {
+                    OutlinedTextField(groupAgentDrafts[agentGroupId].orEmpty(), {
+                        groupAgentDrafts[agentGroupId] = it
+                        controller.markGroupAgentsEdited(agentGroupId, it)
+                    }, Modifier.fillMaxWidth(), minLines = 10, readOnly = controller.busy)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(
+                        onClick = {
+                            if (isGlobal) controller.saveGlobalAgents(globalAgents)
+                            else controller.saveGroupAgents(agentGroupId, groupAgentDrafts[agentGroupId].orEmpty())
+                        },
+                        enabled = !controller.busy,
+                    ) { Text(if (isGlobal) "保存全局说明" else "保存组说明") }
                 }
             }
             }
             item {
             SettingsCard("开发工具", "留空时不会尝试启动对应工具。") {
-                PathField("IntelliJ IDEA", idea, { idea = it }, onChoose = { chooseFile("选择 IDEA 可执行文件")?.let { idea = it } })
-                PathField("WebStorm", webStorm, { webStorm = it }, onChoose = { chooseFile("选择 WebStorm 可执行文件")?.let { webStorm = it } })
-                PathField("终端", terminal, { terminal = it }, onChoose = { chooseFile("选择终端可执行文件")?.let { terminal = it } })
+                PathField("IntelliJ IDEA", idea, { idea = it }, !controller.pathPickerBusy) { controller.chooseFile(idea) { idea = it } }
+                PathField("WebStorm", webStorm, { webStorm = it }, !controller.pathPickerBusy) { controller.chooseFile(webStorm) { webStorm = it } }
+                PathField("终端", terminal, { terminal = it }, !controller.pathPickerBusy) { controller.chooseFile(terminal) { terminal = it } }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Button(onClick = { controller.updateExecutables(idea, webStorm, terminal) }) { Text("保存工具配置") }
                 }
@@ -899,10 +918,16 @@ private fun SettingsCard(title: String, subtitle: String, content: @Composable C
 }
 
 @Composable
-private fun PathField(label: String, value: String, onValueChange: (String) -> Unit, onChoose: () -> Unit) {
+private fun PathField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    chooseEnabled: Boolean = true,
+    onChoose: () -> Unit,
+) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(value, onValueChange, Modifier.weight(1f), label = { Text(label) }, singleLine = true)
-        OutlinedButton(onClick = onChoose) { Icon(Icons.Outlined.Folder, null); Text("选择") }
+        OutlinedButton(onClick = onChoose, enabled = chooseEnabled) { Icon(Icons.Outlined.Folder, null); Text("选择") }
     }
 }
 
@@ -1039,7 +1064,7 @@ private fun CreateTaskDialog(
 }
 
 @Composable
-private fun AddRepositoryDialog(onDismiss: () -> Unit, onAdd: (String, WorkspaceStrategy) -> Unit) {
+private fun AddRepositoryDialog(controller: AppController, onDismiss: () -> Unit, onAdd: (String, WorkspaceStrategy) -> Unit) {
     var path by remember { mutableStateOf("") }
     var strategy by remember { mutableStateOf(WorkspaceStrategy.STANDARD_WORKTREE) }
     AlertDialog(
@@ -1048,7 +1073,9 @@ private fun AddRepositoryDialog(onDismiss: () -> Unit, onAdd: (String, Workspace
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("会校验 Git 顶层仓库并按 git-common-dir 去重；不接受 bare 或临时 Linked Worktree。")
-                PathField("仓库目录", path, { path = it }, onChoose = { chooseDirectory("选择 Git 仓库")?.let { path = it } })
+                PathField("仓库目录", path, { path = it }, !controller.pathPickerBusy) {
+                    controller.chooseDirectory(path) { path = it }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     WorkspaceStrategy.entries.forEach { value -> FilterChip(strategy == value, { strategy = value }, label = { Text(value.displayName) }) }
                 }
@@ -1061,7 +1088,7 @@ private fun AddRepositoryDialog(onDismiss: () -> Unit, onAdd: (String, Workspace
 }
 
 @Composable
-private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Unit, onSave: (GroupServiceConfig) -> Unit) {
+private fun ServiceEditorDialog(controller: AppController, service: GroupServiceConfig, onDismiss: () -> Unit, onSave: (GroupServiceConfig) -> Unit) {
     val json = remember { Json { prettyPrint = true; encodeDefaults = true } }
     var name by remember { mutableStateOf(service.displayName) }
     var enabled by remember { mutableStateOf(service.enabled) }
@@ -1070,12 +1097,21 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
     var modules by remember { mutableStateOf(service.modules) }
     var cloneBranch by remember { mutableStateOf(service.cloneDefaultBranch.orEmpty()) }
     var cloneTag by remember { mutableStateOf(service.cloneTagEnabled) }
-    var cloneRemote by remember { mutableStateOf(service.cloneUatRemote) }
-    var cloneUat by remember { mutableStateOf(service.cloneUatBranch) }
+    var cloneUatRef by remember { mutableStateOf(service.cloneUatRef) }
     var cloneInitialTag by remember { mutableStateOf(service.cloneInitialUatTag.orEmpty()) }
     var cloneMessagePrefix by remember { mutableStateOf(service.cloneTagMessagePrefix) }
     var bootstrapText by remember { mutableStateOf(json.encodeToString(service.bootstrap)) }
     var bootstrapError by remember { mutableStateOf<String?>(null) }
+    var showBootstrapExample by remember { mutableStateOf(false) }
+    var branchMenuExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(strategy, service.repositoryId) {
+        if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) controller.loadRemoteBranches(service.repositoryId)
+    }
+    val branchState = controller.remoteBranches[service.repositoryId] ?: RemoteBranchesState.Idle
+    val filteredBranches = RemoteBranchSearch.filter(
+        (branchState as? RemoteBranchesState.Loaded)?.branches.orEmpty(),
+        cloneBranch,
+    )
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             Modifier.widthIn(min = 780.dp, max = 920.dp).heightIn(min = 620.dp, max = 820.dp),
@@ -1099,7 +1135,7 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
                     Modifier.weight(1f).padding(20.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                SectionHeader("基础信息", "配置显示名称、启用状态与默认 IDE")
+                SectionHeader("基础信息", "IDE 是系统建议，可手工修改；保存值始终作为最终依据")
                 OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("展示名称") })
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text("启用服务", style = MaterialTheme.typography.titleSmall); Switch(enabled, { enabled = it })
@@ -1117,26 +1153,60 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
                         ModuleEditor(module, canDelete = modules.size > 1, onChange = { changed -> modules = modules.mapIndexed { i, value -> if (i == index) changed else value } }, onDelete = { modules = modules.filterIndexed { i, _ -> i != index } })
                     }
                     OutlinedButton(onClick = {
-                        modules = modules + ServiceModuleConfig(id = "module-${UUID.randomUUID()}", name = "新模块", baseRef = "origin/master")
+                        modules = modules + ServiceModuleConfig(id = "module-${UUID.randomUUID()}", baseRef = "origin/master")
                     }) { Icon(Icons.Outlined.Add, null); Text("添加基础分支模块") }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Bootstrap JSON", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                        TextButton(onClick = { showBootstrapExample = true }) { Text("查看示例") }
+                    }
                     OutlinedTextField(
                         bootstrapText,
                         { bootstrapText = it; bootstrapError = null },
                         Modifier.fillMaxWidth(),
-                        label = { Text("Bootstrap JSON") },
+                        label = { Text("copyRules 与 commands") },
                         minLines = 5,
                         isError = bootstrapError != null,
                         supportingText = bootstrapError?.let { message -> { Text(message) } },
                     )
                 } else {
                     Text("独立克隆", fontWeight = FontWeight.SemiBold)
-                    OutlinedTextField(cloneBranch, { cloneBranch = it }, Modifier.fillMaxWidth(), label = { Text("默认远程分支") })
+                    Box(Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            cloneBranch,
+                            { cloneBranch = it; branchMenuExpanded = branchState is RemoteBranchesState.Loaded },
+                            Modifier.fillMaxWidth(),
+                            label = { Text("默认远程分支") },
+                            placeholder = { Text("可手工输入或搜索 origin 分支") },
+                            trailingIcon = {
+                                when (branchState) {
+                                    RemoteBranchesState.Loading -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    is RemoteBranchesState.Loaded -> IconButton(onClick = { branchMenuExpanded = !branchMenuExpanded }) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支") }
+                                    else -> Unit
+                                }
+                            },
+                            singleLine = true,
+                        )
+                        DropdownMenu(branchMenuExpanded && branchState is RemoteBranchesState.Loaded, { branchMenuExpanded = false }) {
+                            filteredBranches.forEach { branch ->
+                                DropdownMenuItem(text = { Text(branch) }, onClick = { cloneBranch = branch; branchMenuExpanded = false })
+                            }
+                            if (filteredBranches.isEmpty()) DropdownMenuItem(text = { Text("没有匹配分支") }, onClick = {}, enabled = false)
+                        }
+                    }
+                    when (branchState) {
+                        RemoteBranchesState.Loading -> Text("正在静默读取 origin 远程分支…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        is RemoteBranchesState.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("加载失败：${branchState.message}；仍可手工输入。", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            TextButton(onClick = { controller.loadRemoteBranches(service.repositoryId, force = true) }) { Text("重试") }
+                        }
+                        is RemoteBranchesState.Loaded -> Text("已读取 ${branchState.branches.size} 个 origin 分支，可输入关键字筛选。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        RemoteBranchesState.Idle -> Unit
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) { Text("允许参与 UAT Tag", Modifier.weight(1f)); Switch(cloneTag, { cloneTag = it }) }
                     if (cloneTag) {
-                        OutlinedTextField(cloneRemote, { cloneRemote = it }, Modifier.fillMaxWidth(), label = { Text("UAT remote") })
-                        OutlinedTextField(cloneUat, { cloneUat = it }, Modifier.fillMaxWidth(), label = { Text("UAT branch") })
+                        OutlinedTextField(cloneUatRef, { cloneUatRef = it }, Modifier.fillMaxWidth(), label = { Text("UAT 目标分支") }, placeholder = { Text("origin/release/test") })
                         OutlinedTextField(cloneInitialTag, { cloneInitialTag = it }, Modifier.fillMaxWidth(), label = { Text("初始 UAT Tag（可选）") })
-                        OutlinedTextField(cloneMessagePrefix, { cloneMessagePrefix = it }, Modifier.fillMaxWidth(), label = { Text("Tag 消息前缀") })
+                        OutlinedTextField(cloneMessagePrefix, { cloneMessagePrefix = it }, Modifier.fillMaxWidth(), label = { Text("Tag 消息前缀") }, supportingText = { Text("只决定 annotated tag 说明首行，例如 UAT build；不会改变 Tag 名。") })
                     }
                 }
                 }
@@ -1150,13 +1220,13 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
                             runCatching { json.decodeFromString<BootstrapConfig>(bootstrapText) }
                                 .getOrElse { error -> bootstrapError = "JSON 格式错误：${error.message}"; return@Button }
                         } else service.bootstrap
-                        val normalizedModules = if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) modules else emptyList()
+                        val normalizedModules = if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) modules.map { it.copy(name = it.name.trim()) } else emptyList()
                         runCatching {
                             service.copy(
                                 displayName = name.trim(), enabled = enabled, ideType = ide, strategy = strategy,
                                 modules = normalizedModules,
                                 cloneDefaultBranch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) cloneBranch.trim() else null,
-                                cloneTagEnabled = cloneTag, cloneUatRemote = cloneRemote.trim(), cloneUatBranch = cloneUat.trim(),
+                                cloneTagEnabled = cloneTag, cloneUatRef = cloneUatRef.trim(),
                                 cloneInitialUatTag = cloneInitialTag.trim().ifBlank { null },
                                 cloneTagMessagePrefix = cloneMessagePrefix.trim().ifBlank { "UAT" },
                                 bootstrap = bootstrap,
@@ -1167,6 +1237,20 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
             }
         }
     }
+    if (showBootstrapExample) {
+        val example = remember { json.encodeToString(BootstrapPresets.example()) }
+        AlertDialog(
+            onDismissRequest = { showBootstrapExample = false },
+            title = { Text("Bootstrap JSON 示例") },
+            text = {
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                    Text(example, Modifier.padding(14.dp).verticalScroll(rememberScrollState()), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { Button(onClick = { controller.copyText(example, "Bootstrap 示例已复制") }) { Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(5.dp)); Text("复制") } },
+            dismissButton = { TextButton(onClick = { showBootstrapExample = false }) { Text("关闭") } },
+        )
+    }
 }
 
 @Composable
@@ -1174,20 +1258,29 @@ private fun ModuleEditor(module: ServiceModuleConfig, canDelete: Boolean, onChan
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(module.name, { onChange(module.copy(name = it)) }, Modifier.weight(1f), label = { Text("模块名") })
+                OutlinedTextField(
+                    module.name,
+                    { onChange(module.copy(name = it)) },
+                    Modifier.weight(1f),
+                    label = { Text("显示名称（可选）") },
+                    placeholder = { Text("单分支默认服务名，多分支默认基础分支末段") },
+                )
                 OutlinedTextField(module.baseRef, { onChange(module.copy(baseRef = it)) }, Modifier.weight(1f), label = { Text("基础分支") })
                 IconButton(onClick = onDelete, enabled = canDelete) { Icon(Icons.Outlined.Delete, "删除模块") }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("UAT Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
             }
-            if (module.tagEnabled) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(module.uatRemote, { onChange(module.copy(uatRemote = it)) }, Modifier.weight(1f), label = { Text("remote") })
-                OutlinedTextField(module.uatBranch, { onChange(module.copy(uatBranch = it)) }, Modifier.weight(1f), label = { Text("UAT branch") })
-            }
+            if (module.tagEnabled) OutlinedTextField(
+                module.uatRef,
+                { onChange(module.copy(uatRef = it)) },
+                Modifier.fillMaxWidth(),
+                label = { Text("UAT 目标分支") },
+                placeholder = { Text("origin/release/test") },
+            )
             if (module.tagEnabled) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(module.initialUatTag.orEmpty(), { onChange(module.copy(initialUatTag = it.ifBlank { null })) }, Modifier.weight(1f), label = { Text("初始 Tag（可选）") })
-                OutlinedTextField(module.tagMessagePrefix, { onChange(module.copy(tagMessagePrefix = it)) }, Modifier.weight(1f), label = { Text("消息前缀") })
+                OutlinedTextField(module.tagMessagePrefix, { onChange(module.copy(tagMessagePrefix = it)) }, Modifier.weight(1f), label = { Text("Tag 消息前缀") }, supportingText = { Text("只影响说明首行，不改变 Tag 名") })
             }
         }
     }
@@ -1327,12 +1420,3 @@ private val ThemePreference.displayName: String
         ThemePreference.LIGHT -> "浅色"
         ThemePreference.DARK -> "深色"
     }
-
-private fun chooseDirectory(title: String): String? = choosePath(title, JFileChooser.DIRECTORIES_ONLY)
-private fun chooseFile(title: String): String? = choosePath(title, JFileChooser.FILES_ONLY)
-
-private fun choosePath(title: String, mode: Int): String? {
-    runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
-    val chooser = JFileChooser().apply { dialogTitle = title; fileSelectionMode = mode; isAcceptAllFileFilterUsed = false }
-    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.absolutePath else null
-}
