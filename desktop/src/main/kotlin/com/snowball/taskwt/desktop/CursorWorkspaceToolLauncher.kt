@@ -81,7 +81,11 @@ class SystemCursorCommandLocator(
     }
 }
 
-/** Cursor adapter opens the task directory as a project and never sends a prompt. */
+/**
+ * Cursor adapter opens each task in an independent editor window and never sends a prompt.
+ * Cursor owns its Agents Window history, so TaskWT deliberately does not write private
+ * Cursor state to manufacture a Workspace entry.
+ */
 class CursorWorkspaceToolLauncher(
     locator: CursorCommandLocator = SystemCursorCommandLocator(),
     private val processLauncher: DetachedProcessLauncher = SystemDetachedProcessLauncher(),
@@ -91,7 +95,7 @@ class CursorWorkspaceToolLauncher(
     override val descriptor = TaskWorkspaceToolDescriptor(
         id = ID,
         displayName = "Cursor",
-        description = "任务完成后在 Cursor 中打开任务目录",
+        description = "独立窗口打开任务目录；在 Cursor 中启动一次 Agent Chat 后会显示到 Workspaces",
     )
 
     override fun availability(): TaskWorkspaceToolAvailability = command?.let {
@@ -100,7 +104,9 @@ class CursorWorkspaceToolLauncher(
 
     override fun open(context: TaskWorkspaceContext) {
         val resolved = command ?: error("当前系统未找到 Cursor")
-        processLauncher.launch(resolved + context.taskDirectory.toAbsolutePath().normalize().toString())
+        processLauncher.launch(
+            resolved + listOf("--new-window", context.taskDirectory.toAbsolutePath().normalize().toString()),
+        )
     }
 
     companion object {

@@ -9,7 +9,7 @@ import kotlin.test.assertIs
 
 class CursorWorkspaceToolLauncherTest {
     @Test
-    fun `opens the task directory without adding a prompt`() {
+    fun `opens the task directory in a new window without adding a prompt`() {
         val commands = mutableListOf<List<String>>()
         val launcher = CursorWorkspaceToolLauncher(
             locator = CursorCommandLocator { listOf("C:\\Cursor\\Cursor.exe") },
@@ -19,7 +19,11 @@ class CursorWorkspaceToolLauncherTest {
         launcher.open(context())
 
         assertEquals(
-            listOf("C:\\Cursor\\Cursor.exe", Path.of("C:\\tasks\\PAY 1024").toAbsolutePath().normalize().toString()),
+            listOf(
+                "C:\\Cursor\\Cursor.exe",
+                "--new-window",
+                Path.of("C:\\tasks\\PAY 1024").toAbsolutePath().normalize().toString(),
+            ),
             commands.single(),
         )
     }

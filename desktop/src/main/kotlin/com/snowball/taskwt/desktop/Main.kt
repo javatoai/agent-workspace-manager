@@ -554,13 +554,16 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
                         } else {
                             OutlinedButton(onClick = { confirmArchive = true }) { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("归档") }
                         }
-                        TextButton(onClick = { confirmDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                        OutlinedButton(
+                            onClick = { confirmDelete = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        ) {
                             Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("删除任务")
                         }
                     }
                     if (task.requirementLink.isNotBlank()) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("需求", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
                                 task.requirementLink,
                                 Modifier
@@ -573,13 +576,13 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            if (isHttpUrl(task.requirementLink)) {
-                                Icon(Icons.AutoMirrored.Outlined.OpenInNew, "打开需求链接", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
-                            }
                             // Keep the copy affordance directly beside the link instead of
                             // letting a weighted text field push it to the opposite edge.
-                            IconButton(onClick = { controller.copyText(task.requirementLink, "需求链接已复制") }) {
-                                Icon(Icons.Outlined.ContentCopy, "复制需求链接")
+                            IconButton(
+                                onClick = { controller.copyText(task.requirementLink, "需求链接已复制") },
+                                modifier = Modifier.size(30.dp),
+                            ) {
+                                Icon(Icons.Outlined.ContentCopy, "复制需求链接", Modifier.size(15.dp))
                             }
                             controller.requirementStatuses[task.folderName]?.let {
                                 MetaPill("需求状态：$it")
