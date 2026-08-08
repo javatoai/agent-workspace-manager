@@ -29,9 +29,39 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertContains
 import kotlin.test.assertIs
 
 class AppControllerTest {
+    @Test
+    fun `agents preview includes the current requirement link`() {
+        val root = Files.createTempDirectory("taskwt-preview-link")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(
+            AppConfig(
+                taskRoot = root.resolve("tasks").toString(),
+                groups = listOf(ServiceGroupConfig("g", "G")),
+            ),
+        )
+        val controller = AppController(paths = paths, configStore = store)
+        try {
+            val preview = controller.previewAgents(
+                folderName = "TASK-1",
+                branch = "feature/task-1",
+                groupId = "g",
+                serviceIds = emptySet(),
+                cloneOverrides = emptyMap(),
+                requirementLink = "REQ-123 raw requirement",
+                notes = "notes",
+            )
+
+            assertContains(preview, "REQ-123 raw requirement")
+        } finally {
+            controller.close()
+        }
+    }
+
     @Test
     fun `desktop tool options come entirely from injected registry and preserve unknown ids`() {
         val root = Files.createTempDirectory("taskwt-tools")

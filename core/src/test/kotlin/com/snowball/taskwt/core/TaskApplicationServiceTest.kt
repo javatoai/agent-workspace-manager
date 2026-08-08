@@ -64,6 +64,121 @@ class TaskApplicationServiceTest {
     }
 
     @Test
+    fun `adds only services from the task group and rewrites agents document`() {
+        val root = Files.createTempDirectory("task-add-services-")
+        val taskDirectory = root.resolve("TASK-20")
+        val manifests = ManifestStore()
+        val original = TaskManifest(
+            folderName = "TASK-20",
+            taskDirectoryName = "TASK-20",
+            featureBranch = "feature/task-20",
+            createdAt = "2026-08-08 08:00:00",
+            updatedAt = "2026-08-08 08:00:00",
+            status = WorkspaceStatus.READY,
+            services = emptyList(),
+            groupId = "alpha",
+        )
+        manifests.save(taskDirectory, original)
+        val clone = RecordingProvisioner(WorkspaceStrategy.INDEPENDENT_CLONE)
+        val documents = RecordingAgentDocuments()
+        val application = TaskApplicationService(
+            manifests = manifests,
+            provisioning = WorkspaceProvisioningService(listOf(clone)),
+            agentDocuments = documents,
+            operationLock = NoOpTaskOperationLock,
+            clock = Clock.fixed(Instant.parse("2026-08-08T01:02:03Z"), ZoneOffset.UTC),
+        )
+
+        val updated = application.addServices(
+            taskConfig(root),
+            taskDirectory,
+            AddGroupedTaskServicesRequest(
+                serviceIds = listOf("clone"),
+                cloneBranchOverrides = mapOf("clone" to "origin/release/test"),
+            ),
+        )
+
+        assertEquals(listOf("clone"), updated.services.map(ServiceWorkspace::groupServiceId))
+        assertEquals("feature/task-20", clone.requests.single().requestedFeatureBranch)
+        assertEquals("origin/release/test", clone.requests.single().cloneBranchOverride)
+        assertEquals("2026-08-08 09:02:03", updated.updatedAt)
+        assertEquals(null, documents.lastNotes)
+    }
+
+    @Test
+    fun `add services rolls back earlier additions when a later service fails`() {
+        val root = Files.createTempDirectory("task-add-rollback-")
+        val taskDirectory = root.resolve("TASK-20")
+        val manifests = ManifestStore()
+        val original = TaskManifest(
+            folderName = "TASK-20",
+            taskDirectoryName = "TASK-20",
+            featureBranch = "feature/task-20",
+            createdAt = "2026-08-08 08:00:00",
+            updatedAt = "2026-08-08 08:00:00",
+            status = WorkspaceStatus.READY,
+            services = emptyList(),
+            groupId = "alpha",
+        )
+        manifests.save(taskDirectory, original)
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val failingClone = RecordingProvisioner(WorkspaceStrategy.INDEPENDENT_CLONE, fail = true)
+        val application = TaskApplicationService(
+            manifests = manifests,
+            provisioning = WorkspaceProvisioningService(listOf(standard, failingClone)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        assertFailsWith<IllegalStateException> {
+            application.addServices(
+                taskConfig(root),
+                taskDirectory,
+                AddGroupedTaskServicesRequest(listOf("standard", "clone")),
+            )
+        }
+
+        assertEquals(1, standard.rollbackCalls)
+        assertEquals(original, manifests.load(taskDirectory))
+    }
+
+    @Test
+    fun `add services restores manifest and workspaces when agents regeneration fails`() {
+        val root = Files.createTempDirectory("task-add-agent-failure-")
+        val taskDirectory = root.resolve("TASK-20")
+        val manifests = ManifestStore()
+        val original = TaskManifest(
+            folderName = "TASK-20",
+            taskDirectoryName = "TASK-20",
+            featureBranch = "feature/task-20",
+            createdAt = "2026-08-08 08:00:00",
+            updatedAt = "2026-08-08 08:00:00",
+            status = WorkspaceStatus.READY,
+            services = emptyList(),
+            groupId = "alpha",
+        )
+        manifests.save(taskDirectory, original)
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            manifests = manifests,
+            provisioning = WorkspaceProvisioningService(listOf(standard)),
+            agentDocuments = RecordingAgentDocuments(failOnFirstWrite = true),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        assertFailsWith<IllegalStateException> {
+            application.addServices(
+                taskConfig(root),
+                taskDirectory,
+                AddGroupedTaskServicesRequest(listOf("standard")),
+            )
+        }
+
+        assertEquals(1, standard.rollbackCalls)
+        assertEquals(original, manifests.load(taskDirectory))
+    }
+
+    @Test
     fun `existing task directory is never reused or deleted by failed creation`() {
         val root = Files.createTempDirectory("task-existing-")
         val existing = root.resolve("TASK-20")
@@ -230,11 +345,14 @@ private fun taskConfig(taskRoot: Path): AppConfig {
 
 private class RecordingProvisioner(
     override val strategy: WorkspaceStrategy,
+    private val fail: Boolean = false,
 ) : WorkspaceProvisioner {
     val requests = mutableListOf<WorkspaceProvisionRequest>()
+    var rollbackCalls = 0
 
     override fun provision(request: WorkspaceProvisionRequest): List<ServiceWorkspace> {
         requests += request
+        if (fail) error("provision failed")
         return listOf(
             ServiceWorkspace(
                 repositoryId = request.repository.id,
@@ -249,10 +367,17 @@ private class RecordingProvisioner(
             ),
         )
     }
+
+    override fun rollback(request: WorkspaceProvisionRequest, workspaces: List<ServiceWorkspace>) {
+        rollbackCalls++
+    }
 }
 
-private class RecordingAgentDocuments : AgentDocuments {
+private class RecordingAgentDocuments(
+    private val failOnFirstWrite: Boolean = false,
+) : AgentDocuments {
     var lastNotes: String? = null
+    private var writes = 0
     override fun readGlobal(): String = ""
     override fun saveGlobal(content: String) = Unit
     override fun readGroup(groupId: String): String = ""
@@ -263,6 +388,8 @@ private class RecordingAgentDocuments : AgentDocuments {
         repositories: List<RepositoryInfo>,
         taskNotes: String?,
     ): Path {
+        writes++
+        if (failOnFirstWrite && writes == 1) error("agents disk full")
         lastNotes = taskNotes
         return taskDirectory.resolve("AGENTS.md")
     }

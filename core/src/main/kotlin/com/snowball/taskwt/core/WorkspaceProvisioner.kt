@@ -14,6 +14,13 @@ data class WorkspaceProvisionRequest(
 interface WorkspaceProvisioner {
     val strategy: WorkspaceStrategy
     fun provision(request: WorkspaceProvisionRequest): List<ServiceWorkspace>
+
+    /**
+     * Compensates workspaces created by one provisioning request. Implementations
+     * must only remove paths and branches derived from that request; repositories
+     * and pre-existing branches are outside this rollback boundary.
+     */
+    fun rollback(request: WorkspaceProvisionRequest, workspaces: List<ServiceWorkspace>) = Unit
 }
 
 /** Deterministic on-disk layout shared by provisioning and live AGENTS previews. */
@@ -122,6 +129,29 @@ class StandardWorktreeProvisioner(
         }
     }
 
+    override fun rollback(request: WorkspaceProvisionRequest, workspaces: List<ServiceWorkspace>) {
+        val repository = Path.of(request.repository.rootPath).toAbsolutePath().normalize()
+        val failures = mutableListOf<Throwable>()
+        workspaces
+            .distinctBy { Path.of(it.worktreePath).toAbsolutePath().normalize() }
+            .asReversed()
+            .forEach { workspace ->
+                val target = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+                require(target.parent == request.taskDirectory.toAbsolutePath().normalize()) {
+                    "拒绝回滚任务目录之外的 Worktree：$target"
+                }
+                runCatching {
+                    git.removeWorktree(repository, target, force = true)
+                    git.run(repository, "branch", "-D", workspace.branch, check = false)
+                }.onFailure(failures::add)
+            }
+        runCatching { git.run(repository, "worktree", "prune", check = false) }.onFailure(failures::add)
+        if (failures.isNotEmpty()) {
+            throw IllegalStateException("Worktree 回滚未完整完成：${request.service.displayName}")
+                .apply { failures.forEach(::addSuppressed) }
+        }
+    }
+
 }
 
 class IndependentCloneProvisioner(
@@ -161,6 +191,20 @@ class IndependentCloneProvisioner(
             ),
         )
     }
+
+    override fun rollback(request: WorkspaceProvisionRequest, workspaces: List<ServiceWorkspace>) {
+        workspaces.distinctBy(ServiceWorkspace::worktreePath).forEach { workspace ->
+            val target = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+            require(target.parent == request.taskDirectory.toAbsolutePath().normalize()) {
+                "拒绝回滚任务目录之外的独立克隆：$target"
+            }
+            if (Files.exists(target)) {
+                Files.walk(target).use { entries ->
+                    entries.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+                }
+            }
+        }
+    }
 }
 
 class WorkspaceProvisioningService(
@@ -175,4 +219,10 @@ class WorkspaceProvisioningService(
         byStrategy[request.service.strategy]
             ?.provision(request)
             ?: error("未注册工作区策略：${request.service.strategy}")
+
+    fun rollback(request: WorkspaceProvisionRequest, workspaces: List<ServiceWorkspace>) {
+        byStrategy[request.service.strategy]
+            ?.rollback(request, workspaces)
+            ?: error("未注册工作区策略：${request.service.strategy}")
+    }
 }

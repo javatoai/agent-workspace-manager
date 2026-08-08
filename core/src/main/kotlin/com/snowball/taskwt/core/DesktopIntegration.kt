@@ -41,6 +41,20 @@ class DesktopIntegration(
         }
     }
 
+    fun openDirectory(path: Path) {
+        require(path.toFile().isDirectory) { "目录不存在：$path" }
+        val os = System.getProperty("os.name")
+        when {
+            Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN) ->
+                Desktop.getDesktop().open(path.toFile())
+            os.startsWith("Windows", ignoreCase = true) ->
+                runner.run(listOf("explorer.exe", path.toAbsolutePath().toString()))
+            os.startsWith("Mac", ignoreCase = true) ->
+                runner.run(listOf("open", path.toAbsolutePath().toString()))
+            else -> runner.run(listOf("xdg-open", path.toAbsolutePath().toString()))
+        }
+    }
+
     fun openTerminal(path: Path, configuredExecutable: String? = null) {
         val os = System.getProperty("os.name")
         val command = when {

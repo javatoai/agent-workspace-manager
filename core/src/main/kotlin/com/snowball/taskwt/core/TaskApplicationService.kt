@@ -16,6 +16,11 @@ data class CreateGroupedTaskRequest(
     val taskNotes: String = "",
 )
 
+data class AddGroupedTaskServicesRequest(
+    val serviceIds: List<String>,
+    val cloneBranchOverrides: Map<String, String> = emptyMap(),
+)
+
 data class StartupSnapshot(
     val config: AppConfig,
     val tasks: List<TaskManifest>,
@@ -150,6 +155,158 @@ class TaskApplicationService(
     fun refreshAgents(config: AppConfig, taskDirectory: Path): Path = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
         agentDocuments.writeTaskDocument(taskDirectory, manifest, config.repositories.map(RepositoryConfig::toInfo))
+    }
+
+    /** Adds configured services without allowing a task to move between groups. */
+    fun addServices(
+        config: AppConfig,
+        taskDirectory: Path,
+        request: AddGroupedTaskServicesRequest,
+    ): TaskManifest = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        require(manifest.status != WorkspaceStatus.ARCHIVED) { "已归档任务不能追加服务" }
+        require(request.serviceIds.isNotEmpty()) { "至少选择一个服务" }
+        require(request.serviceIds.distinct().size == request.serviceIds.size) { "服务不能重复选择" }
+        val group = config.group(manifest.groupId)
+        val existingIds = manifest.services.map(ServiceWorkspace::groupServiceId).toSet()
+        val services = request.serviceIds.map { serviceId ->
+            require(serviceId !in existingIds) { "服务已在任务中：$serviceId" }
+            group.services.firstOrNull { it.id == serviceId && it.enabled }
+                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$serviceId")
+        }
+        val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        val created = mutableListOf<Pair<WorkspaceProvisionRequest, List<ServiceWorkspace>>>()
+        var manifestCommitted = false
+        try {
+            services.forEach { service ->
+                val repository = repositories[service.repositoryId]
+                    ?: error("服务 ${service.displayName} 的仓库配置不存在")
+                val provisionRequest = WorkspaceProvisionRequest(
+                    taskDirectory = taskDirectory,
+                    repository = repository,
+                    service = service,
+                    requestedFeatureBranch = manifest.featureBranch,
+                    cloneBranchOverride = request.cloneBranchOverrides[service.id],
+                )
+                created += provisionRequest to provisioning.provision(provisionRequest)
+            }
+            val added = created.flatMap { it.second }
+            val updated = manifest.copy(
+                updatedAt = TaskWtTime.format(Instant.now(clock)),
+                status = aggregateStatus(manifest.services + added),
+                services = manifest.services + added,
+            )
+            manifests.save(taskDirectory, updated)
+            manifestCommitted = true
+            agentDocuments.writeTaskDocument(
+                taskDirectory,
+                updated,
+                config.repositories.map(RepositoryConfig::toInfo),
+            )
+            updated
+        } catch (error: Throwable) {
+            val rollbackFailures = mutableListOf<Throwable>()
+            if (manifestCommitted) {
+                runCatching {
+                    manifests.save(taskDirectory, manifest)
+                    agentDocuments.writeTaskDocument(
+                        taskDirectory,
+                        manifest,
+                        config.repositories.map(RepositoryConfig::toInfo),
+                    )
+                }.onFailure(rollbackFailures::add)
+            }
+            created.asReversed().forEach { (provisionRequest, workspaces) ->
+                runCatching { provisioning.rollback(provisionRequest, workspaces) }
+                    .onFailure(rollbackFailures::add)
+            }
+            if (rollbackFailures.isNotEmpty()) {
+                throw IllegalStateException(
+                    "追加服务失败，且自动回滚未完整完成；已保留任务数据供人工检查：$taskDirectory",
+                    error,
+                ).apply { rollbackFailures.forEach(::addSuppressed) }
+            }
+            throw error
+        }
+    }
+
+    /** Re-provisions complete failed service entries while keeping successful workspaces untouched. */
+    fun retryFailedServices(
+        config: AppConfig,
+        taskDirectory: Path,
+        serviceIds: List<String>? = null,
+    ): TaskManifest = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        require(manifest.status != WorkspaceStatus.ARCHIVED) { "已归档任务不能重试服务" }
+        val failedIds = manifest.services
+            .filter { it.status == WorkspaceStatus.FAILED }
+            .map(ServiceWorkspace::groupServiceId)
+            .filter(String::isNotBlank)
+            .toSet()
+        val selected = serviceIds?.toSet() ?: failedIds
+        require(selected.isNotEmpty() && selected.all { it in failedIds }) { "没有可重试的失败服务" }
+        val group = config.group(manifest.groupId)
+        val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        val created = mutableListOf<Pair<WorkspaceProvisionRequest, List<ServiceWorkspace>>>()
+        var manifestCommitted = false
+        try {
+            selected.forEach { serviceId ->
+                val service = group.services.firstOrNull { it.id == serviceId }
+                    ?: error("失败服务已不在组配置中：$serviceId")
+                val repository = repositories[service.repositoryId]
+                    ?: error("服务 ${service.displayName} 的仓库配置不存在")
+                val failedEntries = manifest.services.filter { it.groupServiceId == serviceId }
+                val cloneOverride = failedEntries.firstOrNull()
+                    ?.takeIf { service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }
+                    ?.baseRef
+                    ?: failedEntries.firstOrNull()?.branch?.let { "origin/$it" }
+                val provisionRequest = WorkspaceProvisionRequest(
+                    taskDirectory = taskDirectory,
+                    repository = repository,
+                    service = service,
+                    requestedFeatureBranch = manifest.featureBranch,
+                    cloneBranchOverride = cloneOverride,
+                )
+                created += provisionRequest to provisioning.provision(provisionRequest)
+            }
+            val replacements = created.flatMap { it.second }
+            val retained = manifest.services.filterNot { it.groupServiceId in selected }
+            val updated = manifest.copy(
+                updatedAt = TaskWtTime.format(Instant.now(clock)),
+                status = aggregateStatus(retained + replacements),
+                services = retained + replacements,
+            )
+            manifests.save(taskDirectory, updated)
+            manifestCommitted = true
+            agentDocuments.writeTaskDocument(
+                taskDirectory,
+                updated,
+                config.repositories.map(RepositoryConfig::toInfo),
+            )
+            updated
+        } catch (error: Throwable) {
+            val rollbackFailures = mutableListOf<Throwable>()
+            if (manifestCommitted) {
+                runCatching {
+                    manifests.save(taskDirectory, manifest)
+                    agentDocuments.writeTaskDocument(
+                        taskDirectory,
+                        manifest,
+                        config.repositories.map(RepositoryConfig::toInfo),
+                    )
+                }.onFailure(rollbackFailures::add)
+            }
+            created.asReversed().forEach { (request, workspaces) ->
+                runCatching { provisioning.rollback(request, workspaces) }.onFailure(rollbackFailures::add)
+            }
+            if (rollbackFailures.isNotEmpty()) {
+                throw IllegalStateException(
+                    "重试失败，且自动回滚未完整完成；已保留任务数据供人工检查：$taskDirectory",
+                    error,
+                ).apply { rollbackFailures.forEach(::addSuppressed) }
+            }
+            throw error
+        }
     }
 
     fun saveTaskNotes(config: AppConfig, taskDirectory: Path, notes: String): Path = operationLock.withLock(taskDirectory) {
