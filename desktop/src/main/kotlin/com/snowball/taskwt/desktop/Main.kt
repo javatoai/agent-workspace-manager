@@ -689,14 +689,18 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f).widthIn(min = 420.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            workspace.moduleName.ifBlank { workspace.serviceName },
+                            Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        StatusPill(workspace.status.name)
+                    }
                     Text(
-                        workspace.moduleName.ifBlank { workspace.serviceName },
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "${workspace.serviceName} · ${workspace.strategy.displayName}",
+                        workspace.strategy.displayName,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -749,7 +753,6 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                         Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                StatusPill(workspace.status.name)
         }
     }
 }
