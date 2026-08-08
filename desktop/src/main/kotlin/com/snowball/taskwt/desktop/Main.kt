@@ -692,20 +692,19 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             workspace.moduleName.ifBlank { workspace.serviceName },
-                            Modifier.weight(1f, fill = false),
+                            Modifier.weight(1f),
                             style = MaterialTheme.typography.titleSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        Text(
+                            workspace.strategy.displayName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
                         StatusPill(workspace.status.name)
                     }
-                    Text(
-                        workspace.strategy.displayName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             workspace.branch,
