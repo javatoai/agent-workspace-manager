@@ -100,7 +100,7 @@ class TaskApplicationService(
                     ),
                 )
             }
-            val now = Instant.now(clock).toString()
+            val now = TaskWtTime.format(Instant.now(clock))
             val manifest = TaskManifest(
                 folderName = folderName,
                 taskDirectoryName = taskDirectoryName,
@@ -128,8 +128,8 @@ class TaskApplicationService(
                     folderName = folderName,
                     taskDirectoryName = taskDirectoryName,
                     featureBranch = featureBranch,
-                    createdAt = Instant.now(clock).toString(),
-                    updatedAt = Instant.now(clock).toString(),
+                    createdAt = TaskWtTime.format(Instant.now(clock)),
+                    updatedAt = TaskWtTime.format(Instant.now(clock)),
                     status = WorkspaceStatus.FAILED,
                     services = workspaces,
                     groupId = group.id,
@@ -176,7 +176,7 @@ class TaskApplicationService(
         lifecycle.requireArchiveSafe(config, taskDirectory, manifest, force)
         lifecycle.removeAll(config, taskDirectory, manifest, force)
         val updated = manifest.copy(
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             status = WorkspaceStatus.ARCHIVED,
             services = manifest.services.map { it.copy(status = WorkspaceStatus.ARCHIVED) },
         )
@@ -199,7 +199,7 @@ class TaskApplicationService(
         agentDocuments.writeTaskDocument(taskDirectory, manifest, config.repositories.map(RepositoryConfig::toInfo))
         val restored = lifecycle.restoreAll(config, taskDirectory, manifest)
         val updated = manifest.copy(
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             status = aggregateStatus(restored),
             services = restored,
         )

@@ -11,6 +11,7 @@ import com.snowball.taskwt.core.AgentDocumentPropagationService
 import com.snowball.taskwt.core.AgentInstructionScope
 import com.snowball.taskwt.core.AppConfig
 import com.snowball.taskwt.core.ApplicationPaths
+import com.snowball.taskwt.core.BatchRepositoryAddResult
 import com.snowball.taskwt.core.ConfigStore
 import com.snowball.taskwt.core.CreateGroupedTaskRequest
 import com.snowball.taskwt.core.DeleteRisk
@@ -38,11 +39,16 @@ import com.snowball.taskwt.core.TaskOperationLock
 import com.snowball.taskwt.core.FileTaskOperationLock
 import com.snowball.taskwt.core.TaskBranchNaming
 import com.snowball.taskwt.core.TaskNaming
+import com.snowball.taskwt.core.TaskWtTime
+import com.snowball.taskwt.core.TaskWorkspaceToolAvailability
+import com.snowball.taskwt.core.TaskWorkspaceToolDescriptor
+import com.snowball.taskwt.core.TaskWorkspaceToolRegistry
 import com.snowball.taskwt.core.ThemePreference
 import com.snowball.taskwt.core.TagNavigationPolicy
 import com.snowball.taskwt.core.WorkspaceStatus
 import com.snowball.taskwt.core.WorkspaceStrategy
 import com.snowball.taskwt.core.WorkspaceLayout
+import com.snowball.taskwt.core.WorkspaceToolLaunchService
 import com.snowball.taskwt.core.toInfo
 import com.snowball.taskwt.core.selectionKey
 import kotlinx.coroutines.CoroutineScope
@@ -79,6 +85,14 @@ sealed interface RemoteBranchesState {
     data class Failed(val message: String) : RemoteBranchesState
 }
 
+data class WorkspaceToolOption(
+    val id: String,
+    val displayName: String,
+    val description: String,
+    val available: Boolean,
+    val unavailableReason: String? = null,
+)
+
 private data class LoadedTasks(
     val manifests: List<TaskManifest>,
     val warning: String? = null,
@@ -109,6 +123,13 @@ class AppController(
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
     private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(),
+    private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
+        listOf(CodexWorkspaceToolLauncher()),
+    ),
+    private val workspaceToolLaunchService: WorkspaceToolLaunchService = WorkspaceToolLaunchService(
+        workspaceToolRegistry,
+        manifests,
+    ),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -130,6 +151,8 @@ class AppController(
     var selectedTask by mutableStateOf(tasks.firstOrNull())
         private set
     var busy by mutableStateOf(false)
+        private set
+    var activeOperation by mutableStateOf<String?>(null)
         private set
     var statusMessage by mutableStateOf<String?>(null)
         private set
@@ -153,11 +176,36 @@ class AppController(
         private set
     var remoteBranches by mutableStateOf<Map<String, RemoteBranchesState>>(emptyMap())
         private set
+    var repositoryAddResult by mutableStateOf<BatchRepositoryAddResult?>(null)
+        private set
 
     val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
     val showsUatNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
     val globalAgentsPath: String get() = paths.globalAgents.toAbsolutePath().normalize().toString()
     fun groupAgentsPath(groupId: String): String = paths.groupAgents(groupId).toAbsolutePath().normalize().toString()
+
+    fun workspaceToolOptions(groupId: String): List<WorkspaceToolOption> {
+        val configuredIds = config.group(groupId).defaultWorkspaceToolIds
+        val descriptors = workspaceToolRegistry.descriptors().associateBy(TaskWorkspaceToolDescriptor::id)
+        return (descriptors.keys + configuredIds).distinct().map { toolId ->
+            val descriptor = descriptors[toolId]
+            when (val availability = workspaceToolRegistry.availability(toolId)) {
+                TaskWorkspaceToolAvailability.Available -> WorkspaceToolOption(
+                    id = toolId,
+                    displayName = descriptor?.displayName ?: toolId,
+                    description = descriptor?.description.orEmpty(),
+                    available = true,
+                )
+                is TaskWorkspaceToolAvailability.Unavailable -> WorkspaceToolOption(
+                    id = toolId,
+                    displayName = descriptor?.displayName ?: toolId,
+                    description = descriptor?.description.orEmpty(),
+                    available = false,
+                    unavailableReason = availability.reason,
+                )
+            }
+        }
+    }
 
     init {
         // Register authoritative global/group files without invoking Git or a
@@ -220,19 +268,19 @@ class AppController(
             )
         }
 
-    fun addGroup(name: String) = configurationMutation("业务组已创建") {
+    fun addGroup(name: String) = configurationMutation("组已创建") {
         groupConfigurations.addGroup(name)
     }
 
-    fun renameGroup(groupId: String, name: String) = configurationMutation("业务组已重命名") {
+    fun renameGroup(groupId: String, name: String) = configurationMutation("组已重命名") {
         groupConfigurations.renameGroup(groupId, name)
     }
 
-    fun moveGroup(groupId: String, offset: Int) = configurationMutation("业务组顺序已更新") {
+    fun moveGroup(groupId: String, offset: Int) = configurationMutation("组顺序已更新") {
         groupConfigurations.moveGroup(groupId, offset)
     }
 
-    fun deleteGroup(groupId: String) = configurationMutation("空业务组已删除") {
+    fun deleteGroup(groupId: String) = configurationMutation("空组已删除") {
         require(tasks.none { it.groupId == groupId }) { "该组还有研发任务，不能删除" }
         groupConfigurations.deleteGroup(groupId)
     }
@@ -240,6 +288,11 @@ class AppController(
     fun setGroupTagEnabled(groupId: String, enabled: Boolean) =
         configurationMutation("组 Tag 开关已更新") {
             groupConfigurations.setGroupTagEnabled(groupId, enabled)
+        }
+
+    fun updateGroupDefaults(groupId: String, branchPrefix: String, workspaceToolIds: List<String>) =
+        configurationMutation("组默认配置已保存") {
+            groupConfigurations.updateGroupDefaults(groupId, branchPrefix, workspaceToolIds)
         }
 
     /** Opens one native dialog at a time and leaves the field untouched on cancellation. */
@@ -257,7 +310,14 @@ class AppController(
         )
     }
 
-    private fun choosePath(pick: suspend () -> String?, onComplete: (String?) -> Unit) {
+    fun chooseDirectories(initialPath: String? = null, onSelected: (List<String>) -> Unit) {
+        choosePath(
+            pick = { nativePathPicker.pickDirectories(initialPath) },
+            onComplete = { selected -> selected?.takeIf { it.isNotEmpty() }?.let(onSelected) },
+        )
+    }
+
+    private fun <T> choosePath(pick: suspend () -> T?, onComplete: (T?) -> Unit) {
         if (pathPickerBusy) return
         pathPickerBusy = true
         scope.launch {
@@ -290,6 +350,20 @@ class AppController(
         runOperation("服务已添加", block = {
             groupConfigurations.addRepository(groupId, Path.of(selectedDirectory), strategy)
         }, onSuccess = ::applyConfig)
+
+    fun addRepositories(groupId: String, selectedDirectories: List<String>) =
+        runOperation("仓库批量添加完成", block = {
+            groupConfigurations.addRepositories(groupId, selectedDirectories.map(Path::of))
+        }, onSuccess = { result ->
+            applyConfig(result.config)
+            repositoryAddResult = result
+            val skipped = result.skipped.size
+            showStatus("已添加 ${result.added.size} 个服务" + if (skipped > 0) "，跳过 $skipped 个目录" else "")
+        })
+
+    fun clearRepositoryAddResult() {
+        repositoryAddResult = null
+    }
 
     fun updateService(groupId: String, service: GroupServiceConfig) =
         configurationMutation("服务配置已保存") {
@@ -350,7 +424,7 @@ class AppController(
         val normalizedName = folderName.trim().ifBlank { "任务名称" }
         val normalizedBranch = branch.trim().ifBlank { "feature/example" }
         val directoryName = runCatching { TaskNaming.directoryName(normalizedName) }.getOrDefault("preview")
-        val now = Instant.now().toString()
+        val now = TaskWtTime.format(Instant.now())
         val taskDirectory = root.resolve(directoryName)
         val repositoriesById = config.repositories.associateBy(RepositoryConfig::id)
         val previewWorkspaces = config.group(groupId).services
@@ -424,8 +498,9 @@ class AppController(
         requirementLink: String,
         cloneOverrides: Map<String, String>,
         notes: String,
+        workspaceToolIds: List<String> = emptyList(),
     ) = runOperation("任务已创建", block = {
-        tasksApplication.create(
+        val created = tasksApplication.create(
             config,
             CreateGroupedTaskRequest(
                 folderName = folderName,
@@ -437,10 +512,16 @@ class AppController(
                 taskNotes = notes,
             ),
         )
+        val directory = taskDirectory(config, created)
+        workspaceToolLaunchService.launch(directory, created, workspaceToolIds)
     }, onSuccess = { created ->
         reloadTasks(created.folderName)
         navigation = NavigationItem.TASKS
     })
+
+    fun retryWorkspaceTool(task: TaskManifest, toolId: String) = runOperation("工作区工具已重新打开", block = {
+        workspaceToolLaunchService.retry(taskDirectory(task), task, toolId)
+    }, onSuccess = { updated -> reloadTasks(updated.folderName) })
 
     fun readTaskNotes(task: TaskManifest): String = runCatching {
         val file = taskDirectory(task).resolve("AGENTS.md")
@@ -529,6 +610,14 @@ class AppController(
     }
 
     fun reveal(path: String) = runCatching { desktopIntegration.reveal(Path.of(path)) }.onFailure(::showError)
+
+    fun revealGlobalAgents() = runCatching {
+        desktopIntegration.reveal(agentDocuments.ensureGlobalFile())
+    }.onFailure(::showError)
+
+    fun revealGroupAgents(groupId: String) = runCatching {
+        desktopIntegration.reveal(agentDocuments.ensureGroupFile(groupId))
+    }.onFailure(::showError)
     fun terminal(path: String) = runCatching {
         desktopIntegration.openTerminal(Path.of(path), config.terminalExecutable)
     }.onFailure(::showError)
@@ -745,6 +834,7 @@ class AppController(
 
     private fun <T> runOperation(
         successMessage: String,
+        activeMessage: String = "正在处理：$successMessage",
         block: () -> T,
         onSuccess: (T) -> Unit = {},
     ): Boolean {
@@ -753,9 +843,11 @@ class AppController(
             return false
         }
         busy = true
+        activeOperation = activeMessage
         scope.launch {
             val result = withContext(ioDispatcher) { runCatching(block) }
             busy = false
+            activeOperation = null
             result.onSuccess {
                 showStatus(successMessage)
                 onSuccess(it)

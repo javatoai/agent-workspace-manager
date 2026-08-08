@@ -41,7 +41,13 @@ class ConfigStoreTest {
             taskRoot = "D:\\tasks",
             repositories = listOf(repository),
             groups = listOf(
-                ServiceGroupConfig(id = "payments", name = "支付", services = emptyList()),
+                ServiceGroupConfig(
+                    id = "payments",
+                    name = "支付",
+                    defaultBranchPrefix = "feature/pay-",
+                    defaultWorkspaceToolIds = listOf("codex", "cursor"),
+                    services = emptyList(),
+                ),
                 ServiceGroupConfig(
                     id = "growth",
                     name = "增长",
@@ -60,7 +66,10 @@ class ConfigStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
+        assertEquals(5, store.load().schemaVersion)
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
+        assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
+        assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
     }
 
     @Test

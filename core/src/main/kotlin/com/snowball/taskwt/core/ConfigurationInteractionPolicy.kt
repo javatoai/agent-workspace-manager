@@ -39,14 +39,17 @@ data class RemoteBranchRef(val remote: String, val branch: String) {
 
 /** Pure policy shared by the sidebar and controller navigation fallback. */
 object TagNavigationPolicy {
-    fun isVisible(config: AppConfig): Boolean = config.groups.any { group ->
-        group.createTagEnabled && group.services.any { service ->
-            when (service.strategy) {
-                WorkspaceStrategy.STANDARD_WORKTREE -> service.modules.any(ServiceModuleConfig::tagEnabled)
-                WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneTagEnabled
-            }
-        }
-    }
+    fun isVisible(config: AppConfig): Boolean = config.groups.any(ServiceGroupConfig::createTagEnabled)
+}
+
+/** Keeps a user's branch edit while allowing untouched drafts to follow the selected group. */
+object GroupBranchPrefixPolicy {
+    fun onGroupChanged(
+        currentBranch: String,
+        previousPrefix: String,
+        manuallyEdited: Boolean,
+        nextPrefix: String,
+    ): String = if (!manuallyEdited || currentBranch == previousPrefix) nextPrefix else currentBranch
 }
 
 /** Resolves an optional label without coupling display text to branch naming. */

@@ -20,7 +20,7 @@ class DesktopConfigurationServicesTest {
     }
 
     @Test
-    fun `remote branch catalog lists origin heads without refs prefix`() {
+    fun `remote branch catalog lists qualified origin heads`() {
         val commands = mutableListOf<List<String>>()
         val runner = object : CommandRunner {
             override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
@@ -30,15 +30,15 @@ class DesktopConfigurationServicesTest {
         }
         val catalog = GitRemoteBranchCatalog(GitClient(runner))
 
-        assertEquals(listOf("main", "release/test"), catalog.list(Path.of("C:/repo")))
+        assertEquals(listOf("origin/main", "origin/release/test"), catalog.list(Path.of("C:/repo")))
         assertEquals(listOf("git", "-c", "core.longpaths=true", "-C", "C:\\repo", "ls-remote", "--heads", "origin"), commands.single())
     }
 
     @Test
     fun `remote branch search keeps slash names and filters case insensitively`() {
-        val branches = listOf("main", "release/test", "feature/ABC")
+        val branches = listOf("origin/main", "origin/release/test", "origin/feature/ABC")
 
-        assertEquals(listOf("release/test"), RemoteBranchSearch.filter(branches, "TEST"))
+        assertEquals(listOf("origin/release/test"), RemoteBranchSearch.filter(branches, "TEST"))
         assertEquals(branches, RemoteBranchSearch.filter(branches, ""))
     }
 }

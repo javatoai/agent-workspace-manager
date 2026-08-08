@@ -3,8 +3,8 @@ package com.snowball.taskwt.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 4
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 3
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 5
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 4
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -91,7 +91,7 @@ data class ServiceModuleConfig(
     }
 }
 
-/** A repository's independently configurable membership inside one business group. */
+/** A repository's independently configurable membership inside one ordered group. */
 @Serializable
 data class GroupServiceConfig(
     val id: String,
@@ -120,8 +120,11 @@ data class GroupServiceConfig(
                 require(modules.isNotEmpty()) { "标准 Worktree 服务至少需要一个模块" }
                 require(modules.map { it.id }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复" }
             }
-            WorkspaceStrategy.INDEPENDENT_CLONE -> require(!cloneDefaultBranch.isNullOrBlank()) {
-                "独立克隆服务必须配置默认远程分支"
+            WorkspaceStrategy.INDEPENDENT_CLONE -> {
+                require(!cloneDefaultBranch.isNullOrBlank()) { "独立克隆服务必须配置默认远程分支" }
+                require(RemoteBranchRef.parse(cloneDefaultBranch).remote == "origin") {
+                    "独立克隆默认分支必须使用 origin/<branch> 格式"
+                }
             }
         }
     }
@@ -149,12 +152,19 @@ data class ServiceGroupConfig(
     val name: String,
     val createTagEnabled: Boolean = true,
     val services: List<GroupServiceConfig> = emptyList(),
+    val defaultBranchPrefix: String = "",
+    val defaultWorkspaceToolIds: List<String> = emptyList(),
 ) {
     init {
         require(id.isNotBlank()) { "组 ID 不能为空" }
         require(id.matches(Regex("[A-Za-z0-9._-]+"))) { "组 ID 只能包含字母、数字、点、下划线和连字符" }
         require(TaskNaming.directoryName(id) == id) { "组 ID 必须是安全且稳定的目录片段" }
         require(name.isNotBlank()) { "组名称不能为空" }
+        require(defaultBranchPrefix.none(Char::isWhitespace)) { "默认分支名前缀不能包含空白字符" }
+        require(defaultWorkspaceToolIds.all(String::isNotBlank)) { "工作区工具 ID 不能为空" }
+        require(defaultWorkspaceToolIds.distinct().size == defaultWorkspaceToolIds.size) {
+            "同一组内的默认工作区工具不能重复"
+        }
         require(services.map { it.repositoryId }.distinct().size == services.size) {
             "同一仓库在一个组内只能出现一次"
         }
@@ -163,7 +173,7 @@ data class ServiceGroupConfig(
 }
 
 /**
- * Version 4 is intentionally a clean schema. Legacy scan roots and service maps
+ * Version 5 is intentionally a clean schema. Legacy scan roots and service maps
  * remain transient constructor aids while the old implementation is removed;
  * they are never written to config.json and are not accepted from legacy JSON.
  */
@@ -184,8 +194,8 @@ data class AppConfig(
     @Transient val agentsMdAppendix: String = "",
 ) {
     init {
-        require(groups.isNotEmpty()) { "至少需要一个业务组" }
-        require(groups.map { it.id }.distinct().size == groups.size) { "业务组 ID 不能重复" }
+        require(groups.isNotEmpty()) { "至少需要一个组" }
+        require(groups.map { it.id }.distinct().size == groups.size) { "组 ID 不能重复" }
         require(repositories.map { it.id }.distinct().size == repositories.size) { "仓库 ID 不能重复" }
         require(repositories.map { it.gitCommonDirectory.lowercase() }.distinct().size == repositories.size) {
             "同一 Git common directory 只能配置一次"
@@ -208,11 +218,11 @@ data class AppConfig(
 
     fun group(groupId: String): ServiceGroupConfig =
         groups.firstOrNull { it.id == groupId }
-            ?: throw IllegalArgumentException("找不到业务组：$groupId")
+            ?: throw IllegalArgumentException("找不到组：$groupId")
 
     fun groupService(groupId: String, serviceId: String): GroupServiceConfig =
         group(groupId).services.firstOrNull { it.id == serviceId }
-            ?: throw IllegalArgumentException("业务组中找不到服务：$serviceId")
+            ?: throw IllegalArgumentException("组中找不到服务：$serviceId")
 }
 
 /** Legacy in-memory shape retained temporarily for the existing 0.1.x use cases. */
@@ -302,7 +312,28 @@ data class TaskManifest(
     val status: WorkspaceStatus,
     val services: List<ServiceWorkspace>,
     val groupId: String = DEFAULT_GROUP_ID,
+    val workspaceToolLaunches: List<WorkspaceToolLaunch> = emptyList(),
 )
+
+@Serializable
+enum class WorkspaceToolLaunchStatus {
+    PENDING,
+    OPENED,
+    FAILED,
+}
+
+/** Persisted result of opening one external development tool for a task workspace. */
+@Serializable
+data class WorkspaceToolLaunch(
+    val toolId: String,
+    val status: WorkspaceToolLaunchStatus,
+    val updatedAt: String,
+    val message: String? = null,
+) {
+    init {
+        require(toolId.isNotBlank()) { "工作区工具 ID 不能为空" }
+    }
+}
 
 @Serializable
 enum class TagOperationState {

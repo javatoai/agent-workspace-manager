@@ -59,7 +59,7 @@ class WorkspaceProvisionerIntegrationTest {
             displayName = "复杂单仓",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "master",
+            cloneDefaultBranch = "origin/master",
             cloneTagEnabled = true,
         )
 
@@ -68,14 +68,46 @@ class WorkspaceProvisionerIntegrationTest {
                 taskDirectory = temporary.resolve("clone").resolve("task"),
                 repository = repository,
                 service = service,
-                cloneBranchOverride = "master",
+                cloneBranchOverride = "origin/master",
             ),
         ).single()
 
         assertEquals("master", workspace.branch)
+        assertEquals("origin/master", workspace.baseRef)
         assertEquals(WorkspaceStrategy.INDEPENDENT_CLONE, workspace.strategy)
         assertEquals("master", GitClient().currentBranch(Path.of(workspace.worktreePath)))
         assertEquals(1, GitClient().worktrees(Path.of(workspace.worktreePath)).size)
+    }
+
+    @Test
+    fun `standard strategy fetches and uses latest remote base without moving local master`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("latest-base"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("latest-base").resolve("service"))
+        val localMasterBefore = GitClient().resolve(repositoryPath, "refs/heads/master")
+        Files.writeString(seed.resolve("latest.txt"), "latest\n")
+        GitTestSupport.run(seed, "add", "latest.txt")
+        GitTestSupport.run(seed, "commit", "-m", "latest")
+        GitTestSupport.run(seed, "push", "origin", "master")
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig.standard(
+            id = "latest-service",
+            repositoryId = repository.id,
+            displayName = "latest",
+            baseRef = "master",
+        )
+
+        val workspace = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(
+                temporary.resolve("latest-base").resolve("task"),
+                repository,
+                service,
+                "feature/latest",
+            ),
+        ).single()
+
+        assertTrue(Files.exists(Path.of(workspace.worktreePath).resolve("latest.txt")))
+        assertEquals(localMasterBefore, GitClient().resolve(repositoryPath, "refs/heads/master"))
+        assertEquals("origin/master", workspace.baseRef)
     }
 
     @Test

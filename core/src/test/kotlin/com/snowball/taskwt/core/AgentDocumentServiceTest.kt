@@ -66,6 +66,44 @@ class AgentDocumentServiceTest {
         }
     }
 
+    @Test
+    fun `ensuring editable instruction files creates the real disk targets`() {
+        val paths = ApplicationPaths(temporary.resolve("home-open"))
+        val service = AgentDocumentService(paths)
+
+        assertEquals(paths.globalAgents, service.ensureGlobalFile())
+        assertEquals(paths.groupAgents("growth"), service.ensureGroupFile("growth"))
+        assertTrue(Files.isRegularFile(paths.globalAgents))
+        assertTrue(Files.isRegularFile(paths.groupAgents("growth")))
+    }
+
+    @Test
+    fun `generated workspace table shows creation base without source repository or requirement routing prose`() {
+        val taskDirectory = temporary.resolve("tasks").resolve("table")
+        val workspace = ServiceWorkspace(
+            repositoryId = "repo",
+            serviceName = "订单服务",
+            repositoryPath = "C:/source/orders",
+            worktreePath = "C:/tasks/table/orders",
+            ideType = IdeType.IDEA,
+            branch = "feature/orders",
+            status = WorkspaceStatus.READY,
+            baseRef = "origin/master",
+        )
+        val rendered = AgentsMdWriter.render(
+            taskDirectory,
+            manifest().copy(services = listOf(workspace), updatedAt = "2026-08-08 08:00:00"),
+            emptyList(),
+            "",
+        )
+
+        assertTrue("| 服务名 | 创建基线 | 策略 | Worktree 路径 | 分支 | 状态 |" in rendered)
+        assertTrue("origin/master" in rendered)
+        assertTrue("C:/tasks/table/orders" in rendered)
+        kotlin.test.assertFalse("C:/source/orders" in rendered)
+        kotlin.test.assertFalse("需求上下文以「需求链接」为准" in rendered)
+    }
+
     private fun manifest(
         groupId: String = DEFAULT_GROUP_ID,
         updatedAt: String = Instant.EPOCH.toString(),

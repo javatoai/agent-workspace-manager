@@ -3,6 +3,14 @@ package com.snowball.taskwt.core
 import java.nio.file.Path
 import java.util.UUID
 
+data class RepositoryAddSkip(val path: Path, val reason: String)
+
+data class BatchRepositoryAddResult(
+    val config: AppConfig,
+    val added: List<Path>,
+    val skipped: List<RepositoryAddSkip>,
+)
+
 val AppConfig.showsGroupUi: Boolean
     get() = groups.size > 1
 
@@ -42,13 +50,13 @@ class GroupConfigurationService(
 
     fun moveGroup(groupId: String, offset: Int): AppConfig = update { config ->
         val index = config.groups.indexOfFirst { it.id == groupId }
-        require(index >= 0) { "找不到业务组：$groupId" }
+        require(index >= 0) { "找不到组：$groupId" }
         val target = (index + offset).coerceIn(config.groups.indices)
         if (target == index) config else config.copy(groups = config.groups.moved(index, target))
     }
 
     fun deleteGroup(groupId: String): AppConfig = update { config ->
-        require(config.groups.size > 1) { "至少保留一个业务组" }
+        require(config.groups.size > 1) { "至少保留一个组" }
         val group = config.group(groupId)
         check(group.services.isEmpty()) { "只能删除空组，请先移除组内服务" }
         check(!taskUsage.hasTasks(config, groupId)) { "该组仍有历史研发任务，不能删除" }
@@ -57,6 +65,20 @@ class GroupConfigurationService(
 
     fun setGroupTagEnabled(groupId: String, enabled: Boolean): AppConfig = update { config ->
         config.copy(groups = config.groups.replaceGroup(groupId) { it.copy(createTagEnabled = enabled) })
+    }
+
+    fun updateGroupDefaults(
+        groupId: String,
+        defaultBranchPrefix: String,
+        defaultWorkspaceToolIds: List<String>,
+    ): AppConfig = update { config ->
+        val prefix = defaultBranchPrefix.trim()
+        val toolIds = defaultWorkspaceToolIds.map(String::trim).filter(String::isNotEmpty).distinct()
+        config.copy(
+            groups = config.groups.replaceGroup(groupId) {
+                it.copy(defaultBranchPrefix = prefix, defaultWorkspaceToolIds = toolIds)
+            },
+        )
     }
 
     fun addRepository(
@@ -89,7 +111,8 @@ class GroupConfigurationService(
                     ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
                     strategy = strategy,
                     modules = emptyList(),
-                    cloneDefaultBranch = cloneDefaultBranch?.trim()?.ifBlank { null } ?: repository.defaultRemoteBranch
+                    cloneDefaultBranch = cloneDefaultBranch?.trim()?.ifBlank { null }
+                        ?: repository.defaultRemoteBranch?.let { "origin/$it" }
                         ?: throw IllegalArgumentException("无法确定 origin 的默认远程分支，请先设置 origin/HEAD"),
                 )
             }
@@ -102,6 +125,52 @@ class GroupConfigurationService(
                 groups = config.groups.replaceGroup(groupId) { it.copy(services = it.services + service) },
             )
         }
+    }
+
+    /**
+     * Inspects exactly the selected directories and persists all valid additions
+     * atomically. It never scans descendants or lets one invalid folder discard
+     * the rest of the user's selection.
+     */
+    fun addRepositories(groupId: String, selectedDirectories: List<Path>): BatchRepositoryAddResult {
+        val original = configurations.load()
+        val group = original.group(groupId)
+        val knownRepositories = original.repositories.associateBy { it.gitCommonDirectory.lowercase() }.toMutableMap()
+        val services = group.services.toMutableList()
+        val addedRepositories = original.repositories.toMutableList()
+        val seenCommonDirectories = mutableSetOf<String>()
+        val added = mutableListOf<Path>()
+        val skipped = mutableListOf<RepositoryAddSkip>()
+
+        selectedDirectories.forEach { selected ->
+            val inspected = runCatching { repositoryInspector.inspect(selected) }.getOrElse { error ->
+                skipped += RepositoryAddSkip(selected, error.message ?: "不是可用的 Git 主仓库")
+                return@forEach
+            }
+            val commonKey = inspected.gitCommonDirectory.lowercase()
+            if (!seenCommonDirectories.add(commonKey)) {
+                skipped += RepositoryAddSkip(selected, "所选目录指向重复的 Git 仓库")
+                return@forEach
+            }
+            val repository = knownRepositories[commonKey] ?: inspected.also {
+                knownRepositories[commonKey] = it
+                addedRepositories += it
+            }
+            if (services.any { it.repositoryId == repository.id }) {
+                skipped += RepositoryAddSkip(selected, "该仓库已存在于组 ${group.name} 中")
+                return@forEach
+            }
+            services += standardService(repository)
+            added.add(selected)
+        }
+
+        if (added.isEmpty()) return BatchRepositoryAddResult(original, emptyList(), skipped)
+        val updated = original.copy(
+            repositories = addedRepositories,
+            groups = original.groups.replaceGroup(groupId) { it.copy(services = services) },
+        )
+        configurations.save(updated)
+        return BatchRepositoryAddResult(updated, added, skipped)
     }
 
     fun updateService(groupId: String, service: GroupServiceConfig): AppConfig = update { config ->
@@ -142,6 +211,14 @@ class GroupConfigurationService(
         configurations.save(updated)
         return updated
     }
+
+    private fun standardService(repository: RepositoryConfig): GroupServiceConfig = GroupServiceConfig.standard(
+        id = "service-${repository.id.removePrefix("repo-")}",
+        repositoryId = repository.id,
+        displayName = repository.name,
+        ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
+        baseRef = "origin/${repository.defaultRemoteBranch ?: "master"}",
+    )
 }
 
 interface TaskGroupUsage {
@@ -183,7 +260,7 @@ private fun List<ServiceGroupConfig>.replaceGroup(
     groupId: String,
     transform: (ServiceGroupConfig) -> ServiceGroupConfig,
 ): List<ServiceGroupConfig> {
-    require(any { it.id == groupId }) { "找不到业务组：$groupId" }
+    require(any { it.id == groupId }) { "找不到组：$groupId" }
     return map { if (it.id == groupId) transform(it) else it }
 }
 

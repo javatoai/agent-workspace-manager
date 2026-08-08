@@ -14,7 +14,7 @@ TaskWT 0.2.0 使用严格的新数组 schema，不会自动读取、迁移或改
 
 ## 配置迁移
 
-旧配置通常包含 `scanRoots`、以仓库 ID 为键的 `services` 对象和 `agentsMdAppendix`。新配置的 `schemaVersion` 为 `4`，使用 `repositories` 与 `groups` 数组，并用 `uatRef` / `cloneUatRef` 保存 `<remote>/<branch>`。
+旧配置通常包含 `scanRoots`、以仓库 ID 为键的 `services` 对象和 `agentsMdAppendix`。新配置的 `schemaVersion` 为 `5`，使用 `repositories` 与 `groups` 数组，并用 `uatRef` / `cloneUatRef` 保存 `<remote>/<branch>`。
 
 逐个旧服务执行：
 
@@ -24,7 +24,8 @@ TaskWT 0.2.0 使用严格的新数组 schema，不会自动读取、迁移或改
 4. 按规范化 `git-common-dir` 去重并生成稳定仓库 ID，写入 `repositories` 数组。
 5. 创建至少一个 `groups` 元素。若用户不需要分组，使用 `id: "default"`、`name: "默认组"`。
 6. 按用户指定的顺序，把旧服务转换为各组的 `services` 数组；同一仓库在同一组内只能出现一次。
-7. 让用户为每个组内服务确认 `STANDARD_WORKTREE` 或 `INDEPENDENT_CLONE`。
+7. 为每个组确认 `defaultBranchPrefix` 与 `defaultWorkspaceToolIds`，未知工具 ID 不要擅自删除。
+8. 让用户为每个组内服务确认 `STANDARD_WORKTREE` 或 `INDEPENDENT_CLONE`。
 
 标准服务把旧基础分支和 UAT 配置放入 `modules` 数组。独立克隆服务必须确认 `cloneDefaultBranch`，并使用 `clone*` Tag 字段；不能猜测默认分支。
 
@@ -41,7 +42,7 @@ TaskWT 0.2.0 使用严格的新数组 schema，不会自动读取、迁移或改
 每个旧任务都要单独确认所属组和每个服务的策略：
 
 1. 保留原任务目录、Git 工作区和分支，不重新创建 Worktree 或 Clone。
-2. 将旧 `taskwt.json` 复制到临时文件，再转换为 schema 3；补充 `groupId`。
+2. 将旧 `taskwt.json` 复制到临时文件，再转换为 schema 4；补充 `groupId` 和 `workspaceToolLaunches` 数组。
 3. 对标准 Worktree 补充 `groupServiceId`、`moduleId`、`moduleName`、`strategy`、`tagEnabled` 和 `baseRef`。
 4. 对独立克隆补充实际分支、`strategy: "INDEPENDENT_CLONE"`、`originUrl` 和 Tag 状态。必须核对该目录是普通克隆而不是 Linked Worktree。
 5. 校验 manifest 中的绝对路径确实位于预期任务目录或已确认的仓库目录，禁止路径穿越。

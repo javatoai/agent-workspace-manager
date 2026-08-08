@@ -15,7 +15,9 @@ class GitRemoteBranchCatalog(
         .run(repository, "ls-remote", "--heads", remote)
         .stdout
         .lineSequence()
-        .mapNotNull { line -> line.substringAfter("refs/heads/", "").trim().ifBlank { null } }
+        .mapNotNull { line ->
+            line.substringAfter("refs/heads/", "").trim().ifBlank { null }?.let { "$remote/$it" }
+        }
         .distinct()
         .sorted()
         .toList()

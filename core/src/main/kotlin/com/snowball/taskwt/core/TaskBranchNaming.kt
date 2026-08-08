@@ -23,7 +23,7 @@ object TaskBranchNaming {
     /** Canonical identity used to decide whether modules may share one physical Worktree. */
     fun baseIdentity(module: ServiceModuleConfig): String = "${module.baseRemote}|${normalizeBaseRef(module)}"
 
-    private fun normalizeBaseRef(module: ServiceModuleConfig): String {
+    fun normalizeBaseRef(module: ServiceModuleConfig): String {
         val value = module.baseRef.trim()
         return value
             .removePrefix("refs/remotes/${module.baseRemote}/")

@@ -34,15 +34,17 @@ class TaskApplicationServiceTest {
                 groupId = "alpha",
                 serviceIds = listOf("standard", "clone"),
                 requirementLink = "https://example.test/task/20",
-                cloneBranchOverrides = mapOf("clone" to "release/fixed"),
+                cloneBranchOverrides = mapOf("clone" to "origin/release/fixed"),
                 taskNotes = "only edit the API module",
             ),
         )
 
         assertEquals("alpha", manifest.groupId)
         assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.strategy })
-        assertEquals("release/fixed", clone.requests.single().cloneBranchOverride)
+        assertEquals("origin/release/fixed", clone.requests.single().cloneBranchOverride)
         assertEquals(2, manifest.services.size)
+        assertEquals("2026-08-08 08:00:00", manifest.createdAt)
+        assertEquals("2026-08-08 08:00:00", manifest.updatedAt)
         assertEquals("only edit the API module", documents.lastNotes)
         assertTrue(Files.exists(root.resolve("TASK-20").resolve(ManifestStore.FILE_NAME)))
     }
@@ -218,7 +220,7 @@ private fun taskConfig(taskRoot: Path): AppConfig {
                         displayName = "Repo B",
                         strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
                         modules = emptyList(),
-                        cloneDefaultBranch = "master",
+                        cloneDefaultBranch = "origin/master",
                     ),
                 ),
             ),

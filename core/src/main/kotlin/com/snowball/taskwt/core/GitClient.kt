@@ -152,7 +152,9 @@ class GitClient(
         run(repository, "merge-base", "--is-ancestor", ancestor, descendant, check = false).succeeded
 
     fun fetch(repository: Path, remote: String = "origin") {
-        run(repository, "fetch", "--prune", "--tags", "--force", remote, timeout = Duration.ofMinutes(5))
+        // Do not force-update local tags: refreshing a remote base must not
+        // silently rewrite an existing local tag with the same name.
+        run(repository, "fetch", "--prune", "--tags", remote, timeout = Duration.ofMinutes(5))
     }
 
     fun addWorktree(

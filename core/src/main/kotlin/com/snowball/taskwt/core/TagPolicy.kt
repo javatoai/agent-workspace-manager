@@ -33,11 +33,11 @@ object TagPolicy {
         require(candidates.size == 1) { "Tag 目标不唯一，请选择具体模块：$selection" }
         val workspace = candidates.single()
         val group = config.group(manifest.groupId)
-        check(group.createTagEnabled) { "业务组 ${group.name} 已关闭 Tag" }
+        check(group.createTagEnabled) { "组 ${group.name} 已关闭 Tag" }
         val service = group.services.firstOrNull { it.id == workspace.groupServiceId }
         if (service == null) {
             // In-memory compatibility seam for the pre-0.2 integration suite.
-            // Legacy maps are transient and can never enter the strict v3 JSON schema.
+            // Legacy maps are transient and can never enter the strict v5 JSON schema.
             val legacy = config.services[workspace.repositoryId]
                 ?: error("组内服务配置不存在：${workspace.groupServiceId}")
             check(workspace.tagEnabled) { "服务 ${workspace.serviceName} 已关闭 Tag" }

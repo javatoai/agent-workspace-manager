@@ -38,7 +38,7 @@ class TagPolicyTest {
             displayName = "A clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "master",
+            cloneDefaultBranch = "origin/master",
             cloneTagEnabled = true,
             cloneUatRef = "origin/uat/test",
         )

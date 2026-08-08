@@ -12,6 +12,11 @@ import com.snowball.taskwt.core.ServiceGroupConfig
 import com.snowball.taskwt.core.WorkspaceStrategy
 import com.snowball.taskwt.core.RequirementInfoClient
 import com.snowball.taskwt.core.TaskManifest
+import com.snowball.taskwt.core.TaskWorkspaceContext
+import com.snowball.taskwt.core.TaskWorkspaceToolAvailability
+import com.snowball.taskwt.core.TaskWorkspaceToolDescriptor
+import com.snowball.taskwt.core.TaskWorkspaceToolLauncher
+import com.snowball.taskwt.core.TaskWorkspaceToolRegistry
 import com.snowball.taskwt.core.WorkspaceStatus
 import java.nio.file.Files
 import java.nio.file.Path
@@ -27,6 +32,35 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 class AppControllerTest {
+    @Test
+    fun `desktop tool options come entirely from injected registry and preserve unknown ids`() {
+        val root = Files.createTempDirectory("taskwt-tools")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(
+            AppConfig(
+                groups = listOf(
+                    ServiceGroupConfig(
+                        id = "g",
+                        name = "G",
+                        defaultWorkspaceToolIds = listOf("claude", "legacy-tool"),
+                    ),
+                ),
+            ),
+        )
+        val registry = TaskWorkspaceToolRegistry(listOf(tool("claude"), tool("cursor")))
+        val controller = AppController(paths = paths, configStore = store, workspaceToolRegistry = registry)
+        try {
+            val options = controller.workspaceToolOptions("g").associateBy(WorkspaceToolOption::id)
+
+            assertEquals(true, options.getValue("claude").available)
+            assertEquals(true, options.getValue("cursor").available)
+            assertEquals(false, options.getValue("legacy-tool").available)
+        } finally {
+            controller.close()
+        }
+    }
+
     @Test
     fun `startup reads persisted arrays and selects newest task without external refresh`() {
         val root = Files.createTempDirectory("taskwt-desktop-startup")
@@ -83,7 +117,7 @@ class AppControllerTest {
             displayName = "Clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "main",
+            cloneDefaultBranch = "origin/main",
         )
         store.save(AppConfig(repositories = listOf(repository), groups = listOf(ServiceGroupConfig("g", "G", services = listOf(service)))))
         var requests = 0
@@ -95,7 +129,7 @@ class AppControllerTest {
                 override fun list(repository: Path, remote: String): List<String> {
                     requests++
                     if (shouldFail) error("offline")
-                    return listOf("main", "release/test")
+                    return listOf("origin/main", "origin/release/test")
                 }
             },
             ioDispatcher = dispatcher,
@@ -105,7 +139,7 @@ class AppControllerTest {
             controller.loadRemoteBranches("repo")
             assertIs<RemoteBranchesState.Loading>(controller.remoteBranches["repo"])
             advanceUntilIdle()
-            assertEquals(listOf("main", "release/test"), assertIs<RemoteBranchesState.Loaded>(controller.remoteBranches["repo"]).branches)
+            assertEquals(listOf("origin/main", "origin/release/test"), assertIs<RemoteBranchesState.Loaded>(controller.remoteBranches["repo"]).branches)
             shouldFail = true
             controller.loadRemoteBranches("repo", force = true)
             assertIs<RemoteBranchesState.Loading>(controller.remoteBranches["repo"])
@@ -152,4 +186,10 @@ class AppControllerTest {
         status = WorkspaceStatus.READY,
         services = emptyList(),
     )
+
+    private fun tool(id: String) = object : TaskWorkspaceToolLauncher {
+        override val descriptor = TaskWorkspaceToolDescriptor(id, id)
+        override fun availability(): TaskWorkspaceToolAvailability = TaskWorkspaceToolAvailability.Available
+        override fun open(context: TaskWorkspaceContext) = Unit
+    }
 }

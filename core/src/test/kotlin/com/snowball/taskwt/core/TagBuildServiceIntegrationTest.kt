@@ -97,7 +97,7 @@ class TagBuildServiceIntegrationTest {
 Task: TAG-1
 需求链接：https://example.com/req
 Builder: ${System.getProperty("user.name")}
-Timestamp: 2026-08-07 03:26:08""",
+时间：2026-08-07 11:26:08""",
             ),
         )
         assertTrue(!annotation.contains("Service:"))

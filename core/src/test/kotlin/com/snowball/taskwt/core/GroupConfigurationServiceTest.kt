@@ -4,6 +4,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class GroupConfigurationServiceTest {
     @Test
@@ -30,6 +31,18 @@ class GroupConfigurationServiceTest {
         assertEquals(false, service.load().showsGroupUi)
         service.addGroup("Second")
         assertEquals(true, service.load().showsGroupUi)
+    }
+
+    @Test
+    fun `group defaults preserve branch prefix and unknown workspace tool ids`() {
+        val repository = InMemoryConfigurationRepository(AppConfig())
+        val service = GroupConfigurationService(repository, StubRepositoryInspector())
+
+        service.updateGroupDefaults(DEFAULT_GROUP_ID, "feature/pay-", listOf("codex", "future-tool"))
+
+        val group = repository.load().groups.single()
+        assertEquals("feature/pay-", group.defaultBranchPrefix)
+        assertEquals(listOf("codex", "future-tool"), group.defaultWorkspaceToolIds)
     }
 
     @Test
@@ -68,6 +81,30 @@ class GroupConfigurationServiceTest {
     }
 
     @Test
+    fun `batch add persists valid repositories once and reports invalid or duplicate folders`() {
+        val repository = InMemoryConfigurationRepository(AppConfig())
+        val inspector = object : RepositoryInspector {
+            override fun inspect(selectedDirectory: Path): RepositoryConfig {
+                if (selectedDirectory.fileName.toString() == "not-git") error("不是 Git 仓库")
+                return StubRepositoryInspector().inspect(selectedDirectory)
+            }
+        }
+        val service = GroupConfigurationService(repository, inspector)
+
+        val result = service.addRepositories(
+            DEFAULT_GROUP_ID,
+            listOf(Path.of("C:/repo-a"), Path.of("C:/not-git"), Path.of("C:/repo-a"), Path.of("C:/repo-b")),
+        )
+
+        assertEquals(listOf("repo-a", "repo-b"), result.added.map { it.fileName.toString() })
+        assertEquals(2, result.skipped.size)
+        assertTrue(result.skipped.any { "不是 Git 仓库" in it.reason })
+        assertTrue(result.skipped.any { "重复" in it.reason })
+        assertEquals(1, repository.saveCount)
+        assertEquals(WorkspaceStrategy.STANDARD_WORKTREE, repository.load().groups.single().services.first().strategy)
+    }
+
+    @Test
     fun `task scan failures block destructive group changes`() {
         val extraGroup = ServiceGroupConfig(id = "extra", name = "Extra")
         val repository = InMemoryConfigurationRepository(
@@ -96,8 +133,12 @@ class GroupConfigurationServiceTest {
 private class InMemoryConfigurationRepository(
     private var value: AppConfig,
 ) : ConfigurationRepository {
+    var saveCount: Int = 0
+        private set
+
     override fun load(): AppConfig = value
     override fun save(config: AppConfig) {
+        saveCount++
         value = config
     }
 }

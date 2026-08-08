@@ -94,6 +94,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -101,6 +102,7 @@ import com.snowball.taskwt.core.AgentConflictResolution
 import com.snowball.taskwt.core.BootstrapConfig
 import com.snowball.taskwt.core.BootstrapPresets
 import com.snowball.taskwt.core.GroupServiceConfig
+import com.snowball.taskwt.core.GroupBranchPrefixPolicy
 import com.snowball.taskwt.core.IdeType
 import com.snowball.taskwt.core.RepositoryConfig
 import com.snowball.taskwt.core.RemoteBranchSearch
@@ -108,6 +110,7 @@ import com.snowball.taskwt.core.ServiceGroupConfig
 import com.snowball.taskwt.core.ServiceModuleConfig
 import com.snowball.taskwt.core.ServiceWorkspace
 import com.snowball.taskwt.core.TaskManifest
+import com.snowball.taskwt.core.WorkspaceToolLaunchStatus
 import com.snowball.taskwt.core.ThemePreference
 import com.snowball.taskwt.core.WorkspaceStatus
 import com.snowball.taskwt.core.WorkspaceStrategy
@@ -192,17 +195,27 @@ private fun TaskWorktreeApp(controller: AppController) {
                 }
             }
             if (controller.busy) {
-                // Consume navigation and editor input while a serialized mutation is
-                // running. Dialog actions also check the controller's Boolean result.
-                Box(Modifier.fillMaxSize().clickable { })
-                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Surface(
+                    Modifier.align(Alignment.TopCenter).widthIn(min = 360.dp, max = 560.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            controller.activeOperation ?: "正在处理",
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
+                }
             }
         }
     }
 
     if (showCreate) {
-        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, overrides, notes ->
-            if (controller.createTask(name, branch, group, services, link, overrides, notes)) {
+        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, overrides, notes, tools ->
+            if (controller.createTask(name, branch, group, services, link, overrides, notes, tools)) {
                 showCreate = false
             }
         }
@@ -213,6 +226,29 @@ private fun TaskWorktreeApp(controller: AppController) {
             title = { Text("UAT 构建结果") },
             text = { Text(result.message ?: "${result.serviceName}：${result.state}${result.tag?.let { "\nTag: $it" }.orEmpty()}") },
             confirmButton = { Button(onClick = controller::clearTagResult) { Text("完成") } },
+        )
+    }
+    controller.repositoryAddResult?.let { result ->
+        AlertDialog(
+            onDismissRequest = controller::clearRepositoryAddResult,
+            title = { Text("仓库添加结果") },
+            text = {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("已添加 ${result.added.size} 个服务，跳过 ${result.skipped.size} 个目录。")
+                    result.added.forEach { Text("✓ $it", color = SuccessGreen, style = MaterialTheme.typography.bodySmall) }
+                    result.skipped.forEach { skipped ->
+                        Text(
+                            "跳过 ${skipped.path}\n${skipped.reason}",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = { Button(onClick = controller::clearRepositoryAddResult) { Text("完成") } },
         )
     }
     controller.agentConflict?.let { conflict ->
@@ -343,9 +379,9 @@ private fun navigationCount(controller: AppController, item: NavigationItem): In
 private val NavigationItem.pageDescription: String
     get() = when (this) {
         NavigationItem.TASKS -> "集中查看任务状态、工作区与任务说明"
-        NavigationItem.SERVICES -> "按业务组管理仓库、模块和工作区策略"
+        NavigationItem.SERVICES -> "按组管理仓库、模块和工作区策略"
         NavigationItem.UAT -> "从已启用的工作区安全构建测试标签"
-        NavigationItem.SETTINGS -> "管理本地目录、业务组、Agent 说明与开发工具"
+        NavigationItem.SETTINGS -> "管理本地目录、组、Agent 说明与开发工具"
     }
 
 @Composable
@@ -489,6 +525,34 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
             }
             SectionHeader("工作区", "进入 IDE、终端或文件目录")
             task.services.forEach { WorkspaceCard(controller, it) }
+            if (task.workspaceToolLaunches.isNotEmpty()) {
+                SectionHeader("任务工作区工具", "任务创建后打开工具的结果；失败不会影响任务本身")
+                task.workspaceToolLaunches.forEach { launch ->
+                    val option = controller.workspaceToolOptions(task.groupId).firstOrNull { it.id == launch.toolId }
+                    OutlinedCard(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(option?.displayName ?: launch.toolId, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    when (launch.status) {
+                                        WorkspaceToolLaunchStatus.PENDING -> "等待打开"
+                                        WorkspaceToolLaunchStatus.OPENED -> "已打开 · ${launch.updatedAt}"
+                                        WorkspaceToolLaunchStatus.FAILED -> "打开失败 · ${launch.message.orEmpty()}"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (launch.status == WorkspaceToolLaunchStatus.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (launch.status == WorkspaceToolLaunchStatus.FAILED) {
+                                OutlinedButton(
+                                    onClick = { controller.retryWorkspaceTool(task, launch.toolId) },
+                                    enabled = !controller.busy && option?.available == true,
+                                ) { Text("重试") }
+                            }
+                        }
+                    }
+                }
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(verticalAlignment = Alignment.Bottom) {
                 SectionHeader("任务人工说明", "仅保存 TASKWT:TASK-NOTES 人工区", Modifier.weight(1f))
@@ -561,7 +625,7 @@ private fun ServicesScreen(controller: AppController) {
     ) {
         item(key = "service-overview") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard("业务组", controller.config.groups.size.toString(), "按业务边界组织", Modifier.weight(1f))
+                MetricCard("组", controller.config.groups.size.toString(), "按使用场景组织", Modifier.weight(1f))
                 MetricCard("服务", serviceCount.toString(), "已配置仓库入口", Modifier.weight(1f))
                 MetricCard("Worktree", standardCount.toString(), "标准隔离工作区", Modifier.weight(1f))
                 MetricCard("独立克隆", (serviceCount - standardCount).toString(), "固定分支工作区", Modifier.weight(1f))
@@ -590,7 +654,7 @@ private fun ServicesScreen(controller: AppController) {
                         }
                         if (controller.config.groups.size > 1) {
                             IconButton(onClick = { expanded[group.id] = !isExpanded }) {
-                                Icon(if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, "折叠业务组")
+                                Icon(if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, "折叠组")
                             }
                         }
                         Button(onClick = { addToGroup = group.id }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("添加仓库") }
@@ -624,8 +688,8 @@ private fun ServicesScreen(controller: AppController) {
             }
         }
     }
-    addToGroup?.let { groupId -> AddRepositoryDialog(controller, onDismiss = { addToGroup = null }) { path, strategy ->
-        if (controller.addRepository(groupId, path, strategy)) addToGroup = null
+    addToGroup?.let { groupId -> AddRepositoryDialog(controller, onDismiss = { addToGroup = null }) { paths ->
+        if (controller.addRepositories(groupId, paths)) addToGroup = null
     } }
     editTarget?.let { (groupId, service) -> ServiceEditorDialog(controller, service, onDismiss = { editTarget = null }) {
         if (controller.updateService(groupId, it)) editTarget = null
@@ -797,31 +861,18 @@ private fun SettingsScreen(controller: AppController) {
             }
             }
             item {
-            SettingsCard("业务组", "组和组内服务均按数组顺序展示；只能删除没有服务和任务的空组。") {
+            SettingsCard("组", "组和组内服务均按数组顺序展示；只能删除没有服务和任务的空组。") {
                 controller.config.groups.forEachIndexed { index, group ->
-                    OutlinedCard(Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(if (controller.config.groups.size == 1) "单组模式" else group.name, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    if (controller.config.groups.size == 1) "任务和服务界面隐藏组层级 · ${group.services.size} 个服务" else "${group.services.size} 个服务",
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                            Text("Tag")
-                            Spacer(Modifier.width(8.dp))
-                            Switch(group.createTagEnabled, { controller.setGroupTagEnabled(group.id, it) })
-                            if (controller.config.groups.size > 1) {
-                                IconButton(onClick = { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
-                                IconButton(onClick = { controller.moveGroup(group.id, 1) }, enabled = index < controller.config.groups.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
-                                IconButton(onClick = { renameGroup = group }) { Icon(Icons.Outlined.Edit, "重命名") }
-                                IconButton(onClick = { runCatching { controller.deleteGroup(group.id) }.onFailure(controller::showError) }, enabled = group.services.isEmpty()) { Icon(Icons.Outlined.Delete, "删除") }
-                            }
-                        }
-                    }
+                    GroupSettingsRow(
+                        controller = controller,
+                        group = group,
+                        index = index,
+                        groupCount = controller.config.groups.size,
+                        onRename = { renameGroup = group },
+                    )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    OutlinedButton(onClick = { newGroup = true }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("创建业务组") }
+                    OutlinedButton(onClick = { newGroup = true }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("创建组") }
                 }
             }
             }
@@ -840,14 +891,16 @@ private fun SettingsScreen(controller: AppController) {
                 val agentPath = if (isGlobal) controller.globalAgentsPath else controller.groupAgentsPath(agentGroupId)
                 Text(
                     if (isGlobal) "对所有任务生效；也可直接编辑 ~/TaskWorktreeManager/agents/global/AGENTS.md，程序会自动同步。"
-                    else "仅对当前业务组生效；也可直接编辑 ~/TaskWorktreeManager/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
+                    else "仅对当前组生效；也可直接编辑 ~/TaskWorktreeManager/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), shape = RoundedCornerShape(10.dp)) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(agentPath, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
-                        TextButton(onClick = { controller.reveal(agentPath) }) { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("打开位置") }
+                        TextButton(onClick = {
+                            if (isGlobal) controller.revealGlobalAgents() else controller.revealGroupAgents(agentGroupId)
+                        }) { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("打开位置") }
                         IconButton(onClick = { controller.copyText(agentPath, "完整路径已复制") }) { Icon(Icons.Outlined.ContentCopy, "复制完整路径") }
                     }
                 }
@@ -885,12 +938,92 @@ private fun SettingsScreen(controller: AppController) {
             }
         }
     }
-    if (newGroup) NameDialog("创建业务组", "", onDismiss = { newGroup = false }) {
+    if (newGroup) NameDialog("创建组", "", onDismiss = { newGroup = false }) {
         if (controller.addGroup(it)) newGroup = false
     }
-    renameGroup?.let { group -> NameDialog("重命名业务组", group.name, onDismiss = { renameGroup = null }) {
+    renameGroup?.let { group -> NameDialog("重命名组", group.name, onDismiss = { renameGroup = null }) {
         if (controller.renameGroup(group.id, it)) renameGroup = null
     } }
+}
+
+@Composable
+private fun GroupSettingsRow(
+    controller: AppController,
+    group: ServiceGroupConfig,
+    index: Int,
+    groupCount: Int,
+    onRename: () -> Unit,
+) {
+    var branchPrefix by remember(group.id, group.defaultBranchPrefix) { mutableStateOf(group.defaultBranchPrefix) }
+    var selectedToolIds by remember(group.id, group.defaultWorkspaceToolIds) {
+        mutableStateOf(group.defaultWorkspaceToolIds.toSet())
+    }
+    val toolOptions = controller.workspaceToolOptions(group.id)
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(if (groupCount == 1) "单组模式" else group.name, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (groupCount == 1) "任务和服务界面隐藏组层级 · ${group.services.size} 个服务" else "${group.services.size} 个服务",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Text("Tag")
+                Spacer(Modifier.width(8.dp))
+                Switch(group.createTagEnabled, { controller.setGroupTagEnabled(group.id, it) })
+                if (groupCount > 1) {
+                    IconButton(onClick = { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
+                    IconButton(onClick = { controller.moveGroup(group.id, 1) }, enabled = index < groupCount - 1) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
+                    IconButton(onClick = onRename) { Icon(Icons.Outlined.Edit, "重命名") }
+                    IconButton(
+                        onClick = { runCatching { controller.deleteGroup(group.id) }.onFailure(controller::showError) },
+                        enabled = group.services.isEmpty(),
+                    ) { Icon(Icons.Outlined.Delete, "删除") }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            OutlinedTextField(
+                branchPrefix,
+                { branchPrefix = it },
+                Modifier.fillMaxWidth(),
+                label = { Text("默认分支名前缀") },
+                placeholder = { Text("例如 feature/") },
+                supportingText = { Text("创建该组任务时自动填入，可在创建页继续修改。") },
+                singleLine = true,
+            )
+            Text("任务完成后默认打开", style = MaterialTheme.typography.titleSmall)
+            if (toolOptions.isEmpty()) {
+                Text("当前没有已注册的任务工作区工具。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                toolOptions.forEach { tool ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = tool.id in selectedToolIds,
+                            onCheckedChange = { checked ->
+                                selectedToolIds = if (checked) selectedToolIds + tool.id else selectedToolIds - tool.id
+                            },
+                            enabled = tool.available,
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(tool.displayName)
+                            Text(
+                                if (tool.available) tool.description else "当前不可用：${tool.unavailableReason}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (tool.available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(
+                    onClick = { controller.updateGroupDefaults(group.id, branchPrefix, selectedToolIds.toList()) },
+                    enabled = !controller.busy,
+                ) { Text("保存组默认设置") }
+            }
+        }
+    }
 }
 
 @Composable
@@ -935,22 +1068,27 @@ private fun PathField(
 private fun CreateTaskDialog(
     controller: AppController,
     onDismiss: () -> Unit,
-    onCreate: (String, String, String, List<String>, String, Map<String, String>, String) -> Unit,
+    onCreate: (String, String, String, List<String>, String, Map<String, String>, String, List<String>) -> Unit,
 ) {
+    val initialGroup = controller.config.groups.first()
     var name by remember { mutableStateOf("") }
-    var branch by remember { mutableStateOf("") }
+    var branch by remember { mutableStateOf(initialGroup.defaultBranchPrefix) }
+    var branchEdited by remember { mutableStateOf(false) }
     var link by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
-    var groupId by remember { mutableStateOf(controller.config.groups.first().id) }
+    var groupId by remember { mutableStateOf(initialGroup.id) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedToolIds by remember { mutableStateOf(initialGroup.defaultWorkspaceToolIds.toSet()) }
+    var rightTab by remember { mutableStateOf("notes") }
     val overrides = remember { mutableStateMapOf<String, String>() }
     val group = controller.config.groups.first { it.id == groupId }
+    val toolOptions = controller.workspaceToolOptions(groupId)
     val preview = remember(name, branch, groupId, selected, overrides.toMap(), notes) {
         controller.previewAgents(name, branch, groupId, selected, overrides.toMap(), notes)
     }
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            Modifier.widthIn(min = 1080.dp, max = 1220.dp).heightIn(min = 700.dp, max = 840.dp),
+            Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.90f).widthIn(max = 1540.dp),
             shape = RoundedCornerShape(22.dp),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
@@ -963,7 +1101,7 @@ private fun CreateTaskDialog(
                         Spacer(Modifier.width(13.dp))
                         Column(Modifier.weight(1f)) {
                             Text("创建研发任务", style = MaterialTheme.typography.headlineSmall)
-                            Text("选择业务组和服务，并实时确认最终 AGENTS.md", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("选择组和服务，并实时确认最终 AGENTS.md", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         MetaPill("已选 ${selected.size} 个服务")
                     }
@@ -977,14 +1115,37 @@ private fun CreateTaskDialog(
                     Column(Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                         SectionHeader("任务信息", "名称和分支将用于创建任务目录与 Git 分支")
                         OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, placeholder = { Text("例如：PAY-1024 支付订单优化") }, singleLine = true)
-                        OutlinedTextField(branch, { branch = it }, Modifier.fillMaxWidth(), label = { Text("任务分支") }, placeholder = { Text("例如：feature/PAY-1024") }, singleLine = true)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                branch,
+                                { branch = it; branchEdited = true },
+                                Modifier.weight(1f),
+                                label = { Text("完整任务分支") },
+                                placeholder = { Text("例如：feature/PAY-1024") },
+                                singleLine = true,
+                            )
+                            TextButton(onClick = { branch = group.defaultBranchPrefix; branchEdited = false }) { Text("应用组前缀") }
+                        }
                         OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth(), label = { Text("飞书需求链接（可选）") }, singleLine = true)
                         if (controller.config.groups.size > 1) {
                             Spacer(Modifier.height(2.dp))
-                            SectionHeader("所属业务组", "任务创建后归属不可自动迁移")
+                            SectionHeader("所属组", "任务创建后归属不可自动迁移")
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                                 controller.config.groups.forEach { candidate -> FilterChip(groupId == candidate.id, {
-                                    groupId = candidate.id; selected = emptySet(); overrides.clear()
+                                    val nextBranch = GroupBranchPrefixPolicy.onGroupChanged(
+                                        currentBranch = branch,
+                                        previousPrefix = group.defaultBranchPrefix,
+                                        manuallyEdited = branchEdited,
+                                        nextPrefix = candidate.defaultBranchPrefix,
+                                    )
+                                    groupId = candidate.id
+                                    selected = emptySet()
+                                    overrides.clear()
+                                    selectedToolIds = candidate.defaultWorkspaceToolIds.toSet()
+                                    if (nextBranch != branch) {
+                                        branch = nextBranch
+                                        branchEdited = false
+                                    }
                                 }, label = { Text(candidate.name) }) }
                             }
                         }
@@ -1023,40 +1184,69 @@ private fun CreateTaskDialog(
                                 }
                             }
                         }
-                        Spacer(Modifier.height(2.dp))
-                        SectionHeader("任务说明", "只写入任务级人工说明区，可在详情页继续编辑")
-                        OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("任务人工说明") }, minLines = 5)
                     }
                     }
                     Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            SectionHeader("AGENTS.md 完整预览", "系统信息、全局、组和任务说明的最终合成结果", Modifier.weight(1f))
-                            MetaPill("实时更新")
+                            FilterChip(rightTab == "notes", { rightTab = "notes" }, label = { Text("任务人工说明") })
+                            Spacer(Modifier.width(8.dp))
+                            FilterChip(rightTab == "preview", { rightTab = "preview" }, label = { Text("AGENTS.md 预览") })
+                            Spacer(Modifier.weight(1f))
+                            if (rightTab == "preview") MetaPill("实时更新")
                         }
-                        Surface(
-                            Modifier.fillMaxSize(),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        ) {
-                            Text(preview, Modifier.padding(15.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall)
+                        if (rightTab == "notes") {
+                            OutlinedTextField(
+                                notes,
+                                { notes = it },
+                                Modifier.fillMaxSize(),
+                                label = { Text("任务人工说明") },
+                                supportingText = { Text("只写入任务级人工区，创建后仍可在任务详情继续编辑。") },
+                            )
+                        } else {
+                            Surface(
+                                Modifier.fillMaxSize(),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            ) {
+                                Text(preview, Modifier.padding(15.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (selected.isEmpty()) "至少选择一个服务" else "将创建 ${selected.size} 个服务入口",
-                        Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (selected.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = onDismiss) { Text("取消") }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { onCreate(name, branch, groupId, selected.toList(), link, overrides.toMap(), notes) },
-                        enabled = name.isNotBlank() && branch.isNotBlank() && selected.isNotEmpty() && !controller.busy,
-                    ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
+                Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("完整分支：", style = MaterialTheme.typography.labelMedium)
+                        Text(branch.ifBlank { "尚未填写" }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        toolOptions.forEach { tool ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = tool.id in selectedToolIds,
+                                    onCheckedChange = { checked -> selectedToolIds = if (checked) selectedToolIds + tool.id else selectedToolIds - tool.id },
+                                    enabled = tool.available,
+                                )
+                                Text(if (tool.available) tool.displayName else "${tool.displayName}（不可用）", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (selected.isEmpty()) "至少选择一个服务" else "将创建 ${selected.size} 个服务入口",
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (selected.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = onDismiss) { Text("取消") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
+                                onCreate(name, branch, groupId, selected.toList(), link, overrides.toMap(), notes, availableTools)
+                            },
+                            enabled = name.isNotBlank() && branch.isNotBlank() && selected.isNotEmpty() && !controller.busy,
+                        ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
+                    }
                 }
             }
         }
@@ -1064,25 +1254,35 @@ private fun CreateTaskDialog(
 }
 
 @Composable
-private fun AddRepositoryDialog(controller: AppController, onDismiss: () -> Unit, onAdd: (String, WorkspaceStrategy) -> Unit) {
-    var path by remember { mutableStateOf("") }
-    var strategy by remember { mutableStateOf(WorkspaceStrategy.STANDARD_WORKTREE) }
+private fun AddRepositoryDialog(controller: AppController, onDismiss: () -> Unit, onAdd: (List<String>) -> Unit) {
+    var paths by remember { mutableStateOf<List<String>>(emptyList()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("手动添加 Git 仓库") },
+        title = { Text("批量添加 Git 仓库") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("会校验 Git 顶层仓库并按 git-common-dir 去重；不接受 bare 或临时 Linked Worktree。")
-                PathField("仓库目录", path, { path = it }, !controller.pathPickerBusy) {
-                    controller.chooseDirectory(path) { path = it }
+                Text("逐个校验所选目录，不递归扫描子目录；非 Git、Linked Worktree 和重复仓库会被跳过。")
+                OutlinedButton(
+                    onClick = { controller.chooseDirectories(paths.firstOrNull()) { paths = it } },
+                    enabled = !controller.pathPickerBusy,
+                ) {
+                    Icon(Icons.Outlined.Folder, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("选择仓库目录（可多选）")
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    WorkspaceStrategy.entries.forEach { value -> FilterChip(strategy == value, { strategy = value }, label = { Text(value.displayName) }) }
+                if (paths.isEmpty()) {
+                    Text("尚未选择目录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                        Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).padding(10.dp).verticalScroll(rememberScrollState())) {
+                            paths.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
                 }
-                if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) Text("独立克隆使用 origin 完整克隆，不创建 Feature 分支也不执行 Bootstrap。", style = MaterialTheme.typography.bodySmall)
+                Text("新增服务默认采用标准 Worktree；添加后可在服务配置中改为独立克隆。", style = MaterialTheme.typography.bodySmall)
             }
         },
-        confirmButton = { Button(onClick = { onAdd(path, strategy) }, enabled = path.isNotBlank()) { Text("校验并添加") } },
+        confirmButton = { Button(onClick = { onAdd(paths) }, enabled = paths.isNotEmpty() && !controller.busy) { Text("校验并添加") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
@@ -1103,6 +1303,7 @@ private fun ServiceEditorDialog(controller: AppController, service: GroupService
     var bootstrapText by remember { mutableStateOf(json.encodeToString(service.bootstrap)) }
     var bootstrapError by remember { mutableStateOf<String?>(null) }
     var showBootstrapExample by remember { mutableStateOf(false) }
+    var bootstrapCopied by remember { mutableStateOf(false) }
     var branchMenuExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(strategy, service.repositoryId) {
         if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) controller.loadRemoteBranches(service.repositoryId)
@@ -1157,7 +1358,7 @@ private fun ServiceEditorDialog(controller: AppController, service: GroupService
                     }) { Icon(Icons.Outlined.Add, null); Text("添加基础分支模块") }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("Bootstrap JSON", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                        TextButton(onClick = { showBootstrapExample = true }) { Text("查看示例") }
+                        TextButton(onClick = { bootstrapCopied = false; showBootstrapExample = true }) { Text("查看示例") }
                     }
                     OutlinedTextField(
                         bootstrapText,
@@ -1239,17 +1440,49 @@ private fun ServiceEditorDialog(controller: AppController, service: GroupService
     }
     if (showBootstrapExample) {
         val example = remember { json.encodeToString(BootstrapPresets.example()) }
-        AlertDialog(
+        Dialog(
             onDismissRequest = { showBootstrapExample = false },
-            title = { Text("Bootstrap JSON 示例") },
-            text = {
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
-                    Text(example, Modifier.padding(14.dp).verticalScroll(rememberScrollState()), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(
+                Modifier.width(820.dp).height(620.dp),
+                shape = RoundedCornerShape(22.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Bootstrap JSON 示例", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                        if (bootstrapCopied) Text("已复制", color = SuccessGreen, style = MaterialTheme.typography.labelMedium)
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Surface(
+                        Modifier.weight(1f).fillMaxWidth().padding(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(
+                            example,
+                            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { showBootstrapExample = false }) { Text("关闭") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                            controller.copyText(example, "Bootstrap 示例已复制")
+                            bootstrapCopied = true
+                        }) {
+                            Icon(Icons.Outlined.ContentCopy, null)
+                            Spacer(Modifier.width(5.dp))
+                            Text("复制")
+                        }
+                    }
                 }
-            },
-            confirmButton = { Button(onClick = { controller.copyText(example, "Bootstrap 示例已复制") }) { Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(5.dp)); Text("复制") } },
-            dismissButton = { TextButton(onClick = { showBootstrapExample = false }) { Text("关闭") } },
-        )
+            }
+        }
     }
 }
 

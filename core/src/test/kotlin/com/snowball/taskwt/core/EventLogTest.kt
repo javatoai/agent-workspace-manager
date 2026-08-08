@@ -16,7 +16,7 @@ class EventLogTest {
 
     @Test
     fun `writes one json object per event without source contents`() {
-        val clock = Clock.fixed(Instant.parse("2026-07-30T08:00:00Z"), ZoneOffset.UTC)
+        val clock = Clock.fixed(Instant.parse("2026-07-30T16:00:00Z"), ZoneOffset.UTC)
         val paths = ApplicationPaths(temporary.resolve("home"))
         val sink = JsonlEventSink(paths, clock)
 
@@ -27,11 +27,12 @@ class EventLogTest {
             clock = clock,
         )
 
-        val log = paths.logs.resolve("application-2026-07-30.jsonl")
+        val log = paths.logs.resolve("application-2026-07-31.jsonl")
         assertTrue(Files.exists(log))
         val lines = Files.readAllLines(log)
         assertEquals(1, lines.size)
         assertTrue(lines.single().contains("\"folderName\":\"OBT-1\""))
         assertTrue(lines.single().contains("\"event\":\"task.create.completed\""))
+        assertTrue(lines.single().contains("\"timestamp\":\"2026-07-31 00:00:00\""))
     }
 }

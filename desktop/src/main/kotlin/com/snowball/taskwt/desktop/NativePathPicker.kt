@@ -13,6 +13,7 @@ import java.io.File
  */
 interface NativePathPicker {
     suspend fun pickDirectory(initialPath: String? = null): String?
+    suspend fun pickDirectories(initialPath: String? = null): List<String>?
     suspend fun pickFile(initialPath: String? = null, extensions: List<String> = emptyList()): String?
 }
 
@@ -21,6 +22,13 @@ class FileKitNativePathPicker : NativePathPicker {
         .openDirectoryPicker(directory = initialPath.asInitialPlatformFile())
         ?.file
         ?.absolutePath
+
+    override suspend fun pickDirectories(initialPath: String?): List<String>? =
+        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            WindowsMultiDirectoryPicker.pick(initialPath)
+        } else {
+            pickDirectory(initialPath)?.let(::listOf)
+        }
 
     override suspend fun pickFile(initialPath: String?, extensions: List<String>): String? = FileKit
         .openFilePicker(
@@ -50,4 +58,7 @@ class PathSelectionCoordinator(
 
     suspend fun file(currentValue: String, initialPath: String? = currentValue): String =
         picker.pickFile(initialPath) ?: currentValue
+
+    suspend fun directories(initialPath: String? = null): List<String> =
+        picker.pickDirectories(initialPath).orEmpty()
 }

@@ -150,7 +150,7 @@ class TaskManager(
             )
         }
 
-        val now = Instant.now(clock).toString()
+        val now = TaskWtTime.format(Instant.now(clock))
         val workspaces = buildWorkspaces(
             config = config,
             selected = selected,
@@ -179,7 +179,7 @@ class TaskManager(
             )
         }
         manifest = manifest.copy(
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             status = aggregateStatus(results),
             services = results,
         )
@@ -255,7 +255,7 @@ class TaskManager(
         }
         val merged = manifest.services + results
         return manifest.copy(
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             status = aggregateStatus(merged),
             services = merged,
         ).also {
@@ -316,7 +316,7 @@ class TaskManager(
         }
         val status = aggregateStatus(updatedServices)
         return manifest.copy(
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             status = status,
             services = updatedServices,
         ).also {
@@ -366,7 +366,7 @@ class TaskManager(
             }
         }
         return manifest.copy(
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             status = aggregateStatus(updated),
             services = updated,
         ).also {
@@ -553,7 +553,7 @@ class TaskManager(
             .forEach { git.run(it, "worktree", "prune", check = false) }
         return manifest.copy(
             status = WorkspaceStatus.ARCHIVED,
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             services = manifest.services.map { it.copy(status = WorkspaceStatus.ARCHIVED) },
         ).also {
             manifests.save(taskDirectory, it)
@@ -616,7 +616,7 @@ class TaskManager(
         }
         return manifest.copy(
             status = aggregateStatus(restored),
-            updatedAt = Instant.now(clock).toString(),
+            updatedAt = TaskWtTime.format(Instant.now(clock)),
             services = restored,
         ).also {
             manifests.save(taskDirectory, it)

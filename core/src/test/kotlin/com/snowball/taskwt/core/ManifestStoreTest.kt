@@ -1,6 +1,7 @@
 package com.snowball.taskwt.core
 
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -9,6 +10,39 @@ import java.nio.file.Path
 class ManifestStoreTest {
     @TempDir
     lateinit var temporary: Path
+
+    @Test
+    fun `schema four round trip preserves workspace tool launch results`() {
+        val directory = temporary.resolve("tool-launch")
+        val store = ManifestStore()
+        val expected = TaskManifest(
+            folderName = "tool-launch",
+            taskDirectoryName = "tool-launch",
+            featureBranch = "feature/tool-launch",
+            createdAt = "2026-08-08 12:00:00",
+            updatedAt = "2026-08-08 12:00:01",
+            status = WorkspaceStatus.READY,
+            services = emptyList(),
+            workspaceToolLaunches = listOf(
+                WorkspaceToolLaunch(
+                    toolId = "codex",
+                    status = WorkspaceToolLaunchStatus.OPENED,
+                    updatedAt = "2026-08-08 12:00:01",
+                ),
+                WorkspaceToolLaunch(
+                    toolId = "cursor",
+                    status = WorkspaceToolLaunchStatus.FAILED,
+                    updatedAt = "2026-08-08 12:00:01",
+                    message = "not installed",
+                ),
+            ),
+        )
+
+        store.save(directory, expected)
+
+        assertEquals(4, store.load(directory).schemaVersion)
+        assertEquals(expected, store.load(directory))
+    }
 
     @Test
     fun `legacy manifests are preserved and reported but not imported`() {

@@ -12,6 +12,21 @@ import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
 
 class ConfigurationInteractionPolicyTest {
+    @Test
+    fun `group prefix follows untouched branch and preserves manual edits`() {
+        assertEquals(
+            "fix/",
+            GroupBranchPrefixPolicy.onGroupChanged("feature/", "feature/", manuallyEdited = false, nextPrefix = "fix/"),
+        )
+        assertEquals(
+            "custom/TASK-1",
+            GroupBranchPrefixPolicy.onGroupChanged("custom/TASK-1", "feature/", manuallyEdited = true, nextPrefix = "fix/"),
+        )
+        assertEquals(
+            "fix/",
+            GroupBranchPrefixPolicy.onGroupChanged("feature/", "feature/", manuallyEdited = true, nextPrefix = "fix/"),
+        )
+    }
     @TempDir
     lateinit var temporary: Path
 
@@ -32,7 +47,7 @@ class ConfigurationInteractionPolicyTest {
     }
 
     @Test
-    fun `schema v4 round trip persists merged UAT references`() {
+    fun `schema v5 round trip persists merged UAT references`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         val store = ConfigStore(paths)
         val repository = RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git", "https://example.test/repo.git")
@@ -47,7 +62,7 @@ class ConfigurationInteractionPolicyTest {
 
         store.save(expected)
 
-        assertEquals(4, expected.schemaVersion)
+        assertEquals(5, expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
         assertTrue("\"uatRef\"" in json)
@@ -57,7 +72,7 @@ class ConfigurationInteractionPolicyTest {
     }
 
     @Test
-    fun `Tag navigation requires a group gate and an enabled child gate`() {
+    fun `Tag navigation requires only an enabled group gate`() {
         val standard = GroupServiceConfig.standard("standard", "repo", "Standard")
         val clone = GroupServiceConfig(
             id = "clone",
@@ -65,7 +80,7 @@ class ConfigurationInteractionPolicyTest {
             displayName = "Clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "main",
+            cloneDefaultBranch = "origin/main",
         )
         val repositories = listOf(
             RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git"),
@@ -79,7 +94,7 @@ class ConfigurationInteractionPolicyTest {
             standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }),
             clone.copy(cloneTagEnabled = false),
         ))))
-        assertFalse(TagNavigationPolicy.isVisible(childrenOff))
+        assertTrue(TagNavigationPolicy.isVisible(childrenOff))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff.copy(groups = listOf(childrenOff.groups.single().copy(
             services = listOf(standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }), clone.copy(cloneTagEnabled = true)),
         )))))

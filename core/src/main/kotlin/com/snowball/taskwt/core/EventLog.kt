@@ -9,8 +9,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.StandardOpenOption
 import java.time.Clock
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneOffset
 import kotlin.io.path.createDirectories
 
 @Serializable
@@ -42,7 +40,7 @@ class JsonlEventSink(
         runCatching {
             synchronized(monitor) {
                 paths.logs.createDirectories()
-                val date = LocalDate.ofInstant(Instant.now(clock), ZoneOffset.UTC)
+                val date = TaskWtTime.localDate(Instant.now(clock))
                 val bytes = (json.encodeToString(event) + System.lineSeparator())
                     .toByteArray(StandardCharsets.UTF_8)
                 FileChannel.open(
@@ -70,7 +68,7 @@ fun EventSink.info(
 ) {
     record(
         ApplicationEvent(
-            timestamp = Instant.now(clock).toString(),
+            timestamp = TaskWtTime.format(Instant.now(clock)),
             level = "INFO",
             event = event,
             message = message,
@@ -87,7 +85,7 @@ fun EventSink.error(
 ) {
     record(
         ApplicationEvent(
-            timestamp = Instant.now(clock).toString(),
+            timestamp = TaskWtTime.format(Instant.now(clock)),
             level = "ERROR",
             event = event,
             message = message,

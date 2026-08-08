@@ -2,6 +2,7 @@ package com.snowball.taskwt.core
 
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import kotlin.io.path.createDirectories
@@ -29,6 +30,10 @@ interface AgentDocuments {
 class AgentDocumentService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
 ) : AgentDocuments {
+    fun ensureGlobalFile(): Path = ensureFile(paths.globalAgents)
+
+    fun ensureGroupFile(groupId: String): Path = ensureFile(paths.groupAgents(groupId))
+
     override fun readGlobal(): String = readOrEmpty(paths.globalAgents)
 
     override fun saveGlobal(content: String) {
@@ -39,7 +44,7 @@ class AgentDocumentService(
     override fun readGroup(groupId: String): String = readOrEmpty(paths.groupAgents(groupId))
 
     override fun saveGroup(groupId: String, content: String) {
-        validateUserContent(content, "业务组 Agent 说明")
+        validateUserContent(content, "组 Agent 说明")
         writeAtomically(paths.groupAgents(groupId), content)
     }
 
@@ -124,15 +129,15 @@ class AgentDocumentService(
         val global = readGlobal()
         val group = readGroup(manifest.groupId)
         validateUserContent(global, "全局 Agent 说明")
-        validateUserContent(group, "业务组 Agent 说明")
+        validateUserContent(group, "组 Agent 说明")
         return buildString {
             append(AgentsMdWriter.render(taskDirectory, manifest, repositories, ""))
             appendInstructionSection("全局 Agent 说明", global)
-            appendInstructionSection("业务组 Agent 说明", group)
+            appendInstructionSection("组 Agent 说明", group)
             appendLine()
             appendLine("## 说明优先级")
             appendLine()
-            appendLine("发生冲突时按：任务人工说明 > 业务组说明 > 全局说明。")
+            appendLine("发生冲突时按：任务人工说明 > 组说明 > 全局说明。")
         }
     }
 
@@ -146,6 +151,18 @@ class AgentDocumentService(
 
     private fun readOrEmpty(path: Path): String =
         if (path.exists()) Files.readString(path) else ""
+
+    private fun ensureFile(path: Path): Path {
+        path.parent.createDirectories()
+        if (!path.exists()) {
+            try {
+                Files.createFile(path)
+            } catch (_: FileAlreadyExistsException) {
+                // A watcher or another window may have created it concurrently.
+            }
+        }
+        return path
+    }
 
     private fun validateUserContent(content: String, label: String) {
         val reserved = listOf(GENERATED_BEGIN, GENERATED_END, TASK_NOTES_BEGIN, TASK_NOTES_END)

@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.2.0 的 `config.json` 使用严格 schema 4。顶层仓库和业务组均为数组，数组顺序就是界面顺序：
+0.2.0 的 `config.json` 使用严格 schema 5。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {
@@ -35,6 +35,8 @@ agents/groups/<groupId>/AGENTS.md
       "id": "default",
       "name": "默认组",
       "createTagEnabled": true,
+      "defaultBranchPrefix": "feature/",
+      "defaultWorkspaceToolIds": ["codex"],
       "services": [
         {
           "id": "service-order",
@@ -74,7 +76,7 @@ agents/groups/<groupId>/AGENTS.md
 
 未知字段、旧 schema 或未来 schema 都会被拒绝，应用不会自动迁移或改写原文件。迁移旧数据请按[旧数据手工迁移指南](LEGACY-DATA-MIGRATION.md)操作。
 
-## 业务组
+## 组
 
 - 配置始终至少有一个组；只有一个组时，任务和服务页面隐藏组选择与折叠层级。
 - 多组时，任务和服务按组折叠展示。
@@ -84,13 +86,14 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 人工添加仓库
 
-设置页通过目录选择器添加单个仓库。验证过程会：
+设置页通过操作系统原生目录选择器一次选择一个或多个仓库目录。验证过程会：
 
 1. 解析所选路径所属的 Git 顶层目录；
 2. 获取规范化 `git-common-dir` 作为物理仓库身份；
 3. 拒绝非 Git 目录、Bare 仓库、子模块和临时 Linked Worktree；
 4. 读取当前分支及 `origin`，拒绝 URL 中嵌入的明文凭据；
-5. 只校验本次选择，不递归扫描父目录或同级目录。
+5. 每个目录独立校验，不递归扫描其子目录、父目录或同级目录；
+6. 合法仓库批量写入一次配置，新增服务默认采用标准 Worktree，之后可在服务配置中修改策略。
 
 应用启动不会再次调用 Git。用户点击顶部“刷新”后才重新校验已经配置的仓库。
 
@@ -105,7 +108,7 @@ agents/groups/<groupId>/AGENTS.md
 - 单模块保留用户输入的任务分支名；
 - 多模块按基础 Ref 自动添加后缀，例如 `feature/ABC-master`、`feature/ABC-development`。
 
-标准服务创建 Worktree 后按服务配置执行 Bootstrap。
+创建前会执行 `fetch --prune --tags`，并从最新的 `refs/remotes/<remote>/<branch>` 创建 Worktree；不会切换或移动用户本地 `master`。标准服务创建 Worktree 后按服务配置执行 Bootstrap。
 
 ### 独立克隆
 
@@ -126,7 +129,7 @@ agents/groups/<groupId>/AGENTS.md
 
 1. 系统生成的任务与工作区信息；
 2. 全局说明；
-3. 业务组说明；
+3. 组说明；
 4. 任务人工说明。
 
 冲突时任务级优先，其次是组级，再其次是全局。任务文件用以下协议分隔系统区和人工区：
@@ -146,3 +149,25 @@ agents/groups/<groupId>/AGENTS.md
 ## Bootstrap
 
 Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对路径，禁止绝对路径、`..`、`.git` 和符号链接穿越。命令按声明顺序运行，单步失败会记录警告并继续后续步骤，最终工作区标记为 `READY_WITH_WARNINGS`。
+
+## 任务工作区工具与任务 schema
+
+`taskwt.json` 使用严格 schema 4。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。
+
+```json
+{
+  "schemaVersion": 4,
+  "workspaceToolLaunches": [
+    {
+      "toolId": "codex",
+      "status": "OPENED",
+      "updatedAt": "2026-01-01 00:00:00",
+      "message": null
+    }
+  ]
+}
+```
+
+未注册的工具 ID 会原样保留在配置中并在界面显示为“当前不可用”。Core 只认识通用工具 ID 和执行结果，不依赖 Codex、Claude、Cursor 的 URI 或命令。
+
+TaskWT 生成的任务、Tag 操作、历史记录、JSONL 事件和 AGENTS.md 时间统一使用 `Asia/Shanghai` 时区，格式为 `yyyy-MM-dd HH:mm:ss`。这不会重写 Git 提交时间、远程 Tag 原始时间或文件系统修改时间。

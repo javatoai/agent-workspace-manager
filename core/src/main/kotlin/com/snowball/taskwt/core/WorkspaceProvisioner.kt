@@ -69,6 +69,11 @@ class StandardWorktreeProvisioner(
                     .normalize()
                 require(target.parent == request.taskDirectory.toAbsolutePath().normalize()) { "Worktree 必须位于任务目录的直接子级" }
                 git.fetch(repositoryPath, representative.baseRemote)
+                val baseBranch = TaskBranchNaming.normalizeBaseRef(representative)
+                val remoteBaseRef = "${representative.baseRemote}/$baseBranch"
+                require(git.refExists(repositoryPath, "refs/remotes/$remoteBaseRef")) {
+                    "远端基础分支不存在：$remoteBaseRef"
+                }
                 require(git.run(repositoryPath, "check-ref-format", "--branch", branch, check = false).succeeded) {
                     "分支名不合法：$branch"
                 }
@@ -79,7 +84,7 @@ class StandardWorktreeProvisioner(
                         "远程分支已存在：$featureRemote/$branch"
                     }
                 }
-                git.addWorktree(repositoryPath, target, branch, representative.baseRef, representative.baseRemote)
+                git.addWorktree(repositoryPath, target, branch, remoteBaseRef, representative.baseRemote)
                 created += target to branch
                 val initialization = bootstrap.initialize(repositoryPath, target, request.service.bootstrap)
                 modules.map { module ->
@@ -103,7 +108,7 @@ class StandardWorktreeProvisioner(
                         strategy = strategy,
                         tagEnabled = module.tagEnabled,
                         originUrl = request.repository.originUrl,
-                        baseRef = module.baseRef,
+                        baseRef = "${module.baseRemote}/${TaskBranchNaming.normalizeBaseRef(module)}",
                     )
                 }
             }
@@ -128,9 +133,12 @@ class IndependentCloneProvisioner(
         require(request.service.strategy == strategy) { "服务不是独立克隆策略" }
         val origin = request.repository.originUrl?.trim().orEmpty()
         require(origin.isNotBlank()) { "独立克隆需要仓库配置 origin URL" }
-        val branch = request.cloneBranchOverride?.trim().takeUnless { it.isNullOrBlank() }
+        val selectedRef = request.cloneBranchOverride?.trim().takeUnless { it.isNullOrBlank() }
             ?: request.service.cloneDefaultBranch?.trim().orEmpty()
-        require(branch.isNotBlank()) { "独立克隆必须选择远程分支" }
+        require(selectedRef.isNotBlank()) { "独立克隆必须选择远程分支" }
+        val branchRef = RemoteBranchRef.parse(selectedRef)
+        require(branchRef.remote == "origin") { "独立克隆目前只支持 origin 分支：$selectedRef" }
+        val branch = branchRef.branch
         val target = request.taskDirectory.resolve(WorkspaceLayout.cloneDirectoryName(request.service))
         require(!Files.exists(target)) { "目标目录已存在：$target" }
         git.cloneRepository(origin, target, branch)
@@ -149,7 +157,7 @@ class IndependentCloneProvisioner(
                 strategy = strategy,
                 tagEnabled = request.service.cloneTagEnabled,
                 originUrl = origin,
-                baseRef = branch,
+                baseRef = branchRef.toString(),
             ),
         )
     }

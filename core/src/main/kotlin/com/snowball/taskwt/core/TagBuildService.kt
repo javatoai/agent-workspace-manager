@@ -8,8 +8,6 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.time.Clock
 import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
@@ -57,12 +55,6 @@ class TagBuildService(
     private val workspaceLifecycle: WorkspaceLifecycle = GitWorkspaceLifecycle(git),
     private val taskLock: TaskOperationLock = FileTaskOperationLock(paths),
 ) {
-    companion object {
-        private val auditTimestampFormatter = DateTimeFormatter
-            .ofPattern("yyyy-MM-dd HH:mm:ss")
-            .withZone(ZoneOffset.UTC)
-    }
-
     fun buildBatch(
         config: AppConfig,
         taskDirectory: Path,
@@ -90,7 +82,7 @@ class TagBuildService(
         val workspace = resolveWorkspace(manifest, repositoryId)
             ?: throw error
         val target = runCatching { TagPolicy.resolve(config, manifest, repositoryId) }.getOrNull()
-        val now = Instant.now(clock).toString()
+        val now = TaskWtTime.format(Instant.now(clock))
         TagOperation(
             operationId = UUID.randomUUID().toString(),
             folderName = manifest.folderName,
@@ -183,7 +175,7 @@ class TagBuildService(
         val service = target.asLegacyServiceConfig()
         val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
         val repository = validated.repository
-        val now = Instant.now(clock).toString()
+        val now = TaskWtTime.format(Instant.now(clock))
         var operation = TagOperation(
             operationId = UUID.randomUUID().toString(),
             folderName = manifest.folderName,
@@ -615,7 +607,7 @@ class TagBuildService(
             appendLine("需求链接：${manifest.requirementLink.trim()}")
         }
         appendLine("Builder: ${System.getProperty("user.name")}")
-        append("Timestamp: ${auditTimestampFormatter.format(Instant.now(clock))}")
+        append("时间：${TaskWtTime.format(Instant.now(clock))}")
     }
 
     private fun temporaryWorktreePath(repository: Path, label: String): Path {
@@ -645,7 +637,7 @@ class TagBuildService(
         conflictFiles: List<String> = operation.conflictFiles,
     ): TagOperation = operation.copy(
         state = state,
-        updatedAt = Instant.now(clock).toString(),
+        updatedAt = TaskWtTime.format(Instant.now(clock)),
         featureSha = featureSha,
         testSha = testSha,
         tag = tag,
