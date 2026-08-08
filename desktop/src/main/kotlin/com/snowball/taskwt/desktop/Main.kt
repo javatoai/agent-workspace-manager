@@ -557,7 +557,6 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
                         OutlinedButton(
                             onClick = { confirmDelete = true },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                         ) {
                             Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("删除任务")
                         }
