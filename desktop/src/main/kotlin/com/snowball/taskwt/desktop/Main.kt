@@ -711,9 +711,26 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        IconButton(onClick = { controller.terminal(workspace.worktreePath) }) { Icon(Icons.Outlined.Terminal, "终端") }
-                        IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }) { Icon(Icons.Outlined.FolderOpen, "打开文件夹") }
-                        IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }) { Icon(Icons.Outlined.ContentCopy, "复制路径") }
+                        // Group the lightweight actions so they read as one toolbar instead
+                        // of three unrelated icons floating between the branch and primary actions.
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        ) {
+                            Row(Modifier.padding(horizontal = 3.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { controller.terminal(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
+                                    Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
+                                    Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, modifier = Modifier.size(34.dp)) {
+                                    Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
                         if (controller.canBuildTag(task, workspace)) {
                             OutlinedButton(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy) {
                                 Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("UAT Tag")
