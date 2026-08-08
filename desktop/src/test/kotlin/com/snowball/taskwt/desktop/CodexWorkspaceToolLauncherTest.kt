@@ -3,7 +3,9 @@ package com.snowball.taskwt.desktop
 import com.snowball.taskwt.core.TaskWorkspaceContext
 import org.junit.jupiter.api.Test
 import java.net.URI
+import java.net.URLEncoder
 import java.nio.file.Path
+import java.nio.charset.StandardCharsets
 import kotlin.test.assertEquals
 
 class CodexWorkspaceToolLauncherTest {
@@ -21,9 +23,10 @@ class CodexWorkspaceToolLauncherTest {
             ),
         )
 
-        assertEquals(
-            "codex://new?path=C%3A%5C%E7%A0%94%E5%8F%91%E4%BB%BB%E5%8A%A1%5CPAY%201024",
-            opened.single().toASCIIString(),
-        )
+        val expectedPath = Path.of("C:\\研发任务\\PAY 1024").toAbsolutePath().normalize().toString()
+        val expectedUri = "codex://new?path=" +
+            URLEncoder.encode(expectedPath, StandardCharsets.UTF_8).replace("+", "%20")
+
+        assertEquals(expectedUri, opened.single().toASCIIString())
     }
 }

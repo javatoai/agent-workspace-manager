@@ -30,8 +30,12 @@ class DesktopConfigurationServicesTest {
         }
         val catalog = GitRemoteBranchCatalog(GitClient(runner))
 
-        assertEquals(listOf("origin/main", "origin/release/test"), catalog.list(Path.of("C:/repo")))
-        assertEquals(listOf("git", "-c", "core.longpaths=true", "-C", "C:\\repo", "ls-remote", "--heads", "origin"), commands.single())
+        val repository = Path.of("C:/repo")
+        assertEquals(listOf("origin/main", "origin/release/test"), catalog.list(repository))
+        assertEquals(
+            listOf("git", "-c", "core.longpaths=true", "-C", repository.toString(), "ls-remote", "--heads", "origin"),
+            commands.single(),
+        )
     }
 
     @Test
