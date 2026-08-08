@@ -692,7 +692,7 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             workspace.moduleName.ifBlank { workspace.serviceName },
-                            Modifier.weight(1f),
+                            Modifier.weight(1f, fill = false),
                             style = MaterialTheme.typography.titleSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -705,51 +705,50 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                         )
                         StatusPill(workspace.status.name)
                     }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            workspace.branch,
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        // Group the lightweight actions so they read as one toolbar instead
-                        // of three unrelated icons floating between the branch and primary actions.
-                        Surface(
-                            color = MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        ) {
-                            Row(Modifier.padding(horizontal = 3.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { controller.terminal(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
-                                    Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
-                                    Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, modifier = Modifier.size(34.dp)) {
-                                    Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
-                                }
+                    Text(
+                        workspace.branch,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (workspace.warnings.isNotEmpty()) {
+                        Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Spacer(Modifier.width(16.dp))
+                // Keep actions in their own vertically-centred group.  This gives the
+                // two-line workspace summary a stable rhythm regardless of button size.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Row(Modifier.padding(horizontal = 3.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { controller.terminal(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
                             }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        if (controller.canBuildTag(task, workspace)) {
-                            OutlinedButton(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy) {
-                                Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("UAT Tag")
+                            IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
                             }
-                        }
-                        OutlinedButton(onClick = { controller.openWorkspace(workspace) }, enabled = workspace.status != WorkspaceStatus.ARCHIVED) {
-                            Icon(Icons.Outlined.Code, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("打开 IDE")
-                        }
-                        if (workspace.status == WorkspaceStatus.FAILED && workspace.groupServiceId.isNotBlank()) {
-                            OutlinedButton(onClick = { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) }, enabled = !controller.busy) {
-                                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重试")
+                            IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
                             }
                         }
                     }
-                    if (workspace.warnings.isNotEmpty()) {
-                        Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
+                    if (controller.canBuildTag(task, workspace)) {
+                        OutlinedButton(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy) {
+                            Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("UAT Tag")
+                        }
+                    }
+                    OutlinedButton(onClick = { controller.openWorkspace(workspace) }, enabled = workspace.status != WorkspaceStatus.ARCHIVED) {
+                        Icon(Icons.Outlined.Code, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("打开 IDE")
+                    }
+                    if (workspace.status == WorkspaceStatus.FAILED && workspace.groupServiceId.isNotBlank()) {
+                        OutlinedButton(onClick = { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) }, enabled = !controller.busy) {
+                            Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重试")
+                        }
                     }
                 }
         }
