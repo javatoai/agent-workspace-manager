@@ -534,23 +534,21 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
     ) {
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f), shape = RoundedCornerShape(16.dp)) {
-                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(task.folderName, style = MaterialTheme.typography.headlineSmall)
+                Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(task.folderName, Modifier.widthIn(max = 220.dp), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             task.featureBranch,
+                            Modifier.widthIn(max = 220.dp).clickable { controller.copyText(task.featureBranch, "分支已复制") },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable { controller.copyText(task.featureBranch, "分支已复制") },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            StatusPill(task.status.name)
-                            if (controller.config.groups.size > 1) MetaPill(group?.name ?: task.groupId)
-                            MetaPill("${task.services.size} 个工作区")
-                        }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        StatusPill(task.status.name)
+                        if (controller.config.groups.size > 1) MetaPill(group?.name ?: task.groupId)
+                        MetaPill("${task.services.size} 个工作区")
+                        Spacer(Modifier.weight(1f))
                         if (task.status == WorkspaceStatus.ARCHIVED) {
                             OutlinedButton(onClick = { controller.restoreTask(task) }) { Icon(Icons.Outlined.Restore, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("恢复") }
                         } else {
@@ -559,10 +557,10 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
                         TextButton(onClick = { confirmDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
                             Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("删除任务")
                         }
-                        }
                     }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        if (task.requirementLink.isNotBlank()) {
+                    if (task.requirementLink.isNotBlank()) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("需求", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
                                 task.requirementLink,
                                 Modifier
