@@ -1,6 +1,8 @@
 package com.snowball.taskwt.desktop
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,9 +39,9 @@ import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.NoteAlt
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Save
@@ -51,6 +53,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
@@ -160,10 +163,13 @@ private fun TaskWorktreeApp(controller: AppController) {
         }
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             Row(Modifier.fillMaxSize()) {
-                Sidebar(controller.navigation) { controller.navigation = it }
+                Sidebar(controller) { controller.navigation = it }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     TopBar(controller, onCreate = { showCreate = true })
                     Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -217,22 +223,35 @@ private fun TaskWorktreeApp(controller: AppController) {
 }
 
 @Composable
-private fun Sidebar(selected: NavigationItem, onSelected: (NavigationItem) -> Unit) {
-    Surface(Modifier.width(220.dp).fillMaxHeight(), shadowElevation = 2.dp) {
-        Column(Modifier.padding(16.dp)) {
-            Row(Modifier.padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = BrandBlue, shape = RoundedCornerShape(12.dp)) {
-                    Icon(Icons.Outlined.AccountTree, null, Modifier.padding(10.dp), tint = Color.White)
+private fun Sidebar(controller: AppController, onSelected: (NavigationItem) -> Unit) {
+    Surface(
+        Modifier.width(232.dp).fillMaxHeight().border(
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp),
+        ),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 18.dp)) {
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(color = BrandBlue, shape = RoundedCornerShape(14.dp), shadowElevation = 3.dp) {
+                    Icon(Icons.Outlined.AccountTree, null, Modifier.padding(11.dp), tint = Color.White)
                 }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(12.dp))
                 Column {
-                    Text("TaskWT", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    Text("0.2.0", style = MaterialTheme.typography.labelSmall)
+                    Text("TaskWT", style = MaterialTheme.typography.titleLarge)
+                    Text("Workspace studio · 0.2.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(24.dp))
+            Text(
+                "工作空间",
+                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             NavigationItem.entries.forEach { item ->
-                val selectedItem = item == selected
+                val selectedItem = item == controller.navigation
                 val icon = when (item) {
                     NavigationItem.TASKS -> Icons.Outlined.Workspaces
                     NavigationItem.SERVICES -> Icons.Outlined.Dns
@@ -242,38 +261,61 @@ private fun Sidebar(selected: NavigationItem, onSelected: (NavigationItem) -> Un
                 Surface(
                     Modifier.fillMaxWidth().clickable { onSelected(item) },
                     color = if (selectedItem) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                    shape = RoundedCornerShape(11.dp),
+                    shape = RoundedCornerShape(13.dp),
                 ) {
-                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.padding(horizontal = 10.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (selectedItem) {
+                            Surface(Modifier.width(4.dp).height(26.dp), color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(4.dp)) {}
+                            Spacer(Modifier.width(8.dp))
+                        } else {
+                            Spacer(Modifier.width(12.dp))
+                        }
                         Icon(icon, null, tint = if (selectedItem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(11.dp))
-                        Column {
+                        Column(Modifier.weight(1f)) {
                             Text(item.title, fontWeight = if (selectedItem) FontWeight.SemiBold else FontWeight.Normal)
-                            Text(item.subtitle, style = MaterialTheme.typography.labelSmall)
+                            Text(item.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        navigationCount(controller, item)?.let { count ->
+                            Surface(color = if (selectedItem) MaterialTheme.colorScheme.surface.copy(alpha = 0.75f) else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
+                                Text(count.toString(), Modifier.padding(horizontal = 7.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }
-                Spacer(Modifier.height(5.dp))
+                Spacer(Modifier.height(6.dp))
             }
             Spacer(Modifier.weight(1f))
-            Text("所有配置与任务数据均保存在本地", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f), shape = RoundedCornerShape(13.dp)) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Outlined.Info, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("本地优先", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text("配置与任务均保存在本机", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
 private fun TopBar(controller: AppController, onCreate: () -> Unit) {
-    Surface(Modifier.fillMaxWidth().height(72.dp), shadowElevation = 1.dp) {
-        Row(Modifier.fillMaxSize().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+    Surface(
+        Modifier.fillMaxWidth().height(84.dp),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 28.dp), verticalAlignment = Alignment.CenterVertically) {
             Column {
-                Text(controller.navigation.title, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text(controller.navigation.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(controller.navigation.title, style = MaterialTheme.typography.headlineSmall)
+                Text(controller.navigation.pageDescription, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = controller::refresh, enabled = !controller.busy) {
                 Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("手动刷新")
+                Text("刷新状态")
             }
             Spacer(Modifier.width(10.dp))
             if (controller.navigation == NavigationItem.TASKS) Button(onClick = onCreate, enabled = !controller.needsTaskRoot) {
@@ -284,6 +326,20 @@ private fun TopBar(controller: AppController, onCreate: () -> Unit) {
         }
     }
 }
+
+private fun navigationCount(controller: AppController, item: NavigationItem): Int? = when (item) {
+    NavigationItem.TASKS -> controller.tasks.size
+    NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
+    NavigationItem.UAT, NavigationItem.SETTINGS -> null
+}
+
+private val NavigationItem.pageDescription: String
+    get() = when (this) {
+        NavigationItem.TASKS -> "集中查看任务状态、工作区与任务说明"
+        NavigationItem.SERVICES -> "按业务组管理仓库、模块和工作区策略"
+        NavigationItem.UAT -> "从已启用的工作区安全构建测试标签"
+        NavigationItem.SETTINGS -> "管理本地目录、业务组、Agent 说明与开发工具"
+    }
 
 @Composable
 private fun TasksScreen(controller: AppController, onCreate: () -> Unit) {
@@ -297,8 +353,27 @@ private fun TasksScreen(controller: AppController, onCreate: () -> Unit) {
         EmptyState("还没有研发任务", "从已配置的服务创建 Worktree 或独立克隆") { onCreate() }
         return
     }
-    Row(Modifier.fillMaxSize().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        TaskList(controller, Modifier.width(360.dp).fillMaxHeight())
+    Row(Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        Surface(
+            Modifier.width(372.dp).fillMaxHeight(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("任务列表", style = MaterialTheme.typography.titleMedium)
+                        Text("按更新时间排列", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
+                        Text("${controller.tasks.size} 个", Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                TaskList(controller, Modifier.fillMaxSize().padding(10.dp))
+            }
+        }
         controller.selectedTask?.let { TaskDetail(controller, it, Modifier.weight(1f).fillMaxHeight()) }
     }
 }
@@ -327,12 +402,17 @@ private fun TaskList(controller: AppController, modifier: Modifier) {
 
 @Composable
 private fun GroupHeader(name: String, count: Int, expanded: Boolean, onToggle: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (expanded) Icons.Outlined.KeyboardArrowDown else Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(17.dp))
-        Spacer(Modifier.width(7.dp))
-        Text(name, fontWeight = FontWeight.SemiBold)
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 8.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
+            Icon(if (expanded) Icons.Outlined.KeyboardArrowDown else Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.padding(3.dp).size(16.dp))
+        }
+        Spacer(Modifier.width(9.dp))
+        Text(name, style = MaterialTheme.typography.titleSmall)
         Spacer(Modifier.weight(1f))
-        Text(count.toString(), style = MaterialTheme.typography.labelSmall)
+        Text("$count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -340,17 +420,21 @@ private fun GroupHeader(name: String, count: Int, expanded: Boolean, onToggle: (
 private fun TaskCard(task: TaskManifest, selected: Boolean, onSelect: (TaskManifest) -> Unit) {
     ElevatedCard(
         Modifier.fillMaxWidth().clickable { onSelect(task) },
-        colors = androidx.compose.material3.CardDefaults.elevatedCardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f) else MaterialTheme.colorScheme.surface,
         ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 0.dp else 1.dp),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(task.folderName, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                StatusPill(task.status.name)
+        Row(Modifier.fillMaxWidth()) {
+            if (selected) Surface(Modifier.width(4.dp).height(88.dp), color = MaterialTheme.colorScheme.primary) {}
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(task.folderName, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    StatusPill(task.status.name)
+                }
+                Text(task.featureBranch, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${task.services.size} 个工作区", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(task.featureBranch, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("${task.services.size} 个工作区", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -361,43 +445,56 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
     var confirmArchive by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val group = controller.config.groups.firstOrNull { it.id == task.groupId }
-    Surface(modifier, shape = RoundedCornerShape(16.dp)) {
-        Column(Modifier.fillMaxSize().padding(22.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(task.folderName, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    if (controller.config.groups.size > 1) Text(group?.name ?: task.groupId, color = MaterialTheme.colorScheme.primary)
-                    Text(task.featureBranch, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Surface(
+        modifier,
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f), shape = RoundedCornerShape(16.dp)) {
+                Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(task.folderName, style = MaterialTheme.typography.headlineSmall)
+                        Text(task.featureBranch, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            StatusPill(task.status.name)
+                            if (controller.config.groups.size > 1) MetaPill(group?.name ?: task.groupId)
+                            MetaPill("${task.services.size} 个工作区")
+                        }
+                        if (task.requirementLink.isNotBlank()) {
+                            AssistChip(onClick = { controller.openUrl(task.requirementLink) }, label = {
+                                Text(controller.requirementStatuses[task.folderName]?.let { "飞书需求 · $it" } ?: "打开飞书需求")
+                            }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp)) })
+                        }
+                    }
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (task.status == WorkspaceStatus.ARCHIVED) {
+                            OutlinedButton(onClick = { controller.restoreTask(task) }) { Icon(Icons.Outlined.Restore, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("恢复") }
+                        } else {
+                            OutlinedButton(onClick = { confirmArchive = true }) { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("归档") }
+                        }
+                        TextButton(onClick = { confirmDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                            Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("删除任务")
+                        }
+                    }
                 }
-                if (task.status == WorkspaceStatus.ARCHIVED) {
-                    OutlinedButton(onClick = { controller.restoreTask(task) }) { Icon(Icons.Outlined.Restore, null); Text("恢复") }
-                } else {
-                    OutlinedButton(onClick = { confirmArchive = true }) { Icon(Icons.Outlined.Archive, null); Text("归档") }
-                }
-                Spacer(Modifier.width(8.dp))
-                IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Outlined.Delete, "删除", tint = MaterialTheme.colorScheme.error) }
             }
-            if (task.requirementLink.isNotBlank()) {
-                AssistChip(onClick = { controller.openUrl(task.requirementLink) }, label = {
-                    Text(controller.requirementStatuses[task.folderName]?.let { "飞书需求 · $it" } ?: "打开飞书需求")
-                }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp)) })
-            }
-            Text("工作区", fontWeight = FontWeight.Bold)
+            SectionHeader("工作区", "进入 IDE、终端或文件目录")
             task.services.forEach { WorkspaceCard(controller, it) }
-            HorizontalDivider()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.NoteAlt, null)
-                Spacer(Modifier.width(8.dp))
-                Text("任务人工说明", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(verticalAlignment = Alignment.Bottom) {
+                SectionHeader("任务人工说明", "仅保存 TASKWT:TASK-NOTES 人工区", Modifier.weight(1f))
                 TextButton(onClick = { controller.refreshTaskAgents(task) }) { Text("重新生成系统区") }
             }
-            Text("只编辑 TASKWT:TASK-NOTES 标记区；重新生成不会覆盖这里。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(notes, {
                 notes = it
                 controller.markTaskNotesEdited(task, it)
-            }, Modifier.fillMaxWidth(), minLines = 7, readOnly = controller.busy, label = { Text("Task notes") })
-            Button(onClick = { controller.saveTaskNotes(task, notes) }, enabled = !controller.busy) {
-                Icon(Icons.Outlined.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("保存任务说明")
+            }, Modifier.fillMaxWidth(), minLines = 4, maxLines = 6, readOnly = controller.busy, label = { Text("任务说明") })
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(onClick = { controller.saveTaskNotes(task, notes) }, enabled = !controller.busy) {
+                    Icon(Icons.Outlined.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("保存说明")
+                }
             }
         }
     }
@@ -412,16 +509,32 @@ private fun TaskDetail(controller: AppController, task: TaskManifest, modifier: 
 
 @Composable
 private fun WorkspaceCard(controller: AppController, workspace: ServiceWorkspace) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+    OutlinedCard(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(11.dp)) {
+                Icon(
+                    if (workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
+                    null,
+                    Modifier.padding(9.dp).size(19.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(workspace.moduleName.ifBlank { workspace.serviceName }, fontWeight = FontWeight.SemiBold)
-                Text("${workspace.serviceName} · ${workspace.strategy.displayName}", style = MaterialTheme.typography.labelSmall)
+                Text(workspace.moduleName.ifBlank { workspace.serviceName }, style = MaterialTheme.typography.titleSmall)
+                Text("${workspace.serviceName} · ${workspace.strategy.displayName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(workspace.branch, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (workspace.warnings.isNotEmpty()) Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
             }
             StatusPill(workspace.status.name)
-            IconButton(onClick = { controller.openWorkspace(workspace) }) { Icon(Icons.Outlined.Code, "用 IDE 打开") }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { controller.openWorkspace(workspace) }, enabled = workspace.status != WorkspaceStatus.ARCHIVED) {
+                Icon(Icons.Outlined.Code, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("打开 IDE")
+            }
             IconButton(onClick = { controller.terminal(workspace.worktreePath) }) { Icon(Icons.Outlined.Terminal, "终端") }
             IconButton(onClick = { controller.reveal(workspace.worktreePath) }) { Icon(Icons.Outlined.FolderOpen, "文件夹") }
         }
@@ -433,41 +546,68 @@ private fun ServicesScreen(controller: AppController) {
     var editTarget by remember { mutableStateOf<Pair<String, GroupServiceConfig>?>(null) }
     var addToGroup by remember { mutableStateOf<String?>(null) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
-    LazyColumn(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val serviceCount = controller.config.groups.sumOf { it.services.size }
+    val standardCount = controller.config.groups.sumOf { group -> group.services.count { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE } }
+    LazyColumn(
+        Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item(key = "service-overview") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MetricCard("业务组", controller.config.groups.size.toString(), "按业务边界组织", Modifier.weight(1f))
+                MetricCard("服务", serviceCount.toString(), "已配置仓库入口", Modifier.weight(1f))
+                MetricCard("Worktree", standardCount.toString(), "标准隔离工作区", Modifier.weight(1f))
+                MetricCard("独立克隆", (serviceCount - standardCount).toString(), "固定分支工作区", Modifier.weight(1f))
+            }
+        }
         controller.config.groups.forEach { group ->
             val isExpanded = controller.config.groups.size == 1 || expanded.getOrPut(group.id) { true }
             item(key = "group-${group.id}") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(
-                        Modifier.weight(1f).then(
-                            if (controller.config.groups.size > 1) {
-                                Modifier.clickable { expanded[group.id] = !isExpanded }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    ) {
-                        if (controller.config.groups.size > 1) Text(group.name, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                        else Text("服务列表", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                        Text("数组顺序即展示顺序", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (controller.config.groups.size > 1) {
-                        IconButton(onClick = { expanded[group.id] = !isExpanded }) {
-                            Icon(if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, "折叠业务组")
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), shape = RoundedCornerShape(11.dp)) {
+                            Icon(Icons.Outlined.Dns, null, Modifier.padding(9.dp).size(19.dp), tint = MaterialTheme.colorScheme.primary)
                         }
+                        Spacer(Modifier.width(12.dp))
+                        Column(
+                            Modifier.weight(1f).then(
+                                if (controller.config.groups.size > 1) Modifier.clickable { expanded[group.id] = !isExpanded } else Modifier,
+                            ),
+                        ) {
+                            Text(if (controller.config.groups.size > 1) group.name else "服务列表", style = MaterialTheme.typography.titleMedium)
+                            Text("${group.services.size} 个服务 · UAT Tag ${if (group.createTagEnabled) "已开启" else "已关闭"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (controller.config.groups.size > 1) {
+                            IconButton(onClick = { expanded[group.id] = !isExpanded }) {
+                                Icon(if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, "折叠业务组")
+                            }
+                        }
+                        Button(onClick = { addToGroup = group.id }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("添加仓库") }
                     }
-                    Button(onClick = { addToGroup = group.id }) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(5.dp)); Text("添加仓库") }
                 }
             }
             if (isExpanded && group.services.isEmpty()) item(key = "empty-${group.id}") {
-                OutlinedCard(Modifier.fillMaxWidth()) { Text("该组还没有服务", Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                OutlinedCard(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                    Row(Modifier.padding(22.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Info, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(9.dp))
+                        Text("该组还没有服务，添加一个 Git 仓库开始配置。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
             if (isExpanded) {
                 items(group.services, key = { "${group.id}-${it.id}" }) { service ->
+                    val index = group.services.indexOfFirst { it.id == service.id }
                     val repository = controller.config.repositories.firstOrNull { it.id == service.repositoryId }
                     ServiceCard(
                         service,
                         repository,
+                        canMoveUp = index > 0,
+                        canMoveDown = index in 0 until group.services.lastIndex,
                         onEdit = { editTarget = group.id to service },
                         onUp = { controller.moveService(group.id, service.id, -1) },
                         onDown = { controller.moveService(group.id, service.id, 1) },
@@ -489,28 +629,42 @@ private fun ServicesScreen(controller: AppController) {
 private fun ServiceCard(
     service: GroupServiceConfig,
     repository: RepositoryConfig?,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
     onEdit: () -> Unit,
     onUp: () -> Unit,
     onDown: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy, null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(service.displayName, fontWeight = FontWeight.Bold)
-                Text(repository?.rootPath ?: "仓库配置缺失", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                Text(
-                    if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个基础分支模块" else "独立克隆 · ${service.cloneDefaultBranch}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    ElevatedCard(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+    ) {
+        Row(Modifier.padding(horizontal = 17.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
+                Icon(
+                    if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
+                    null,
+                    Modifier.padding(10.dp).size(21.dp),
+                    tint = MaterialTheme.colorScheme.primary,
                 )
             }
-            Switch(service.enabled, null, enabled = false)
-            IconButton(onClick = onUp) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
-            IconButton(onClick = onDown) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
-            IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, "配置") }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(service.displayName, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.width(8.dp))
+                    MetaPill(service.strategy.displayName)
+                    if (!service.enabled) { Spacer(Modifier.width(6.dp)); MetaPill("已停用") }
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(repository?.rootPath ?: "仓库配置缺失", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个基础分支模块" else "默认分支 ${service.cloneDefaultBranch}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onUp, enabled = canMoveUp) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
+            IconButton(onClick = onDown, enabled = canMoveDown) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
+            OutlinedButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("配置") }
             IconButton(onClick = onRemove) { Icon(Icons.Outlined.Delete, "移除", tint = MaterialTheme.colorScheme.error) }
         }
     }
@@ -535,16 +689,62 @@ private fun UatScreen(controller: AppController) {
         EmptyState("暂无可构建的 UAT 入口", "组总开关与模块/克隆子开关需同时开启") { controller.navigation = NavigationItem.SERVICES }
         return
     }
-    LazyColumn(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(eligible, key = { (task, workspace) -> "${task.folderName}-${workspace.groupServiceId}-${workspace.moduleId}" }) { (task, workspace) ->
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(workspace.moduleName, fontWeight = FontWeight.Bold)
-                        Text("${task.folderName} · ${workspace.branch}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val grouped = eligible.groupBy { it.first }
+    LazyColumn(
+        Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        item(key = "uat-summary") {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(17.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), shape = RoundedCornerShape(12.dp)) {
+                        Icon(Icons.Outlined.Sell, null, Modifier.padding(10.dp), tint = MaterialTheme.colorScheme.primary)
                     }
-                    Button(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy && workspace.status != WorkspaceStatus.ARCHIVED) {
-                        Icon(Icons.Outlined.Sell, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("构建 Tag")
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("${eligible.size} 个可构建入口", style = MaterialTheme.typography.titleMedium)
+                        Text("仅展示组总开关和服务子开关同时启用的工作区", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    MetaPill("${grouped.size} 个任务")
+                }
+            }
+        }
+        grouped.forEach { (task, entries) ->
+            item(key = "uat-task-${task.taskDirectoryName}") {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(task.folderName, style = MaterialTheme.typography.titleMedium)
+                        Text(task.featureBranch, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("${entries.size} 个入口", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            items(entries, key = { (_, workspace) -> "${task.folderName}-${workspace.groupServiceId}-${workspace.moduleId}" }) { (_, workspace) ->
+                ElevatedCard(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+                ) {
+                    Row(Modifier.padding(horizontal = 17.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(11.dp)) {
+                            Icon(Icons.Outlined.AccountTree, null, Modifier.padding(9.dp).size(19.dp), tint = MaterialTheme.colorScheme.primary)
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(workspace.moduleName, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.width(8.dp))
+                                StatusPill(workspace.status.name)
+                            }
+                            Text("${workspace.serviceName} · ${workspace.branch}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Button(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy && workspace.status != WorkspaceStatus.ARCHIVED) {
+                            Icon(Icons.Outlined.Sell, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("构建 Tag")
+                        }
                     }
                 }
             }
@@ -564,17 +764,25 @@ private fun SettingsScreen(controller: AppController) {
     var globalAgents by remember(controller.agentRevision) { mutableStateOf(controller.readGlobalAgents()) }
     var groupAgents by remember(agentGroupId, controller.agentRevision) { mutableStateOf(controller.readGroupAgents(agentGroupId)) }
 
-    LazyColumn(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item {
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier.widthIn(max = 1080.dp).fillMaxHeight().align(Alignment.TopCenter).padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
             SettingsCard("基础设置", "启动只读取这些本地配置，不扫描仓库。") {
                 PathField("任务根目录", taskRoot, { taskRoot = it }, onChoose = { chooseDirectory("选择任务根目录")?.let { taskRoot = it } })
-                Button(onClick = { controller.updateTaskRoot(taskRoot) }, enabled = taskRoot.isNotBlank()) { Text("保存任务目录") }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ThemePreference.entries.forEach { theme -> FilterChip(controller.config.theme == theme, { controller.setTheme(theme) }, label = { Text(theme.displayName) }) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("界面主题", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.width(14.dp))
+                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThemePreference.entries.forEach { theme -> FilterChip(controller.config.theme == theme, { controller.setTheme(theme) }, label = { Text(theme.displayName) }) }
+                    }
+                    Button(onClick = { controller.updateTaskRoot(taskRoot) }, enabled = taskRoot.isNotBlank()) { Text("保存目录") }
                 }
             }
-        }
-        item {
+            }
+            item {
             SettingsCard("业务组", "组和组内服务均按数组顺序展示；只能删除没有服务和任务的空组。") {
                 if (controller.config.groups.size == 1) {
                     val group = controller.config.groups.single()
@@ -605,38 +813,56 @@ private fun SettingsScreen(controller: AppController) {
                         }
                     }
                 }
-                OutlinedButton(onClick = { newGroup = true }) { Icon(Icons.Outlined.Add, null); Text("创建组") }
-            }
-        }
-        item {
-            SettingsCard("Agent 说明", "磁盘中的全局/组 AGENTS.md 是唯一准确来源，保存后会同步相关任务。") {
-                Text("全局说明", fontWeight = FontWeight.SemiBold)
-                OutlinedTextField(globalAgents, {
-                    globalAgents = it
-                    controller.markGlobalAgentsEdited(it)
-                }, Modifier.fillMaxWidth(), minLines = 5, readOnly = controller.busy)
-                Button(onClick = { controller.saveGlobalAgents(globalAgents) }, enabled = !controller.busy) { Text("保存全局 AGENTS.md") }
-                HorizontalDivider()
-                if (controller.config.groups.size > 1) FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    controller.config.groups.forEach { group -> FilterChip(agentGroupId == group.id, {
-                        agentGroupId = group.id
-                        groupAgents = controller.readGroupAgents(group.id)
-                    }, label = { Text(group.name) }) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    OutlinedButton(onClick = { newGroup = true }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("创建业务组") }
                 }
-                Text(if (controller.config.groups.size > 1) "组说明" else "当前服务说明", fontWeight = FontWeight.SemiBold)
-                OutlinedTextField(groupAgents, {
-                    groupAgents = it
-                    controller.markGroupAgentsEdited(agentGroupId, it)
-                }, Modifier.fillMaxWidth(), minLines = 5, readOnly = controller.busy)
-                Button(onClick = { controller.saveGroupAgents(agentGroupId, groupAgents) }, enabled = !controller.busy) { Text("保存组 AGENTS.md") }
             }
-        }
-        item {
+            }
+            item {
+            SettingsCard("Agent 说明", "磁盘中的全局/组 AGENTS.md 是唯一准确来源，保存后会同步相关任务。") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("全局说明", style = MaterialTheme.typography.titleSmall)
+                        Text("对所有任务生效", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedTextField(globalAgents, {
+                            globalAgents = it
+                            controller.markGlobalAgentsEdited(it)
+                        }, Modifier.fillMaxWidth(), minLines = 7, readOnly = controller.busy)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Button(onClick = { controller.saveGlobalAgents(globalAgents) }, enabled = !controller.busy) { Text("保存全局说明") }
+                        }
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (controller.config.groups.size > 1) "组说明" else "当前服务说明", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            if (controller.config.groups.size > 1) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                controller.config.groups.forEach { group -> FilterChip(agentGroupId == group.id, {
+                                    agentGroupId = group.id
+                                    groupAgents = controller.readGroupAgents(group.id)
+                                }, label = { Text(group.name) }) }
+                            }
+                        }
+                        Text("仅对当前业务组的任务生效", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedTextField(groupAgents, {
+                            groupAgents = it
+                            controller.markGroupAgentsEdited(agentGroupId, it)
+                        }, Modifier.fillMaxWidth(), minLines = 7, readOnly = controller.busy)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Button(onClick = { controller.saveGroupAgents(agentGroupId, groupAgents) }, enabled = !controller.busy) { Text("保存组说明") }
+                        }
+                    }
+                }
+            }
+            }
+            item {
             SettingsCard("开发工具", "留空时不会尝试启动对应工具。") {
                 PathField("IntelliJ IDEA", idea, { idea = it }, onChoose = { chooseFile("选择 IDEA 可执行文件")?.let { idea = it } })
                 PathField("WebStorm", webStorm, { webStorm = it }, onChoose = { chooseFile("选择 WebStorm 可执行文件")?.let { webStorm = it } })
                 PathField("终端", terminal, { terminal = it }, onChoose = { chooseFile("选择终端可执行文件")?.let { terminal = it } })
-                Button(onClick = { controller.updateExecutables(idea, webStorm, terminal) }) { Text("保存工具配置") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(onClick = { controller.updateExecutables(idea, webStorm, terminal) }) { Text("保存工具配置") }
+                }
+            }
             }
         }
     }
@@ -650,10 +876,23 @@ private fun SettingsScreen(controller: AppController) {
 
 @Composable
 private fun SettingsCard(title: String, subtitle: String, content: @Composable ColumnScope.() -> Unit) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-            Text(title, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    OutlinedCard(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(10.dp)) {
+                    Text(title.take(1), Modifier.padding(horizontal = 11.dp, vertical = 7.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.width(11.dp))
+                Column {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             content()
         }
     }
@@ -685,34 +924,66 @@ private fun CreateTaskDialog(
         controller.previewAgents(name, branch, groupId, selected, overrides.toMap(), notes)
     }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(Modifier.widthIn(min = 1050.dp, max = 1200.dp).heightIn(min = 680.dp, max = 820.dp), shape = RoundedCornerShape(20.dp)) {
-            Column(Modifier.fillMaxSize().padding(22.dp)) {
-                Text("创建研发任务", fontSize = 23.sp, fontWeight = FontWeight.Bold)
-                Text("预览会实时合成全局、组和任务三级说明。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(14.dp))
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, singleLine = true)
-                        OutlinedTextField(branch, { branch = it }, Modifier.fillMaxWidth(), label = { Text("任务分支") }, singleLine = true)
+        Surface(
+            Modifier.widthIn(min = 1080.dp, max = 1220.dp).heightIn(min = 700.dp, max = 840.dp),
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(12.dp)) {
+                            Icon(Icons.Outlined.Add, null, Modifier.padding(10.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                        Spacer(Modifier.width(13.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("创建研发任务", style = MaterialTheme.typography.headlineSmall)
+                            Text("选择业务组和服务，并实时确认最终 AGENTS.md", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        MetaPill("已选 ${selected.size} 个服务")
+                    }
+                }
+                Row(Modifier.weight(1f).padding(20.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Surface(
+                        Modifier.weight(1f).fillMaxHeight(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
+                        shape = RoundedCornerShape(15.dp),
+                    ) {
+                    Column(Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                        SectionHeader("任务信息", "名称和分支将用于创建任务目录与 Git 分支")
+                        OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, placeholder = { Text("例如：PAY-1024 支付订单优化") }, singleLine = true)
+                        OutlinedTextField(branch, { branch = it }, Modifier.fillMaxWidth(), label = { Text("任务分支") }, placeholder = { Text("例如：feature/PAY-1024") }, singleLine = true)
                         OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth(), label = { Text("飞书需求链接（可选）") }, singleLine = true)
                         if (controller.config.groups.size > 1) {
-                            Text("所属业务组", fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(2.dp))
+                            SectionHeader("所属业务组", "任务创建后归属不可自动迁移")
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                                 controller.config.groups.forEach { candidate -> FilterChip(groupId == candidate.id, {
                                     groupId = candidate.id; selected = emptySet(); overrides.clear()
                                 }, label = { Text(candidate.name) }) }
                             }
                         }
-                        Text("服务", fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(2.dp))
+                        SectionHeader("选择服务", "标准服务创建 Worktree，独立克隆直接切换配置分支")
                         group.services.filter { it.enabled }.forEach { service ->
                             val checked = service.id in selected
-                            OutlinedCard(Modifier.fillMaxWidth().clickable { selected = if (checked) selected - service.id else selected + service.id }) {
-                                Column(Modifier.padding(10.dp)) {
+                            OutlinedCard(
+                                Modifier.fillMaxWidth().clickable { selected = if (checked) selected - service.id else selected + service.id },
+                                colors = CardDefaults.outlinedCardColors(
+                                    containerColor = if (checked) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surface,
+                                ),
+                                border = BorderStroke(1.dp, if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant),
+                            ) {
+                                Column(Modifier.padding(11.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Checkbox(checked, { selected = if (checked) selected - service.id else selected + service.id })
                                         Column(Modifier.weight(1f)) {
-                                            Text(service.displayName, fontWeight = FontWeight.Medium)
-                                            Text(service.strategy.displayName, style = MaterialTheme.typography.labelSmall)
+                                            Text(service.displayName, style = MaterialTheme.typography.titleSmall)
+                                            Text(
+                                                if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个模块 · ${service.strategy.displayName}" else "默认 ${service.cloneDefaultBranch} · ${service.strategy.displayName}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
                                         }
                                     }
                                     if (checked && service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
@@ -727,24 +998,40 @@ private fun CreateTaskDialog(
                                 }
                             }
                         }
+                        Spacer(Modifier.height(2.dp))
+                        SectionHeader("任务说明", "只写入任务级人工说明区，可在详情页继续编辑")
                         OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("任务人工说明") }, minLines = 5)
                     }
-                    Column(Modifier.weight(1f).fillMaxHeight()) {
-                        Text("AGENTS.md 完整预览", fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(8.dp))
-                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
-                            Text(preview, Modifier.padding(13.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SectionHeader("AGENTS.md 完整预览", "系统信息、全局、组和任务说明的最终合成结果", Modifier.weight(1f))
+                            MetaPill("实时更新")
+                        }
+                        Surface(
+                            Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        ) {
+                            Text(preview, Modifier.padding(15.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
-                Spacer(Modifier.height(14.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (selected.isEmpty()) "至少选择一个服务" else "将创建 ${selected.size} 个服务入口",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (selected.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     TextButton(onClick = onDismiss) { Text("取消") }
                     Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = { onCreate(name, branch, groupId, selected.toList(), link, overrides.toMap(), notes) },
                         enabled = name.isNotBlank() && branch.isNotBlank() && selected.isNotEmpty() && !controller.busy,
-                    ) { Text("创建任务") }
+                    ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
                 }
             }
         }
@@ -790,15 +1077,37 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
     var bootstrapText by remember { mutableStateOf(json.encodeToString(service.bootstrap)) }
     var bootstrapError by remember { mutableStateOf<String?>(null) }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(Modifier.widthIn(min = 760.dp, max = 900.dp).heightIn(max = 780.dp), shape = RoundedCornerShape(20.dp)) {
-            Column(Modifier.padding(22.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("服务配置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Surface(
+            Modifier.widthIn(min = 780.dp, max = 920.dp).heightIn(min = 620.dp, max = 820.dp),
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 17.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(11.dp)) {
+                        Icon(Icons.Outlined.Settings, null, Modifier.padding(10.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("服务配置", style = MaterialTheme.typography.titleLarge)
+                        Text(service.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    MetaPill(strategy.displayName)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    Modifier.weight(1f).padding(20.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                SectionHeader("基础信息", "配置显示名称、启用状态与默认 IDE")
                 OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("展示名称") })
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("启用"); Switch(enabled, { enabled = it })
+                    Text("启用服务", style = MaterialTheme.typography.titleSmall); Switch(enabled, { enabled = it })
+                    Spacer(Modifier.width(8.dp))
                     IdeType.entries.forEach { value -> FilterChip(ide == value, { ide = value }, label = { Text(value.name) }) }
                 }
-                Text("工作区策略", fontWeight = FontWeight.SemiBold)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SectionHeader("工作区策略", "决定新任务如何准备该服务的代码目录")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     WorkspaceStrategy.entries.forEach { value -> FilterChip(strategy == value, { strategy = value }, label = { Text(value.displayName) }) }
                 }
@@ -830,7 +1139,10 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
                         OutlinedTextField(cloneMessagePrefix, { cloneMessagePrefix = it }, Modifier.fillMaxWidth(), label = { Text("Tag 消息前缀") })
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    Text("修改仅影响后续任务", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick = onDismiss) { Text("取消") }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
@@ -850,7 +1162,7 @@ private fun ServiceEditorDialog(service: GroupServiceConfig, onDismiss: () -> Un
                                 bootstrap = bootstrap,
                             )
                         }.onSuccess(onSave).onFailure { bootstrapError = it.message }
-                    }, enabled = name.isNotBlank() && (strategy != WorkspaceStrategy.INDEPENDENT_CLONE || cloneBranch.isNotBlank()) && (strategy != WorkspaceStrategy.STANDARD_WORKTREE || modules.isNotEmpty())) { Text("保存") }
+                    }, enabled = name.isNotBlank() && (strategy != WorkspaceStrategy.INDEPENDENT_CLONE || cloneBranch.isNotBlank()) && (strategy != WorkspaceStrategy.STANDARD_WORKTREE || modules.isNotEmpty())) { Icon(Icons.Outlined.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("保存配置") }
                 }
             }
         }
@@ -930,20 +1242,77 @@ private fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, on
 @Composable
 private fun EmptyState(title: String, subtitle: String, action: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(Icons.Outlined.Workspaces, null, Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary)
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button(onClick = action) { Text("继续") }
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(
+                Modifier.padding(horizontal = 48.dp, vertical = 38.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(11.dp),
+            ) {
+                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp)) {
+                    Icon(Icons.Outlined.Workspaces, null, Modifier.padding(15.dp).size(34.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(4.dp))
+                Button(onClick = action) { Text("继续") }
+            }
         }
     }
 }
 
 @Composable
 private fun StatusPill(text: String) {
-    Surface(color = MaterialTheme.colorScheme.statusColor(text).copy(alpha = 0.13f), shape = RoundedCornerShape(50)) {
-        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.statusColor(text), style = MaterialTheme.typography.labelSmall)
+    val color = MaterialTheme.colorScheme.statusColor(text)
+    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.18f))) {
+        Text(statusLabel(text), Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color, style = MaterialTheme.typography.labelSmall)
     }
+}
+
+@Composable
+private fun MetaPill(text: String) {
+    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), shape = RoundedCornerShape(50)) {
+        Text(text, Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, subtitle: String, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun MetricCard(title: String, value: String, caption: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier,
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(15.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, fontSize = 23.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Text(caption, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun statusLabel(status: String): String = when (status) {
+    "CREATING" -> "创建中"
+    "READY" -> "就绪"
+    "READY_WITH_WARNINGS" -> "有警告"
+    "FAILED" -> "失败"
+    "ARCHIVED" -> "已归档"
+    "SUCCESS" -> "成功"
+    "CONFLICT" -> "有冲突"
+    "PARTIAL" -> "部分完成"
+    else -> status
 }
 
 private val WorkspaceStrategy.displayName: String
