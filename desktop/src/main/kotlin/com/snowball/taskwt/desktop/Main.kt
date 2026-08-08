@@ -675,11 +675,10 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(
+        Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(11.dp)) {
                     Icon(
                         if (workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
@@ -703,38 +702,37 @@ private fun WorkspaceCard(controller: AppController, task: TaskManifest, workspa
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        workspace.branch,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            workspace.branch,
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        IconButton(onClick = { controller.terminal(workspace.worktreePath) }) { Icon(Icons.Outlined.Terminal, "终端") }
+                        IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }) { Icon(Icons.Outlined.FolderOpen, "打开文件夹") }
+                        IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }) { Icon(Icons.Outlined.ContentCopy, "复制路径") }
+                        if (controller.canBuildTag(task, workspace)) {
+                            OutlinedButton(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy) {
+                                Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("UAT Tag")
+                            }
+                        }
+                        OutlinedButton(onClick = { controller.openWorkspace(workspace) }, enabled = workspace.status != WorkspaceStatus.ARCHIVED) {
+                            Icon(Icons.Outlined.Code, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("打开 IDE")
+                        }
+                        if (workspace.status == WorkspaceStatus.FAILED && workspace.groupServiceId.isNotBlank()) {
+                            OutlinedButton(onClick = { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) }, enabled = !controller.busy) {
+                                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重试")
+                            }
+                        }
+                    }
                     if (workspace.warnings.isNotEmpty()) {
                         Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 StatusPill(workspace.status.name)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { controller.terminal(workspace.worktreePath) }) { Icon(Icons.Outlined.Terminal, "终端") }
-                IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }) { Icon(Icons.Outlined.FolderOpen, "打开文件夹") }
-                IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }) { Icon(Icons.Outlined.ContentCopy, "复制路径") }
-                Spacer(Modifier.weight(1f))
-                if (controller.canBuildTag(task, workspace)) {
-                    OutlinedButton(onClick = { controller.buildTag(task, workspace) }, enabled = !controller.busy) {
-                        Icon(Icons.Outlined.Sell, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("UAT Tag")
-                    }
-                }
-                OutlinedButton(onClick = { controller.openWorkspace(workspace) }, enabled = workspace.status != WorkspaceStatus.ARCHIVED) {
-                    Icon(Icons.Outlined.Code, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("打开 IDE")
-                }
-                if (workspace.status == WorkspaceStatus.FAILED && workspace.groupServiceId.isNotBlank()) {
-                    OutlinedButton(onClick = { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) }, enabled = !controller.busy) {
-                        Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重试")
-                    }
-                }
-            }
         }
     }
 }
