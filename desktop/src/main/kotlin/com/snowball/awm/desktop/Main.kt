@@ -111,7 +111,6 @@ import com.snowball.awm.core.IdeType
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
 import com.snowball.awm.core.GroupConfig
-import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ServiceModuleConfig
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
@@ -964,8 +963,6 @@ private fun SettingsScreen(controller: DesktopApplication) {
     var idea by remember(controller.config.ideaExecutable) { mutableStateOf(controller.config.ideaExecutable.orEmpty()) }
     var webStorm by remember(controller.config.webStormExecutable) { mutableStateOf(controller.config.webStormExecutable.orEmpty()) }
     var terminal by remember(controller.config.terminalExecutable) { mutableStateOf(controller.config.terminalExecutable.orEmpty()) }
-    var advancedExpanded by remember { mutableStateOf(false) }
-    val meegleProjects = remember(controller.config.meegleProjects) { mutableStateMapOf<Int, MeegleProjectConfig>().apply { controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) } } }
     var newGroup by remember { mutableStateOf(false) }
     var renameGroup by remember { mutableStateOf<GroupConfig?>(null) }
     var agentGroupId by remember(controller.config.groups) { mutableStateOf(controller.config.groups.first().id) }
@@ -1090,31 +1087,6 @@ private fun SettingsScreen(controller: DesktopApplication) {
                 PathField("终端", terminal, { terminal = it }, !controller.pathPickerBusy) { controller.chooseFile(terminal) { terminal = it } }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Button(onClick = { controller.updateExecutables(idea, webStorm, terminal) }) { Text("保存工具配置") }
-                }
-            }
-            }
-            item {
-            SettingsCard("高级设置", "配置创建任务时可自动拉取的飞书需求链接来源。") {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("飞书需求链接来源", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                    Switch(advancedExpanded, { advancedExpanded = it })
-                }
-                if (advancedExpanded) {
-                    meegleProjects.toSortedMap().forEach { (index, project) ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(project.projectKey, { value -> meegleProjects[index] = project.copy(projectKey = value) }, Modifier.weight(1f), label = { Text("project_key") }, singleLine = true)
-                            OutlinedTextField(project.simpleName, { value -> meegleProjects[index] = project.copy(simpleName = value) }, Modifier.weight(1f), label = { Text("simple_name") }, singleLine = true)
-                            IconButton(onClick = { meegleProjects.remove(index) }) { Icon(Icons.Outlined.Delete, "删除空间") }
-                        }
-                    }
-                    OutlinedButton(onClick = { meegleProjects[(meegleProjects.keys.maxOrNull() ?: -1) + 1] = MeegleProjectConfig("space-key", "space-name") }) { Icon(Icons.Outlined.Add, null); Text("添加空间") }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("创建任务时自动拉取飞书需求链接", Modifier.weight(1f))
-                        Switch(controller.config.meegleAutoLoadRequirementLinks, { checked -> controller.updateMeegleSettings(meegleProjects.toSortedMap().values.toList(), checked) })
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Button(onClick = { controller.updateMeegleSettings(meegleProjects.toSortedMap().values.toList(), controller.config.meegleAutoLoadRequirementLinks) }) { Text("保存飞书需求配置") }
-                    }
                 }
             }
             }
@@ -1273,7 +1245,6 @@ private fun CreateTaskDialog(
             draft = draft.applyMetadata(requestedLink, metadata)
         }
     }
-    LaunchedEffect(Unit) { controller.loadAutoRequirementLinks() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.90f).widthIn(max = 1540.dp),
@@ -1315,33 +1286,6 @@ private fun CreateTaskDialog(
                             },
                             singleLine = true,
                         )
-                        if (controller.requirementLinksLoading) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("正在拉取飞书需求链接", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        val matchingLinks = controller.requirementLinkCandidates.filter {
-                            draft.requirementLink.isBlank() || it.title.contains(draft.requirementLink, true) || it.url.contains(draft.requirementLink, true)
-                        }
-                        if (matchingLinks.isNotEmpty()) {
-                            Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
-                                Column(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState())) {
-                                    matchingLinks.forEach { candidate ->
-                                        TextButton(
-                                            onClick = { draft = draft.changeRequirement(candidate.url, group.defaultBranchPrefix) },
-                                            modifier = Modifier.fillMaxWidth(),
-                                        ) {
-                                            Column(Modifier.fillMaxWidth()) {
-                                                Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                Text(candidate.url, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                         OutlinedTextField(draft.taskName, { draft = draft.editName(it) }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, placeholder = { Text("例如：PAY-1024 支付订单优化") }, singleLine = true)
                         OutlinedTextField(
                             draft.branch,
