@@ -21,6 +21,7 @@ import com.snowball.awm.core.MeegleRequirementMetadataProvider
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.MeegleRequirementLinkSource
 import com.snowball.awm.core.RequirementLinkCandidate
+import com.snowball.awm.core.RequirementLinkFailure
 import com.snowball.awm.core.RequirementLinkFailureLog
 import com.snowball.awm.core.FeishuWorkItemLink
 import com.snowball.awm.core.GitRepositoryInspector
@@ -296,10 +297,22 @@ class DesktopApplication(
         if (config.meegleProjects.isEmpty() || requirementLinksLoading) return
         requirementLinksLoading = true
         scope.launch {
-            val result = withContext(ioDispatcher) { requirementLinkSource.load(config.meegleProjects) }
-            result.failures.forEach(requirementLinkFailures::record)
-            requirementLinkCandidates = result.candidates
-            requirementLinksLoading = false
+            try {
+                val result = withContext(ioDispatcher) { requirementLinkSource.load(config.meegleProjects) }
+                result.failures.forEach(requirementLinkFailures::record)
+                requirementLinkCandidates = result.candidates
+            } catch (error: Exception) {
+                // Loading failures must not leave the create dialog permanently busy.
+                // Details stay in the local diagnostic log rather than surfacing raw CLI output.
+                requirementLinkFailures.record(
+                    RequirementLinkFailure(
+                        stage = "desktop-load",
+                        message = error.message ?: error::class.simpleName.orEmpty(),
+                    ),
+                )
+            } finally {
+                requirementLinksLoading = false
+            }
         }
     }
 
