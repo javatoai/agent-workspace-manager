@@ -1100,7 +1100,7 @@ private fun SettingsScreen(controller: DesktopApplication) {
             SettingsCard("高级设置", "用于放置不影响日常任务管理的扩展配置。") {
                 Text("飞书需求项目", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "保存 project_key 和 simple_name，供后续飞书需求来源使用。当前不会自动拉取需求链接。",
+                    "保存 project_key 和 simple_name。创建任务时会自动拉取一次已配置项目中的飞书需求链接。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1301,6 +1301,7 @@ private fun CreateTaskDialog(
             draft = draft.applyMetadata(requestedLink, metadata)
         }
     }
+    LaunchedEffect(Unit) { controller.loadAutoRequirementLinks() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.90f).widthIn(max = 1540.dp),
@@ -1342,6 +1343,48 @@ private fun CreateTaskDialog(
                             },
                             singleLine = true,
                         )
+                        if (controller.requirementLinksLoading) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("正在拉取飞书需求链接", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        val matchingLinks = controller.requirementLinkCandidates.filter {
+                            draft.requirementLink.isBlank() ||
+                                it.title.contains(draft.requirementLink, true) ||
+                                it.url.contains(draft.requirementLink, true)
+                        }
+                        if (matchingLinks.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            ) {
+                                Column(
+                                    Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState()),
+                                ) {
+                                    matchingLinks.forEach { candidate ->
+                                        TextButton(
+                                            onClick = {
+                                                draft = draft.changeRequirement(candidate.url, group.defaultBranchPrefix)
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Column(Modifier.fillMaxWidth()) {
+                                                Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Text(
+                                                    candidate.url,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         OutlinedTextField(draft.taskName, { draft = draft.editName(it) }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, placeholder = { Text("例如：PAY-1024 支付订单优化") }, singleLine = true)
                         OutlinedTextField(
                             draft.branch,

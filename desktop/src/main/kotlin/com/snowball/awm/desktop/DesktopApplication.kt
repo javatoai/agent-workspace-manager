@@ -19,6 +19,9 @@ import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
 import com.snowball.awm.core.MeegleRequirementMetadataProvider
 import com.snowball.awm.core.MeegleProjectConfig
+import com.snowball.awm.core.MeegleRequirementLinkSource
+import com.snowball.awm.core.RequirementLinkCandidate
+import com.snowball.awm.core.RequirementLinkFailureLog
 import com.snowball.awm.core.FeishuWorkItemLink
 import com.snowball.awm.core.GitRepositoryInspector
 import com.snowball.awm.core.GroupConfigurationService
@@ -131,6 +134,8 @@ class DesktopApplication(
     private val uatDelivery: UatTagDeliveryAdapter = UatTagDeliveryAdapter(TagBuildService(paths = paths)),
     val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(uatDelivery)),
     private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(),
+    private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(),
+    private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader()),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
@@ -215,6 +220,10 @@ class DesktopApplication(
         private set
     private var gitStatusRevision = 0L
     private var metadataJob: Job? = null
+    var requirementLinkCandidates by mutableStateOf<List<RequirementLinkCandidate>>(emptyList())
+        private set
+    var requirementLinksLoading by mutableStateOf(false)
+        private set
 
     val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
     val showsUatNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
@@ -272,6 +281,21 @@ class DesktopApplication(
         }
     }
 
+    /**
+     * Loads configured Feishu links once per create-task dialog.  The project
+     * list is the explicit opt-in, so no separate on/off switch is needed.
+     */
+    fun loadAutoRequirementLinks() {
+        if (config.meegleProjects.isEmpty() || requirementLinksLoading) return
+        requirementLinksLoading = true
+        scope.launch {
+            val result = withContext(ioDispatcher) { requirementLinkSource.load(config.meegleProjects) }
+            result.failures.forEach(requirementLinkFailures::record)
+            requirementLinkCandidates = result.candidates
+            requirementLinksLoading = false
+        }
+    }
+
     fun refreshCurrentTaskGitStatus() {
         val task = selectedTask ?: run {
             workspaceGitHealth = emptyMap()
@@ -309,6 +333,7 @@ class DesktopApplication(
     }
 
     init {
+        requirementLinkFailures.cleanup()
         // Register authoritative global/group files without invoking Git or a
         // remote integration. Subsequent external writes can then propagate
         // even if the user never opens the Settings editor.
