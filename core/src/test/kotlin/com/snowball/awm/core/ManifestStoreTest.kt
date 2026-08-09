@@ -40,7 +40,7 @@ class ManifestStoreTest {
 
         store.save(directory, expected)
 
-        assertEquals(5, store.load(directory).schemaVersion)
+        assertEquals("0.4.0", store.load(directory).schemaVersion)
         assertEquals(expected, store.load(directory))
     }
 

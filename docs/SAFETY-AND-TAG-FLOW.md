@@ -36,7 +36,7 @@
 
 ## Tag 规则
 
-桌面端只展示同时通过两级开关的 Tag 入口：任务所属组的 `uatTagEnabled` 为开，且对应标准模块的 `uatTagEnabled` 或独立克隆的 `cloneUatTagEnabled` 为开。独立克隆以任务中实际检出的分支参与 UAT，不会为 Tag 再创建 Feature 分支。
+桌面端只展示同时通过两级开关的 Tag 入口：任务所属组的 `uatTagEnabled` 为开，且对应标准模块或独立克隆模块的 `uatTagEnabled` 为开。独立克隆以任务中模块配置的固定分支参与 UAT，不会为 Tag 再创建 Feature 分支。
 
 有效格式：
 

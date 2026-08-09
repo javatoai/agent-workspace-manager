@@ -9,6 +9,7 @@ import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.GroupConfig
+import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.TaskManifest
@@ -74,7 +75,6 @@ class DesktopApplicationTest {
                 branch = "feature/task-1",
                 groupId = "g",
                 serviceIds = setOf("service"),
-                cloneOverrides = emptyMap(),
                 requirementLink = "REQ-123 raw requirement",
                 notes = "notes",
             )
@@ -171,7 +171,7 @@ class DesktopApplicationTest {
             displayName = "Clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "origin/main",
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/main")),
         )
         store.save(AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("g", "G", services = listOf(service)))))
         var requests = 0
@@ -191,14 +191,14 @@ class DesktopApplicationTest {
         try {
             assertEquals(0, requests)
             controller.loadRemoteBranches("repo")
-            assertIs<RemoteBranchesState.Loading>(controller.remoteBranches["repo"])
+            assertIs<RemoteBranchesState.Loading>(controller.remoteBranchState("repo", "origin"))
             advanceUntilIdle()
-            assertEquals(listOf("origin/main", "origin/release/test"), assertIs<RemoteBranchesState.Loaded>(controller.remoteBranches["repo"]).branches)
+            assertEquals(listOf("origin/main", "origin/release/test"), assertIs<RemoteBranchesState.Loaded>(controller.remoteBranchState("repo", "origin")).branches)
             shouldFail = true
             controller.loadRemoteBranches("repo", force = true)
-            assertIs<RemoteBranchesState.Loading>(controller.remoteBranches["repo"])
+            assertIs<RemoteBranchesState.Loading>(controller.remoteBranchState("repo", "origin"))
             advanceUntilIdle()
-            assertEquals("offline", assertIs<RemoteBranchesState.Failed>(controller.remoteBranches["repo"]).message)
+            assertEquals("offline", assertIs<RemoteBranchesState.Failed>(controller.remoteBranchState("repo", "origin")).message)
         } finally {
             controller.close()
             Dispatchers.resetMain()

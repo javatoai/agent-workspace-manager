@@ -55,14 +55,13 @@ class TaskApplicationServiceTest {
                 groupId = "alpha",
                 serviceIds = listOf("standard", "clone"),
                 requirementLink = "https://example.test/task/20",
-                cloneBranchOverrides = mapOf("clone" to "origin/release/fixed"),
                 taskNotes = "only edit the API module",
             ),
         )
 
         assertEquals("alpha", manifest.groupId)
         assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.strategy })
-        assertEquals("origin/release/fixed", clone.requests.single().cloneBranchOverride)
+        assertEquals("origin/master", clone.requests.single().service.cloneModules.single().branch)
         assertEquals(2, manifest.services.size)
         assertEquals("2026-08-08 08:00:00", manifest.createdAt)
         assertEquals("2026-08-08 08:00:00", manifest.updatedAt)
@@ -115,13 +114,12 @@ class TaskApplicationServiceTest {
             taskDirectory,
             AddGroupedTaskServicesRequest(
                 serviceIds = listOf("clone"),
-                cloneBranchOverrides = mapOf("clone" to "origin/release/test"),
             ),
         )
 
         assertEquals(listOf("clone"), updated.services.map(ServiceWorkspace::groupServiceId))
         assertEquals("feature/task-20", clone.requests.single().requestedFeatureBranch)
-        assertEquals("origin/release/test", clone.requests.single().cloneBranchOverride)
+        assertEquals("origin/master", clone.requests.single().service.cloneModules.single().branch)
         assertEquals("2026-08-08 09:02:03", updated.updatedAt)
         assertEquals(null, documents.lastNotes)
     }
@@ -356,7 +354,7 @@ private fun taskConfig(taskRoot: Path): AppConfig {
                         displayName = "Repo B",
                         strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
                         modules = emptyList(),
-                        cloneDefaultBranch = "origin/master",
+                        cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master")),
                     ),
                 ),
             ),
@@ -381,7 +379,7 @@ private class RecordingProvisioner(
                 repositoryPath = request.repository.rootPath,
                 worktreePath = request.taskDirectory.resolve(request.service.id).toString(),
                 ideType = request.service.ideType,
-                branch = request.cloneBranchOverride ?: request.requestedFeatureBranch.orEmpty(),
+                branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.cloneModules.first().branch.removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
                 status = WorkspaceStatus.READY,
                 groupServiceId = request.service.id,
                 strategy = strategy,

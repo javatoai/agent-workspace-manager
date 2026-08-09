@@ -34,6 +34,8 @@ import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RepositoryInfo
 import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RemoteBranchCatalog
+import com.snowball.awm.core.RemoteBranchRef
+import com.snowball.awm.core.ModuleDisplayNaming
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.fetch
 import com.snowball.awm.core.RequirementParticipants
@@ -348,7 +350,9 @@ class DesktopApplication(
             WorkspaceStrategy.STANDARD_WORKTREE -> service.modules
                 .firstOrNull { it.id == workspace.moduleId }
                 ?.uatTagEnabled == true
-            WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneUatTagEnabled
+            WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules
+                .firstOrNull { it.id == workspace.moduleId }
+                ?.uatTagEnabled == true
         }
     }
 
@@ -479,23 +483,27 @@ class DesktopApplication(
         }
     }
 
-    /** Loads origin heads on demand. No startup path calls this method. */
-    fun loadRemoteBranches(repositoryId: String, force: Boolean = false) {
-        val current = remoteBranches[repositoryId]
+    /** Loads one remote on demand and caches it by repository plus remote name. */
+    fun loadRemoteBranches(repositoryId: String, remote: String = "origin", force: Boolean = false) {
+        val key = "$repositoryId|$remote"
+        val current = remoteBranches[key]
         if (!force && (current is RemoteBranchesState.Loading || current is RemoteBranchesState.Loaded)) return
         val repository = config.repositories.firstOrNull { it.id == repositoryId }
             ?: return showError(IllegalArgumentException("找不到仓库：$repositoryId"))
-        remoteBranches = remoteBranches + (repositoryId to RemoteBranchesState.Loading)
+        remoteBranches = remoteBranches + (key to RemoteBranchesState.Loading)
         scope.launch {
             val result = withContext(ioDispatcher) {
-                runCatching { remoteBranchCatalog.list(Path.of(repository.rootPath), "origin") }
+                runCatching { remoteBranchCatalog.list(Path.of(repository.rootPath), remote) }
             }
-            remoteBranches = remoteBranches + (repositoryId to result.fold(
+            remoteBranches = remoteBranches + (key to result.fold(
                 onSuccess = { RemoteBranchesState.Loaded(it) },
                 onFailure = { RemoteBranchesState.Failed(it.message ?: "远程分支加载失败") },
             ))
         }
     }
+
+    fun remoteBranchState(repositoryId: String, remote: String): RemoteBranchesState =
+        remoteBranches["$repositoryId|$remote"] ?: RemoteBranchesState.Idle
 
     fun addRepository(groupId: String, selectedDirectory: String, strategy: WorkspaceStrategy) =
         runOperation("正在添加服务…", "服务已添加", block = {
@@ -568,7 +576,6 @@ class DesktopApplication(
         branch: String,
         groupId: String,
         serviceIds: Set<String>,
-        cloneOverrides: Map<String, String>,
         requirementLink: String,
         notes: String,
     ): String {
@@ -609,23 +616,22 @@ class DesktopApplication(
                             )
                         }
                     }
-                    WorkspaceStrategy.INDEPENDENT_CLONE -> listOf(
+                    WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.map { module ->
                         ServiceWorkspace(
                             repositoryId = repository.id,
                             serviceName = service.displayName,
                             repositoryPath = repository.rootPath,
-                            worktreePath = taskDirectory.resolve(WorkspaceLayout.cloneDirectoryName(service)).toString(),
+                            worktreePath = taskDirectory.resolve(WorkspaceLayout.cloneDirectoryName(service, module)).toString(),
                             ideType = service.ideType,
-                            branch = cloneOverrides[service.id].orEmpty().ifBlank {
-                                service.cloneDefaultBranch.orEmpty()
-                            },
+                            branch = RemoteBranchRef.parse(module.branch).branch,
                             groupServiceId = service.id,
-                            moduleId = "clone",
-                            moduleName = service.displayName,
+                            moduleId = module.id,
+                            moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.branch, service.cloneModules.size),
                             strategy = service.strategy,
                             originUrl = repository.originUrl,
-                        ),
-                    )
+                            baseRef = module.branch,
+                        )
+                    }
                 }
             }
         val preview = TaskManifest(
@@ -648,7 +654,6 @@ class DesktopApplication(
         groupId: String,
         serviceIds: List<String>,
         requirementLink: String,
-        cloneOverrides: Map<String, String>,
         notes: String,
         workspaceToolIds: List<String> = emptyList(),
     ) = runOperation("正在创建任务…", "任务已创建", block = {
@@ -660,7 +665,6 @@ class DesktopApplication(
                 groupId = groupId,
                 serviceIds = serviceIds,
                 requirementLink = requirementLink,
-                cloneBranchOverrides = cloneOverrides,
                 taskNotes = notes,
             ),
         )
@@ -762,12 +766,11 @@ class DesktopApplication(
     fun addServices(
         task: TaskManifest,
         serviceIds: List<String>,
-        cloneOverrides: Map<String, String>,
     ) = runOperation("正在追加服务…", "服务已追加", block = {
         tasksApplication.addServices(
             config,
             taskDirectory(task),
-            AddGroupedTaskServicesRequest(serviceIds, cloneOverrides),
+            AddGroupedTaskServicesRequest(serviceIds),
         )
     }, onSuccess = { reloadTasks(it.folderName) })
 

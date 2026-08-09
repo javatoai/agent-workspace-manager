@@ -8,7 +8,6 @@ data class WorkspaceProvisionRequest(
     val repository: RepositoryConfig,
     val service: GroupServiceConfig,
     val requestedFeatureBranch: String? = null,
-    val cloneBranchOverride: String? = null,
 )
 
 interface WorkspaceProvisioner {
@@ -41,7 +40,8 @@ object WorkspaceLayout {
         }
     }
 
-    fun cloneDirectoryName(service: GroupServiceConfig): String = serviceDirectoryBase(service)
+    fun cloneDirectoryName(service: GroupServiceConfig, module: IndependentCloneModuleConfig): String =
+        "${serviceDirectoryBase(service)}-${TaskNaming.directoryName(module.id)}"
 }
 
 class StandardWorktreeProvisioner(
@@ -162,32 +162,34 @@ class IndependentCloneProvisioner(
         require(request.service.strategy == strategy) { "服务不是独立克隆策略" }
         val origin = request.repository.originUrl?.trim().orEmpty()
         require(origin.isNotBlank()) { "独立克隆需要仓库配置 origin URL" }
-        val selectedRef = request.cloneBranchOverride?.trim().takeUnless { it.isNullOrBlank() }
-            ?: request.service.cloneDefaultBranch?.trim().orEmpty()
-        require(selectedRef.isNotBlank()) { "独立克隆必须选择远程分支" }
-        val branchRef = RemoteBranchRef.parse(selectedRef)
-        require(branchRef.remote == "origin") { "独立克隆目前只支持 origin 分支：$selectedRef" }
-        val branch = branchRef.branch
-        val target = request.taskDirectory.resolve(WorkspaceLayout.cloneDirectoryName(request.service))
-        require(!Files.exists(target)) { "目标目录已存在：$target" }
-        git.cloneRepository(origin, target, branch)
-        return listOf(
-            ServiceWorkspace(
-                repositoryId = request.repository.id,
-                serviceName = request.service.displayName,
-                repositoryPath = target.toString(),
-                worktreePath = target.toString(),
-                ideType = request.service.ideType,
-                branch = branch,
-                status = WorkspaceStatus.READY,
-                groupServiceId = request.service.id,
-                moduleId = "clone",
-                moduleName = branch,
-                strategy = strategy,
-                originUrl = origin,
-                baseRef = branchRef.toString(),
-            ),
-        )
+        val created = mutableListOf<ServiceWorkspace>()
+        try {
+            request.service.cloneModules.forEach { module ->
+                val branchRef = RemoteBranchRef.parse(module.branch)
+                val target = request.taskDirectory.resolve(WorkspaceLayout.cloneDirectoryName(request.service, module))
+                require(!Files.exists(target)) { "目标目录已存在：$target" }
+                git.cloneRepository(origin, target, branchRef.branch)
+                created += ServiceWorkspace(
+                    repositoryId = request.repository.id,
+                    serviceName = request.service.displayName,
+                    repositoryPath = target.toString(),
+                    worktreePath = target.toString(),
+                    ideType = request.service.ideType,
+                    branch = branchRef.branch,
+                    status = WorkspaceStatus.READY,
+                    groupServiceId = request.service.id,
+                    moduleId = module.id,
+                    moduleName = ModuleDisplayNaming.resolve(module.name, request.service.displayName, module.branch, request.service.cloneModules.size),
+                    strategy = strategy,
+                    originUrl = origin,
+                    baseRef = module.branch,
+                )
+            }
+            return created
+        } catch (error: Throwable) {
+            rollback(request, created)
+            throw error
+        }
     }
 
     override fun rollback(request: WorkspaceProvisionRequest, workspaces: List<ServiceWorkspace>) {

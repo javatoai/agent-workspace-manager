@@ -41,15 +41,17 @@ object TagPolicy {
                 )
             }
             WorkspaceStrategy.INDEPENDENT_CLONE -> {
-                check(service.cloneUatTagEnabled) { "独立克隆 ${service.displayName} 已关闭 Tag" }
-                val target = RemoteBranchRef.parse(service.cloneUatRef)
+                val module = service.cloneModules.firstOrNull { it.id == workspace.moduleId }
+                    ?: error("独立克隆模块配置不存在：${workspace.moduleId}")
+                check(module.uatTagEnabled) { "模块 ${workspace.moduleName} 已关闭 Tag" }
+                val target = RemoteBranchRef.parse(module.uatRef)
                 EffectiveTagTarget(
                     workspace,
                     workspace.branch,
                     target.remote,
                     target.branch,
-                    service.cloneInitialUatTag,
-                    service.cloneTagMessagePrefix,
+                    module.initialUatTag,
+                    module.tagMessagePrefix,
                 )
             }
         }

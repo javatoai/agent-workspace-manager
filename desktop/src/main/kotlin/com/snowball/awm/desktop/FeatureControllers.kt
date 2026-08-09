@@ -15,10 +15,9 @@ class TaskController internal constructor(private val app: DesktopApplication) {
         groupId: String,
         serviceIds: List<String>,
         requirementLink: String,
-        cloneOverrides: Map<String, String>,
         notes: String,
         toolIds: List<String>,
-    ) = app.createTask(name, branch, groupId, serviceIds, requirementLink, cloneOverrides, notes, toolIds)
+    ) = app.createTask(name, branch, groupId, serviceIds, requirementLink, notes, toolIds)
     fun refreshGitStatus() = app.refreshCurrentTaskGitStatus()
 }
 

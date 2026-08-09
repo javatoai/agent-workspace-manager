@@ -1,7 +1,7 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.AtomicMoveNotSupportedException
@@ -12,7 +12,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
 class UnsupportedConfigVersionException(
-    val actualVersion: Int?,
+    val actualVersion: String?,
 ) : IllegalStateException(
     "配置版本不受支持：${actualVersion ?: "缺少 schemaVersion"}；" +
         "当前版本为 $CURRENT_APP_CONFIG_SCHEMA_VERSION。AWM 不读取或改写旧产品数据。",
@@ -39,7 +39,7 @@ class ConfigStore(
         val version = json.parseToJsonElement(content)
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
-            ?.intOrNull
+            ?.contentOrNull
         if (version != CURRENT_APP_CONFIG_SCHEMA_VERSION) {
             throw UnsupportedConfigVersionException(version)
         }

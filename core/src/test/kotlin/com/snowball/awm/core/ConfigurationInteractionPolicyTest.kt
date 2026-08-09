@@ -47,7 +47,7 @@ class ConfigurationInteractionPolicyTest {
     }
 
     @Test
-    fun `schema v7 round trip persists merged UAT references`() {
+    fun `schema 0 4 0 round trip persists module UAT references`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         val store = ConfigStore(paths)
         val repository = RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git", "https://example.test/repo.git")
@@ -56,17 +56,16 @@ class ConfigurationInteractionPolicyTest {
             repositoryId = repository.id,
             displayName = "Repo",
             modules = listOf(ServiceModuleConfig("main", uatRef = "upstream/release/test")),
-            cloneUatRef = "origin/uat/test",
         )
         val expected = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("g", "G", services = listOf(service))))
 
         store.save(expected)
 
-        assertEquals(7, expected.schemaVersion)
+        assertEquals("0.4.0", expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
         assertTrue("\"uatRef\"" in json)
-        assertTrue("\"cloneUatRef\"" in json)
+        assertTrue("\"schemaVersion\": \"0.4.0\"" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
     }
@@ -80,7 +79,7 @@ class ConfigurationInteractionPolicyTest {
             displayName = "Clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "origin/main",
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/main")),
         )
         val repositories = listOf(
             RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git"),
@@ -92,11 +91,11 @@ class ConfigurationInteractionPolicyTest {
         assertFalse(TagNavigationPolicy.isVisible(base.copy(groups = listOf(base.groups.single().copy(uatTagEnabled = false)))))
         val childrenOff = base.copy(groups = listOf(base.groups.single().copy(services = listOf(
             standard.copy(modules = standard.modules.map { it.copy(uatTagEnabled = false) }),
-            clone.copy(cloneUatTagEnabled = false),
+            clone.copy(cloneModules = clone.cloneModules.map { it.copy(uatTagEnabled = false) }),
         ))))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff.copy(groups = listOf(childrenOff.groups.single().copy(
-            services = listOf(standard.copy(modules = standard.modules.map { it.copy(uatTagEnabled = false) }), clone.copy(cloneUatTagEnabled = true)),
+            services = listOf(standard.copy(modules = standard.modules.map { it.copy(uatTagEnabled = false) }), clone.copy(cloneModules = clone.cloneModules.map { it.copy(uatTagEnabled = true) })),
         )))))
     }
 

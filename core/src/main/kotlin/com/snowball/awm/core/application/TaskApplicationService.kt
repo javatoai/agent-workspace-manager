@@ -12,13 +12,11 @@ data class CreateGroupedTaskRequest(
     val groupId: String,
     val serviceIds: List<String>,
     val requirementLink: String = "",
-    val cloneBranchOverrides: Map<String, String> = emptyMap(),
     val taskNotes: String = "",
 )
 
 data class AddGroupedTaskServicesRequest(
     val serviceIds: List<String>,
-    val cloneBranchOverrides: Map<String, String> = emptyMap(),
 )
 
 data class StartupSnapshot(
@@ -109,7 +107,6 @@ class TaskApplicationService(
                         repository = repository,
                         service = service,
                         requestedFeatureBranch = featureBranch,
-                        cloneBranchOverride = request.cloneBranchOverrides[service.id],
                     ),
                 )
             }
@@ -194,7 +191,6 @@ class TaskApplicationService(
                     repository = repository,
                     service = service,
                     requestedFeatureBranch = manifest.featureBranch,
-                    cloneBranchOverride = request.cloneBranchOverrides[service.id],
                 )
                 created += provisionRequest to provisioning.provision(provisionRequest)
             }
@@ -263,17 +259,11 @@ class TaskApplicationService(
                     ?: error("失败服务已不在组配置中：$serviceId")
                 val repository = repositories[service.repositoryId]
                     ?: error("服务 ${service.displayName} 的仓库配置不存在")
-                val failedEntries = manifest.services.filter { it.groupServiceId == serviceId }
-                val cloneOverride = failedEntries.firstOrNull()
-                    ?.takeIf { service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }
-                    ?.baseRef
-                    ?: failedEntries.firstOrNull()?.branch?.let { "origin/$it" }
                 val provisionRequest = WorkspaceProvisionRequest(
                     taskDirectory = taskDirectory,
                     repository = repository,
                     service = service,
                     requestedFeatureBranch = manifest.featureBranch,
-                    cloneBranchOverride = cloneOverride,
                 )
                 created += provisionRequest to provisioning.provision(provisionRequest)
             }

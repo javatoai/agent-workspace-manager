@@ -3,8 +3,9 @@ package com.snowball.awm.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 7
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 5
+/** Persisted data follows the product release line and is deliberately strict. */
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.4.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.4.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -105,6 +106,25 @@ data class ServiceModuleConfig(
     }
 }
 
+/** One fixed-branch clone entry. Every entry receives its own physical clone. */
+@Serializable
+data class IndependentCloneModuleConfig(
+    val id: String,
+    val name: String = "",
+    val branch: String = "origin/master",
+    val uatTagEnabled: Boolean = false,
+    val uatRef: String = "origin/release/test",
+    val initialUatTag: String? = null,
+    val tagMessagePrefix: String = "UAT",
+) {
+    init {
+        require(id.isNotBlank()) { "独立克隆模块 ID 不能为空" }
+        require(RemoteBranchRef.parse(branch).remote == "origin") {
+            "独立克隆模块分支必须使用 origin/<branch> 格式"
+        }
+    }
+}
+
 /** A repository's independently configurable membership inside one ordered group. */
 @Serializable
 data class GroupServiceConfig(
@@ -117,11 +137,7 @@ data class GroupServiceConfig(
     val modules: List<ServiceModuleConfig> = listOf(
         ServiceModuleConfig(id = "default"),
     ),
-    val cloneDefaultBranch: String? = null,
-    val cloneUatTagEnabled: Boolean = false,
-    val cloneUatRef: String = "origin/release/test",
-    val cloneInitialUatTag: String? = null,
-    val cloneTagMessagePrefix: String = "UAT",
+    val cloneModules: List<IndependentCloneModuleConfig> = emptyList(),
     val bootstrap: BootstrapConfig = BootstrapConfig(),
 ) {
     init {
@@ -135,10 +151,9 @@ data class GroupServiceConfig(
                 require(modules.map { it.id }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复" }
             }
             WorkspaceStrategy.INDEPENDENT_CLONE -> {
-                require(!cloneDefaultBranch.isNullOrBlank()) { "独立克隆服务必须配置默认远程分支" }
-                require(RemoteBranchRef.parse(cloneDefaultBranch).remote == "origin") {
-                    "独立克隆默认分支必须使用 origin/<branch> 格式"
-                }
+                require(cloneModules.isNotEmpty()) { "独立克隆服务至少需要一个克隆模块" }
+                require(cloneModules.map { it.id }.distinct().size == cloneModules.size) { "独立克隆模块 ID 不能重复" }
+                require(cloneModules.map { it.branch }.distinct().size == cloneModules.size) { "独立克隆模块分支不能重复" }
             }
         }
     }
@@ -186,10 +201,10 @@ data class GroupConfig(
     }
 }
 
-/** Version 7 is intentionally strict and contains no compatibility-only fields. */
+/** Version 0.4.0 is intentionally strict and contains no compatibility-only fields. */
 @Serializable
 data class AppConfig(
-    val schemaVersion: Int = CURRENT_APP_CONFIG_SCHEMA_VERSION,
+    val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
     val taskRoot: String? = null,
     val repositories: List<RepositoryConfig> = emptyList(),
     val groups: List<GroupConfig> = listOf(
@@ -217,14 +232,15 @@ data class AppConfig(
         groups.flatMap(GroupConfig::services).forEach { service ->
             val repository = repositoryById[service.repositoryId]
                 ?: throw IllegalArgumentException("服务 ${service.displayName} 引用了不存在的仓库：${service.repositoryId}")
-            RemoteBranchRef.parse(service.cloneUatRef)
-            service.modules.forEach { module ->
-                require(module.baseRef.isNotBlank()) { "模块基础分支不能为空" }
-                require(module.baseRemote.isNotBlank()) { "模块基础远程不能为空" }
-                RemoteBranchRef.parse(module.uatRef)
-            }
-            if (service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
+            if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
+                service.modules.forEach { module ->
+                    require(module.baseRef.isNotBlank()) { "模块基础分支不能为空" }
+                    require(module.baseRemote.isNotBlank()) { "模块基础远程不能为空" }
+                    RemoteBranchRef.parse(module.uatRef)
+                }
+            } else {
                 require(!repository.originUrl.isNullOrBlank()) { "独立克隆服务 ${service.displayName} 的仓库没有 origin" }
+                service.cloneModules.forEach { module -> RemoteBranchRef.parse(module.uatRef) }
             }
         }
     }
@@ -299,7 +315,7 @@ data class ServiceWorkspace(
 
 @Serializable
 data class TaskManifest(
-    val schemaVersion: Int = CURRENT_TASK_MANIFEST_SCHEMA_VERSION,
+    val schemaVersion: String = CURRENT_TASK_MANIFEST_SCHEMA_VERSION,
     val folderName: String,
     val taskDirectoryName: String,
     val featureBranch: String,

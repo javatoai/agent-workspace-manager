@@ -1,7 +1,7 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.AtomicMoveNotSupportedException
@@ -54,7 +54,7 @@ class ManifestStore(
         val version = json.parseToJsonElement(content)
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
-            ?.intOrNull
+            ?.contentOrNull
         require(version == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
             "任务 JSON 版本不受支持：${version ?: "缺少 schemaVersion"}，当前版本为 " +
                 CURRENT_TASK_MANIFEST_SCHEMA_VERSION
@@ -80,7 +80,7 @@ class ManifestStore(
                     val version = json.parseToJsonElement(content)
                         .jsonObject["schemaVersion"]
                         ?.jsonPrimitive
-                        ?.intOrNull
+            ?.contentOrNull
                     if (version == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
                         current.add(directory to json.decodeFromString(content))
                     } else {

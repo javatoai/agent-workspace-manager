@@ -85,7 +85,6 @@ class GroupConfigurationService(
         groupId: String,
         selectedDirectory: Path,
         strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
-        cloneDefaultBranch: String? = null,
     ): AppConfig {
         val inspected = repositoryInspector.inspect(selectedDirectory)
         return update { config ->
@@ -111,9 +110,11 @@ class GroupConfigurationService(
                     ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
                     strategy = strategy,
                     modules = emptyList(),
-                    cloneDefaultBranch = cloneDefaultBranch?.trim()?.ifBlank { null }
-                        ?: repository.defaultRemoteBranch?.let { "origin/$it" }
-                        ?: throw IllegalArgumentException("无法确定 origin 的默认远程分支，请先设置 origin/HEAD"),
+                    cloneModules = listOf(IndependentCloneModuleConfig(
+                        id = "clone-default",
+                        branch = repository.defaultRemoteBranch?.let { "origin/$it" }
+                            ?: throw IllegalArgumentException("无法确定 origin 的默认远程分支，请先设置 origin/HEAD"),
+                    )),
                 )
             }
             config.copy(

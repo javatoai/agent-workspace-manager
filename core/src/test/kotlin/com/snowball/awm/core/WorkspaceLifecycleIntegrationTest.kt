@@ -71,7 +71,7 @@ class WorkspaceLifecycleIntegrationTest {
             displayName = "clone-risk",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "origin/master",
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master")),
         )
         val taskRoot = temporary.resolve("clone-risk-tasks")
         val config = AppConfig(

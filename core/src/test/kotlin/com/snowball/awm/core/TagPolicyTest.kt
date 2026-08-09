@@ -38,9 +38,7 @@ class TagPolicyTest {
             displayName = "A clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "origin/master",
-            cloneUatTagEnabled = true,
-            cloneUatRef = "origin/uat/test",
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", uatTagEnabled = true, uatRef = "origin/uat/test")),
         )
         val workspace = workspace("repo-a", "clone-a", "clone").copy(
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,

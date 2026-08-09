@@ -59,8 +59,7 @@ class WorkspaceProvisionerIntegrationTest {
             displayName = "复杂单仓",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneDefaultBranch = "origin/master",
-            cloneUatTagEnabled = true,
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", uatTagEnabled = true)),
         )
 
         val workspace = IndependentCloneProvisioner().provision(
@@ -68,7 +67,6 @@ class WorkspaceProvisionerIntegrationTest {
                 taskDirectory = temporary.resolve("clone").resolve("task"),
                 repository = repository,
                 service = service,
-                cloneBranchOverride = "origin/master",
             ),
         ).single()
 

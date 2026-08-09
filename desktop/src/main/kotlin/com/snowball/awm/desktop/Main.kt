@@ -110,8 +110,10 @@ import com.snowball.awm.core.BootstrapPresets
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
 import com.snowball.awm.core.IdeType
+import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
+import com.snowball.awm.core.RemoteBranchRef
 import com.snowball.awm.core.GroupConfig
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ServiceModuleConfig
@@ -153,7 +155,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.3.0",
+            title = "Agent Workspace Manager 0.4.0",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {
@@ -230,8 +232,8 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     }
 
     if (showCreate) {
-        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, overrides, notes, tools ->
-            if (controller.taskController.create(name, branch, group, services, link, overrides, notes, tools)) {
+        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools ->
+            if (controller.taskController.create(name, branch, group, services, link, notes, tools)) {
                 showCreate = false
             }
         }
@@ -321,7 +323,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("AWM", style = MaterialTheme.typography.titleLarge)
-                    Text("Workspace studio · 0.3.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Workspace studio · 0.4.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -669,8 +671,8 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
         controller.clearDeleteRisk(task)
         confirmDelete = false
     }
-    if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids, overrides ->
-        if (controller.addServices(task, ids, overrides)) showAddServices = false
+    if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids ->
+        if (controller.addServices(task, ids)) showAddServices = false
     }
     if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
         if (controller.deliveryController.buildBatch(task, selected)) showBatchTag = false
@@ -908,7 +910,7 @@ private fun ServiceCard(
                 }
                 Spacer(Modifier.height(3.dp))
                 Text(repository?.rootPath ?: "仓库配置缺失", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个基础分支模块" else "默认分支 ${service.cloneDefaultBranch}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个基础分支模块" else "${service.cloneModules.size} 个固定分支模块", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onUp, enabled = canMoveUp) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
             IconButton(onClick = onDown, enabled = canMoveDown) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
@@ -1281,7 +1283,7 @@ private fun PathField(
 private fun CreateTaskDialog(
     controller: DesktopApplication,
     onDismiss: () -> Unit,
-    onCreate: (String, String, String, List<String>, String, Map<String, String>, String, List<String>) -> Unit,
+    onCreate: (String, String, String, List<String>, String, String, List<String>) -> Unit,
 ) {
     val initialGroup = controller.config.groups.first()
     var draft by remember {
@@ -1295,7 +1297,6 @@ private fun CreateTaskDialog(
     var requirementMenuExpanded by remember { mutableStateOf(false) }
     var requirementSearch by remember { mutableStateOf("") }
     var serviceSearch by remember(groupId) { mutableStateOf("") }
-    val overrides = remember { mutableStateMapOf<String, String>() }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
     val taskNameMissing = draft.taskName.isBlank()
@@ -1303,8 +1304,8 @@ private fun CreateTaskDialog(
     // error treatment for an entered name that cannot become a safe directory.
     val taskNameError = draft.taskName.takeUnless(String::isBlank)
         ?.let(TaskNaming::directoryNameValidationError)
-    val preview = remember(draft.taskName, draft.branch, groupId, selected, overrides.toMap(), draft.requirementLink, notes) {
-        controller.previewAgents(draft.taskName, draft.branch, groupId, selected, overrides.toMap(), draft.requirementLink, notes)
+    val preview = remember(draft.taskName, draft.branch, groupId, selected, draft.requirementLink, notes) {
+        controller.previewAgents(draft.taskName, draft.branch, groupId, selected, draft.requirementLink, notes)
     }
     LaunchedEffect(draft.requirementLink) {
         val requestedLink = draft.requirementLink
@@ -1443,7 +1444,6 @@ private fun CreateTaskDialog(
                                 controller.config.groups.forEach { candidate -> FilterChip(groupId == candidate.id, {
                                     groupId = candidate.id
                                     selected = emptySet()
-                                    overrides.clear()
                                     selectedToolIds = candidate.defaultWorkspaceToolIds.toSet()
                                     serviceSearch = ""
                                     draft = draft.changeGroup(candidate.defaultBranchPrefix)
@@ -1483,20 +1483,11 @@ private fun CreateTaskDialog(
                                             Text(
                                                 if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
                                                     if (service.modules.size > 1) "${service.modules.size} 个模块 · ${service.strategy.displayName}" else service.strategy.displayName
-                                                } else "默认 ${service.cloneDefaultBranch} · ${service.strategy.displayName}",
+                                                } else "${service.cloneModules.size} 个固定分支模块 · ${service.strategy.displayName}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
                                         }
-                                    }
-                                    if (checked && service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
-                                        OutlinedTextField(
-                                            overrides[service.id] ?: service.cloneDefaultBranch.orEmpty(),
-                                            { overrides[service.id] = it },
-                                            Modifier.fillMaxWidth(),
-                                            label = { Text("本任务克隆分支") },
-                                            singleLine = true,
-                                        )
                                     }
                                 }
                             }
@@ -1558,7 +1549,7 @@ private fun CreateTaskDialog(
                         Button(
                             onClick = {
                                 val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
-                                onCreate(draft.taskName, draft.branch, groupId, selected.toList(), draft.requirementLink, overrides.toMap(), notes, availableTools)
+                                onCreate(draft.taskName, draft.branch, groupId, selected.toList(), draft.requirementLink, notes, availableTools)
                             },
                             enabled = !taskNameMissing && taskNameError == null && draft.branch.isNotBlank() &&
                                 !BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch) &&
@@ -1615,11 +1606,10 @@ private fun AddTaskServicesDialog(
     controller: DesktopApplication,
     task: TaskManifest,
     onDismiss: () -> Unit,
-    onAdd: (List<String>, Map<String, String>) -> Unit,
+    onAdd: (List<String>) -> Unit,
 ) {
     val services = controller.addableServices(task)
     var selected by remember(task.folderName) { mutableStateOf<Set<String>>(emptySet()) }
-    val overrides = remember(task.folderName) { mutableStateMapOf<String, String>() }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("添加服务") },
@@ -1640,22 +1630,13 @@ private fun AddTaskServicesDialog(
                                     Text(service.strategy.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-                            if (checked && service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
-                                OutlinedTextField(
-                                    overrides[service.id] ?: service.cloneDefaultBranch.orEmpty(),
-                                    { overrides[service.id] = it },
-                                    Modifier.fillMaxWidth(),
-                                    label = { Text("本任务克隆分支") },
-                                    singleLine = true,
-                                )
-                            }
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = { onAdd(selected.toList(), overrides.toMap()) }, enabled = selected.isNotEmpty() && !controller.busy) { Text("添加") }
+            Button(onClick = { onAdd(selected.toList()) }, enabled = selected.isNotEmpty() && !controller.busy) { Text("添加") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
@@ -1752,24 +1733,11 @@ private fun ServiceEditorDialog(controller: DesktopApplication, service: GroupSe
     var ide by remember { mutableStateOf(service.ideType) }
     var strategy by remember { mutableStateOf(service.strategy) }
     var modules by remember { mutableStateOf(service.modules) }
-    var cloneBranch by remember { mutableStateOf(service.cloneDefaultBranch.orEmpty()) }
-    var cloneTag by remember { mutableStateOf(service.cloneUatTagEnabled) }
-    var cloneUatRef by remember { mutableStateOf(service.cloneUatRef) }
-    var cloneInitialTag by remember { mutableStateOf(service.cloneInitialUatTag.orEmpty()) }
-    var cloneMessagePrefix by remember { mutableStateOf(service.cloneTagMessagePrefix) }
+    var cloneModules by remember { mutableStateOf(service.cloneModules.ifEmpty { listOf(IndependentCloneModuleConfig(id = "clone-default")) }) }
     var bootstrapText by remember { mutableStateOf(json.encodeToString(service.bootstrap)) }
     var bootstrapError by remember { mutableStateOf<String?>(null) }
     var showBootstrapExample by remember { mutableStateOf(false) }
     var bootstrapCopied by remember { mutableStateOf(false) }
-    var branchMenuExpanded by remember { mutableStateOf(false) }
-    LaunchedEffect(strategy, service.repositoryId) {
-        if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) controller.loadRemoteBranches(service.repositoryId)
-    }
-    val branchState = controller.remoteBranches[service.repositoryId] ?: RemoteBranchesState.Idle
-    val filteredBranches = RemoteBranchSearch.filter(
-        (branchState as? RemoteBranchesState.Loaded)?.branches.orEmpty(),
-        cloneBranch,
-    )
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             Modifier.widthIn(min = 780.dp, max = 920.dp).heightIn(min = 620.dp, max = 820.dp),
@@ -1808,7 +1776,7 @@ private fun ServiceEditorDialog(controller: DesktopApplication, service: GroupSe
                 if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
                     Text("不同基础分支创建不同 Worktree；相同基础分支的代码模块在 AGENTS.md 中约定。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     modules.forEachIndexed { index, module ->
-                        ModuleEditor(module, canDelete = modules.size > 1, onChange = { changed -> modules = modules.mapIndexed { i, value -> if (i == index) changed else value } }, onDelete = { modules = modules.filterIndexed { i, _ -> i != index } })
+                        ModuleEditor(module, service.repositoryId, controller, canDelete = modules.size > 1, onChange = { changed -> modules = modules.mapIndexed { i, value -> if (i == index) changed else value } }, onDelete = { modules = modules.filterIndexed { i, _ -> i != index } })
                     }
                     OutlinedButton(onClick = {
                         modules = modules + ServiceModuleConfig(id = "module-${UUID.randomUUID()}", baseRef = "origin/master")
@@ -1827,45 +1795,21 @@ private fun ServiceEditorDialog(controller: DesktopApplication, service: GroupSe
                         supportingText = bootstrapError?.let { message -> { Text(message) } },
                     )
                 } else {
-                    Text("独立克隆", fontWeight = FontWeight.SemiBold)
-                    Box(Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            cloneBranch,
-                            { cloneBranch = it; branchMenuExpanded = branchState is RemoteBranchesState.Loaded },
-                            Modifier.fillMaxWidth(),
-                            label = { Text("默认远程分支") },
-                            placeholder = { Text("可手工输入或搜索 origin 分支") },
-                            trailingIcon = {
-                                when (branchState) {
-                                    RemoteBranchesState.Loading -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                                    is RemoteBranchesState.Loaded -> IconButton(onClick = { branchMenuExpanded = !branchMenuExpanded }) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支") }
-                                    else -> Unit
-                                }
-                            },
-                            singleLine = true,
+                    Text("独立克隆模块", fontWeight = FontWeight.SemiBold)
+                    Text("选择该服务时会为以下每个固定分支创建独立目录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    cloneModules.forEachIndexed { index, module ->
+                        CloneModuleEditor(
+                            module = module,
+                            repositoryId = service.repositoryId,
+                            controller = controller,
+                            canDelete = cloneModules.size > 1,
+                            onChange = { changed -> cloneModules = cloneModules.mapIndexed { i, value -> if (i == index) changed else value } },
+                            onDelete = { cloneModules = cloneModules.filterIndexed { i, _ -> i != index } },
                         )
-                        DropdownMenu(branchMenuExpanded && branchState is RemoteBranchesState.Loaded, { branchMenuExpanded = false }) {
-                            filteredBranches.forEach { branch ->
-                                DropdownMenuItem(text = { Text(branch) }, onClick = { cloneBranch = branch; branchMenuExpanded = false })
-                            }
-                            if (filteredBranches.isEmpty()) DropdownMenuItem(text = { Text("没有匹配分支") }, onClick = {}, enabled = false)
-                        }
                     }
-                    when (branchState) {
-                        RemoteBranchesState.Loading -> Text("正在静默读取 origin 远程分支…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        is RemoteBranchesState.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("加载失败：${branchState.message}；仍可手工输入。", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                            TextButton(onClick = { controller.loadRemoteBranches(service.repositoryId, force = true) }) { Text("重试") }
-                        }
-                        is RemoteBranchesState.Loaded -> Text("已读取 ${branchState.branches.size} 个 origin 分支，可输入关键字筛选。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        RemoteBranchesState.Idle -> Unit
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) { Text("允许参与 UAT Tag", Modifier.weight(1f)); Switch(cloneTag, { cloneTag = it }) }
-                    if (cloneTag) {
-                        OutlinedTextField(cloneUatRef, { cloneUatRef = it }, Modifier.fillMaxWidth(), label = { Text("UAT 目标分支") }, placeholder = { Text("origin/release/test") })
-                        OutlinedTextField(cloneInitialTag, { cloneInitialTag = it }, Modifier.fillMaxWidth(), label = { Text("初始 UAT Tag（可选）") })
-                        OutlinedTextField(cloneMessagePrefix, { cloneMessagePrefix = it }, Modifier.fillMaxWidth(), label = { Text("Tag 消息前缀") }, supportingText = { Text("只决定 annotated tag 说明首行，例如 UAT build；不会改变 Tag 名。") })
-                    }
+                    OutlinedButton(onClick = {
+                        cloneModules = cloneModules + IndependentCloneModuleConfig(id = "clone-${UUID.randomUUID()}")
+                    }) { Icon(Icons.Outlined.Add, null); Text("添加克隆模块") }
                 }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1883,14 +1827,13 @@ private fun ServiceEditorDialog(controller: DesktopApplication, service: GroupSe
                             service.copy(
                                 displayName = name.trim(), enabled = enabled, ideType = ide, strategy = strategy,
                                 modules = normalizedModules,
-                                cloneDefaultBranch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) cloneBranch.trim() else null,
-                                cloneUatTagEnabled = cloneTag, cloneUatRef = cloneUatRef.trim(),
-                                cloneInitialUatTag = cloneInitialTag.trim().ifBlank { null },
-                                cloneTagMessagePrefix = cloneMessagePrefix.trim().ifBlank { "UAT" },
+                                cloneModules = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
+                                    cloneModules.map { it.copy(name = it.name.trim(), branch = it.branch.trim(), uatRef = it.uatRef.trim()) }
+                                } else emptyList(),
                                 bootstrap = bootstrap,
                             )
                         }.onSuccess(onSave).onFailure { bootstrapError = it.message }
-                    }, enabled = name.isNotBlank() && (strategy != WorkspaceStrategy.INDEPENDENT_CLONE || cloneBranch.isNotBlank()) && (strategy != WorkspaceStrategy.STANDARD_WORKTREE || modules.isNotEmpty())) { Icon(Icons.Outlined.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("保存配置") }
+                    }, enabled = name.isNotBlank() && (strategy != WorkspaceStrategy.INDEPENDENT_CLONE || cloneModules.isNotEmpty() && cloneModules.all { it.branch.isNotBlank() }) && (strategy != WorkspaceStrategy.STANDARD_WORKTREE || modules.isNotEmpty())) { Icon(Icons.Outlined.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("保存配置") }
                 }
             }
         }
@@ -1944,7 +1887,61 @@ private fun ServiceEditorDialog(controller: DesktopApplication, service: GroupSe
 }
 
 @Composable
-private fun ModuleEditor(module: ServiceModuleConfig, canDelete: Boolean, onChange: (ServiceModuleConfig) -> Unit, onDelete: () -> Unit) {
+private fun CloneModuleEditor(
+    module: IndependentCloneModuleConfig,
+    repositoryId: String,
+    controller: DesktopApplication,
+    canDelete: Boolean,
+    onChange: (IndependentCloneModuleConfig) -> Unit,
+    onDelete: () -> Unit,
+) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(module.name, { onChange(module.copy(name = it)) }, Modifier.weight(1f), label = { Text("显示名称（可选）") })
+                IconButton(onClick = onDelete, enabled = canDelete) { Icon(Icons.Outlined.Delete, "删除模块") }
+            }
+            RemoteBranchPicker(module.branch, { onChange(module.copy(branch = it)) }, "固定远程分支", repositoryId, controller, Modifier.fillMaxWidth())
+            Row(verticalAlignment = Alignment.CenterVertically) { Text("允许参与 UAT Tag", Modifier.weight(1f)); Switch(module.uatTagEnabled, { onChange(module.copy(uatTagEnabled = it)) }) }
+            if (module.uatTagEnabled) {
+                RemoteBranchPicker(module.uatRef, { onChange(module.copy(uatRef = it)) }, "UAT 目标分支", repositoryId, controller, Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(module.initialUatTag.orEmpty(), { onChange(module.copy(initialUatTag = it.ifBlank { null })) }, Modifier.weight(1f), label = { Text("初始 Tag（可选）") })
+                    OutlinedTextField(module.tagMessagePrefix, { onChange(module.copy(tagMessagePrefix = it)) }, Modifier.weight(1f), label = { Text("Tag 消息前缀") })
+                }
+            }
+        }
+    }
+}
+
+/** UI-only branch chooser: all Git I/O remains in DesktopApplication. */
+@Composable
+private fun RemoteBranchPicker(value: String, onValueChange: (String) -> Unit, label: String, repositoryId: String, controller: DesktopApplication, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    val remote = runCatching { RemoteBranchRef.parse(value.trim()).remote }.getOrDefault("origin")
+    val state = controller.remoteBranchState(repositoryId, remote)
+    Box(modifier) {
+        OutlinedTextField(value, onValueChange, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
+            trailingIcon = { IconButton(onClick = { controller.loadRemoteBranches(repositoryId, remote); query = ""; expanded = true }) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支") } })
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.widthIn(min = 560.dp, max = 720.dp), containerColor = MaterialTheme.colorScheme.surfaceVariant, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 8.dp), label = { Text("搜索远程分支") }, singleLine = true)
+            when (state) {
+                RemoteBranchesState.Loading -> DropdownMenuItem(text = { Text("正在读取远程分支…") }, onClick = {}, enabled = false)
+                is RemoteBranchesState.Failed -> DropdownMenuItem(text = { Text("加载失败：${state.message}") }, onClick = { controller.loadRemoteBranches(repositoryId, remote, true) })
+                is RemoteBranchesState.Loaded -> {
+                    val branches = RemoteBranchSearch.filter(state.branches, query)
+                    if (branches.isEmpty()) DropdownMenuItem(text = { Text("没有匹配分支") }, onClick = {}, enabled = false)
+                    branches.forEach { branch -> DropdownMenuItem(text = { Text(branch) }, onClick = { onValueChange(branch); expanded = false }) }
+                }
+                RemoteBranchesState.Idle -> DropdownMenuItem(text = { Text("正在准备读取远程分支…") }, onClick = {}, enabled = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModuleEditor(module: ServiceModuleConfig, repositoryId: String, controller: DesktopApplication, canDelete: Boolean, onChange: (ServiceModuleConfig) -> Unit, onDelete: () -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1955,19 +1952,13 @@ private fun ModuleEditor(module: ServiceModuleConfig, canDelete: Boolean, onChan
                     label = { Text("显示名称（可选）") },
                     placeholder = { Text("单分支默认服务名，多分支默认基础分支末段") },
                 )
-                OutlinedTextField(module.baseRef, { onChange(module.copy(baseRef = it)) }, Modifier.weight(1f), label = { Text("基础分支") })
+                RemoteBranchPicker(module.baseRef, { onChange(module.copy(baseRef = it)) }, "基础分支", repositoryId, controller, Modifier.weight(1f))
                 IconButton(onClick = onDelete, enabled = canDelete) { Icon(Icons.Outlined.Delete, "删除模块") }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("UAT Tag", Modifier.weight(1f)); Switch(module.uatTagEnabled, { onChange(module.copy(uatTagEnabled = it)) })
             }
-            if (module.uatTagEnabled) OutlinedTextField(
-                module.uatRef,
-                { onChange(module.copy(uatRef = it)) },
-                Modifier.fillMaxWidth(),
-                label = { Text("UAT 目标分支") },
-                placeholder = { Text("origin/release/test") },
-            )
+            if (module.uatTagEnabled) RemoteBranchPicker(module.uatRef, { onChange(module.copy(uatRef = it)) }, "UAT 目标分支", repositoryId, controller, Modifier.fillMaxWidth())
             if (module.uatTagEnabled) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(module.initialUatTag.orEmpty(), { onChange(module.copy(initialUatTag = it.ifBlank { null })) }, Modifier.weight(1f), label = { Text("初始 Tag（可选）") })
                 OutlinedTextField(module.tagMessagePrefix, { onChange(module.copy(tagMessagePrefix = it)) }, Modifier.weight(1f), label = { Text("Tag 消息前缀") }, supportingText = { Text("只影响说明首行，不改变 Tag 名") })

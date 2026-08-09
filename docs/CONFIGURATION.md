@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.3.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.4.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.3.0 的 `config.json` 使用严格 schema 7。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.4.0 的 `config.json` 使用严格字符串 schema `"0.4.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": "0.4.0",
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {
@@ -57,11 +57,7 @@ agents/groups/<groupId>/AGENTS.md
               "tagMessagePrefix": "UAT"
             }
           ],
-          "cloneDefaultBranch": null,
-          "cloneUatTagEnabled": false,
-          "cloneUatRef": "origin/release/test",
-          "cloneInitialUatTag": null,
-          "cloneTagMessagePrefix": "UAT",
+          "cloneModules": [],
           "bootstrap": {
             "copyRules": [],
             "commands": []
@@ -73,6 +69,33 @@ agents/groups/<groupId>/AGENTS.md
   "theme": "SYSTEM"
 }
 ```
+
+独立克隆服务将 `modules` 设为空，并配置一个或多个固定克隆模块：
+
+```json
+"cloneModules": [
+  {
+    "id": "feign-master",
+    "name": "主线客户端",
+    "branch": "origin/master",
+    "uatTagEnabled": true,
+    "uatRef": "origin/release/test",
+    "initialUatTag": null,
+    "tagMessagePrefix": "UAT"
+  },
+  {
+    "id": "feign-development",
+    "name": "开发客户端",
+    "branch": "origin/development",
+    "uatTagEnabled": false,
+    "uatRef": "origin/release/test",
+    "initialUatTag": null,
+    "tagMessagePrefix": "UAT"
+  }
+]
+```
+
+每个独立克隆模块都会在任务目录下获得独立的物理克隆目录；同一服务内模块 ID 和固定分支均不可重复。
 
 未知字段、旧 schema 或未来 schema 都会被拒绝，应用不会自动迁移或改写原文件。旧 TaskWT 用户目录与任务文件不会被读取、迁移或删除。
 
@@ -122,7 +145,7 @@ agents/groups/<groupId>/AGENTS.md
 有效 Tag 入口需要同时满足：
 
 1. 任务所属组的 `uatTagEnabled` 已开启；
-2. 标准模块的 `uatTagEnabled` 或独立克隆的 `cloneUatTagEnabled` 已开启。
+2. 标准模块或独立克隆模块的 `uatTagEnabled` 已开启。
 
 独立克隆启用后，以任务中实际克隆的分支参与 UAT，而不是重新派生 Feature 分支。
 
@@ -159,7 +182,7 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": "0.4.0",
   "workspaceToolLaunches": [
     {
       "toolId": "codex",
