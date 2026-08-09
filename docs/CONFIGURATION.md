@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.4.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.4.2 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.4.0 的 `config.json` 使用严格字符串 schema `"0.4.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.4.2 的 `config.json` 使用严格字符串 schema `"0.4.2"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.4.0",
+  "schemaVersion": "0.4.2",
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {
@@ -97,7 +97,7 @@ agents/groups/<groupId>/AGENTS.md
 
 每个独立克隆模块都会在任务目录下获得独立的物理克隆目录；同一服务内模块 ID 和固定分支均不可重复。
 
-未知字段、旧 schema 或未来 schema 都会被拒绝，应用不会自动迁移或改写原文件。旧 TaskWT 用户目录与任务文件不会被读取、迁移或删除。
+未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。旧 TaskWT 用户目录与任务文件不会被读取、迁移或删除。
 
 ## 组
 
@@ -182,7 +182,7 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 
 ```json
 {
-  "schemaVersion": "0.4.0",
+  "schemaVersion": "0.4.2",
   "workspaceToolLaunches": [
     {
       "toolId": "codex",

@@ -14,7 +14,7 @@ class WorkspaceLifecycleIntegrationTest {
     lateinit var temporary: Path
 
     @Test
-    fun `same-base modules create archive restore and delete one physical worktree`() {
+    fun `same-base modules keep one physical worktree through archive restore and delete`() {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("shared"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("shared").resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
@@ -47,9 +47,10 @@ class WorkspaceLifecycleIntegrationTest {
         assertEquals(2, GitClient().worktrees(repositoryPath).size)
 
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
-        application.archive(config, taskDirectory)
-        assertFalse(Files.exists(Path.of(created.services.first().worktreePath)))
-        assertEquals(1, GitClient().worktrees(repositoryPath).size)
+        val archived = application.archive(config, taskDirectory)
+        assertEquals(WorkspaceStatus.ARCHIVED, archived.status)
+        assertTrue(Files.exists(Path.of(created.services.first().worktreePath)))
+        assertEquals(2, GitClient().worktrees(repositoryPath).size)
 
         val restored = application.restore(config, taskDirectory)
         assertTrue(restored.services.all { it.status == WorkspaceStatus.READY })

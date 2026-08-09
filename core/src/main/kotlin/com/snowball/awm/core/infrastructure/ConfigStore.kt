@@ -40,14 +40,14 @@ class ConfigStore(
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
             ?.contentOrNull
-        if (version != CURRENT_APP_CONFIG_SCHEMA_VERSION) {
+        if (!SchemaVersionCompatibility.isCompatible(version, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
             throw UnsupportedConfigVersionException(version)
         }
         return json.decodeFromString(content)
     }
 
     override fun save(config: AppConfig) {
-        require(config.schemaVersion == CURRENT_APP_CONFIG_SCHEMA_VERSION) {
+        require(SchemaVersionCompatibility.isCompatible(config.schemaVersion, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
             "不能写入配置版本 ${config.schemaVersion}"
         }
         if (exists()) {
@@ -59,7 +59,9 @@ class ConfigStore(
         }
         paths.home.createDirectories()
         val temporary = Files.createTempFile(paths.home, ".config-", ".json.tmp")
-        Files.writeString(temporary, json.encodeToString(config))
+        // Writing always stamps the current PATCH version. This is safe because
+        // PATCH releases are only compatible when persisted fields are unchanged.
+        Files.writeString(temporary, json.encodeToString(config.copy(schemaVersion = CURRENT_APP_CONFIG_SCHEMA_VERSION)))
         moveAtomically(temporary, paths.config)
     }
 

@@ -4,8 +4,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.4.0"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.4.0"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.4.2"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.4.2"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -201,7 +201,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.4.0 is intentionally strict and contains no compatibility-only fields. */
+/** Version 0.4.2 is intentionally strict and contains no compatibility-only fields. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,

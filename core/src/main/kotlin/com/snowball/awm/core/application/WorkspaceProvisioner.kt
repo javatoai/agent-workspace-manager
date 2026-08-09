@@ -25,7 +25,7 @@ interface WorkspaceProvisioner {
 /** Deterministic on-disk layout shared by provisioning and live AGENTS previews. */
 object WorkspaceLayout {
     private fun serviceDirectoryBase(service: GroupServiceConfig): String =
-        "${TaskNaming.directoryName(service.displayName)}-${TaskNaming.directoryName(service.id)}"
+        TaskNaming.directoryName(service.displayName)
 
     fun standardDirectoryName(
         service: GroupServiceConfig,
@@ -41,7 +41,7 @@ object WorkspaceLayout {
     }
 
     fun cloneDirectoryName(service: GroupServiceConfig, module: IndependentCloneModuleConfig): String =
-        "${serviceDirectoryBase(service)}-${TaskNaming.directoryName(module.id)}"
+        "${serviceDirectoryBase(service)}-${TaskNaming.directoryName(module.name.ifBlank { RemoteBranchRef.parse(module.branch).branch.substringAfterLast('/') })}"
 }
 
 class StandardWorktreeProvisioner(

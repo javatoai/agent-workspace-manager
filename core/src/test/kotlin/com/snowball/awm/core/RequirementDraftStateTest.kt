@@ -6,13 +6,14 @@ import kotlin.test.assertFalse
 
 class RequirementDraftStateTest {
     @Test
-    fun `metadata fills untouched task name`() {
+    fun `metadata fills requirement title without changing folder name`() {
         val linked = RequirementDraftState().changeRequirement(
             "https://project.feishu.cn/obt/userstory/detail/7060612727",
             "feature/zhangsan_{num}_",
         )
         val result = linked.applyMetadata(linked.requirementLink, RequirementMetadata("优化支付流程", null))
-        assertEquals("优化支付流程", result.taskName)
+        assertEquals("", result.taskName)
+        assertEquals("优化支付流程", result.requirementTitle)
         assertEquals("feature/zhangsan_7060612727_", result.branch)
         assertFalse(result.metadataLoading)
     }

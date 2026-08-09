@@ -169,7 +169,6 @@ class TaskApplicationService(
         request: AddGroupedTaskServicesRequest,
     ): TaskManifest = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
-        require(manifest.status != WorkspaceStatus.ARCHIVED) { "已归档任务不能追加服务" }
         require(request.serviceIds.isNotEmpty()) { "至少选择一个服务" }
         require(request.serviceIds.distinct().size == request.serviceIds.size) { "服务不能重复选择" }
         val group = config.group(manifest.groupId)
@@ -197,7 +196,7 @@ class TaskApplicationService(
             val added = created.flatMap { it.second }
             val updated = manifest.copy(
                 updatedAt = AwmTime.format(Instant.now(clock)),
-                status = aggregateStatus(manifest.services + added),
+                status = if (manifest.status == WorkspaceStatus.ARCHIVED) WorkspaceStatus.ARCHIVED else aggregateStatus(manifest.services + added),
                 services = manifest.services + added,
             )
             manifests.save(taskDirectory, updated)
@@ -241,7 +240,6 @@ class TaskApplicationService(
         serviceIds: List<String>? = null,
     ): TaskManifest = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
-        require(manifest.status != WorkspaceStatus.ARCHIVED) { "已归档任务不能重试服务" }
         val failedIds = manifest.services
             .filter { it.status == WorkspaceStatus.FAILED }
             .map(ServiceWorkspace::groupServiceId)
@@ -271,7 +269,7 @@ class TaskApplicationService(
             val retained = manifest.services.filterNot { it.groupServiceId in selected }
             val updated = manifest.copy(
                 updatedAt = AwmTime.format(Instant.now(clock)),
-                status = aggregateStatus(retained + replacements),
+                status = if (manifest.status == WorkspaceStatus.ARCHIVED) WorkspaceStatus.ARCHIVED else aggregateStatus(retained + replacements),
                 services = retained + replacements,
             )
             manifests.save(taskDirectory, updated)
@@ -326,22 +324,16 @@ class TaskApplicationService(
         operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
         require(manifest.status != WorkspaceStatus.ARCHIVED) { "任务已经归档" }
-        // Validate marker integrity before the destructive removal phase.
-        agentDocuments.writeTaskDocument(taskDirectory, manifest, config.repositories.map(RepositoryConfig::toInfo))
-        lifecycle.requireArchiveSafe(config, taskDirectory, manifest, force)
-        lifecycle.removeAll(config, taskDirectory, manifest, force)
+        // Archive is a navigation classification only. Workspaces remain intact
+        // so an archived task can still be opened and resumed without Git work.
         val updated = manifest.copy(
             updatedAt = AwmTime.format(Instant.now(clock)),
             status = WorkspaceStatus.ARCHIVED,
-            services = manifest.services.map { it.copy(status = WorkspaceStatus.ARCHIVED) },
+            services = manifest.services,
         )
         try {
             manifests.save(taskDirectory, updated)
         } catch (saveError: Throwable) {
-            val compensation = runCatching { lifecycle.restoreAll(config, taskDirectory, manifest) }
-            if (compensation.isFailure) {
-                throw compensationFailure("归档清单保存失败，且工作区恢复补偿也失败", saveError, compensation.exceptionOrNull()!!)
-            }
             throw saveError
         }
         agentDocuments.writeTaskDocument(taskDirectory, updated, config.repositories.map(RepositoryConfig::toInfo))
@@ -351,21 +343,14 @@ class TaskApplicationService(
     fun restore(config: AppConfig, taskDirectory: Path): TaskManifest = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
         require(manifest.status == WorkspaceStatus.ARCHIVED) { "只有已归档任务可以恢复" }
-        agentDocuments.writeTaskDocument(taskDirectory, manifest, config.repositories.map(RepositoryConfig::toInfo))
-        val restored = lifecycle.restoreAll(config, taskDirectory, manifest)
         val updated = manifest.copy(
             updatedAt = AwmTime.format(Instant.now(clock)),
-            status = aggregateStatus(restored),
-            services = restored,
+            status = aggregateStatus(manifest.services),
+            services = manifest.services,
         )
         try {
             manifests.save(taskDirectory, updated)
         } catch (saveError: Throwable) {
-            val physical = manifest.copy(services = restored)
-            val compensation = runCatching { lifecycle.removeAll(config, taskDirectory, physical, force = true) }
-            if (compensation.isFailure) {
-                throw compensationFailure("恢复清单保存失败，且移除已恢复工作区的补偿也失败", saveError, compensation.exceptionOrNull()!!)
-            }
             throw saveError
         }
         agentDocuments.writeTaskDocument(taskDirectory, updated, config.repositories.map(RepositoryConfig::toInfo))
@@ -376,6 +361,9 @@ class TaskApplicationService(
         operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
         val risks = lifecycle.inspectDeleteRisks(config, taskDirectory, manifest)
+        require(risks.none { it.statusCheckError != null }) {
+            "存在无法安全验证的工作区，请先修复其 Git 身份或路径后再删除任务"
+        }
         if (risks.isNotEmpty() && !forceDiscard) error("存在未提交改动，请确认强制丢弃后再删除")
         lifecycle.removeAll(config, taskDirectory, manifest, forceDiscard)
         deleteRecursively(taskDirectory)

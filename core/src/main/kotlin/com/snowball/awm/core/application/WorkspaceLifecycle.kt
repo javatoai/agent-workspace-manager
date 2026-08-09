@@ -32,9 +32,28 @@ class GitWorkspaceLifecycle(
 ) : WorkspaceLifecycle {
     override fun inspectDeleteRisks(config: AppConfig, taskDirectory: Path, manifest: TaskManifest): List<DeleteRisk> =
         physicalWorkspaces(manifest).also { validateTaskDirectory(config, taskDirectory, manifest) }.mapNotNull { workspace ->
-            val target = validateTarget(taskDirectory, workspace)
+            val target = runCatching { validateTarget(taskDirectory, workspace) }.getOrElse { error ->
+                return@mapNotNull DeleteRisk(
+                    serviceName = workspace.serviceName,
+                    staged = false,
+                    unstaged = false,
+                    untracked = false,
+                    operationInProgress = null,
+                    statusCheckError = "工作区路径校验失败：${error.message ?: "路径不安全"}",
+                )
+            }
             if (!target.exists()) return@mapNotNull null
-            validateExistingIdentity(config = config, workspace = workspace, target = target)
+            runCatching { validateExistingIdentity(config = config, workspace = workspace, target = target) }
+                .onFailure { error ->
+                    return@mapNotNull DeleteRisk(
+                        serviceName = workspace.serviceName,
+                        staged = false,
+                        unstaged = false,
+                        untracked = false,
+                        operationInProgress = null,
+                        statusCheckError = "工作区 Git 身份校验失败：${error.message ?: "不是预期 Git 工作区"}",
+                    )
+                }
             val status = runCatching { git.status(target) }.getOrElse { error ->
                 return@mapNotNull DeleteRisk(
                     workspace.serviceName,
@@ -42,7 +61,7 @@ class GitWorkspaceLifecycle(
                     unstaged = false,
                     untracked = false,
                     operationInProgress = null,
-                    statusCheckError = error.message,
+                    statusCheckError = "无法读取工作区 Git 状态：${error.message ?: "检查失败"}",
                 )
             }
             val allBranchUnpushed = if (workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
@@ -148,6 +167,7 @@ class GitWorkspaceLifecycle(
             workspace.copy(status = restored.status, warnings = restored.warnings)
         }
     }
+
 
     override fun validateForMutation(
         config: AppConfig,

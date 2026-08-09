@@ -267,7 +267,7 @@ class TaskApplicationServiceTest {
     }
 
     @Test
-    fun `archive and restore compensate physical changes when manifest commit fails`() {
+    fun `archive and restore do not mutate physical workspaces when manifest commit fails`() {
         val root = Files.createTempDirectory("task-commit-compensation-")
         val taskDirectory = root.resolve("task")
         Files.createDirectories(taskDirectory)
@@ -282,8 +282,8 @@ class TaskApplicationServiceTest {
         val config = AppConfig(taskRoot = root.toString())
 
         assertFailsWith<IllegalStateException> { archiveApp.archive(config, taskDirectory) }
-        assertEquals(1, archiveLifecycle.removeCalls)
-        assertEquals(1, archiveLifecycle.restoreCalls)
+        assertEquals(0, archiveLifecycle.removeCalls)
+        assertEquals(0, archiveLifecycle.restoreCalls)
 
         val restoreLifecycle = RecordingLifecycle()
         val restoreApp = TaskApplicationService(
@@ -293,8 +293,8 @@ class TaskApplicationServiceTest {
             operationLock = NoOpTaskOperationLock,
         )
         assertFailsWith<IllegalStateException> { restoreApp.restore(config, taskDirectory) }
-        assertEquals(1, restoreLifecycle.restoreCalls)
-        assertEquals(1, restoreLifecycle.removeCalls)
+        assertEquals(0, restoreLifecycle.restoreCalls)
+        assertEquals(0, restoreLifecycle.removeCalls)
     }
 }
 

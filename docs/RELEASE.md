@@ -1,5 +1,7 @@
 # 发布指南
 
+版本升级规则见 [VERSIONING.md](VERSIONING.md)。发布前必须确认本次是否影响 `config.json` 或 `agent-workspace.json` 字段。
+
 ## 分支与标签
 
 - `master`：默认分支，持续集成和 `continuous` 预发布的来源；

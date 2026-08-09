@@ -87,6 +87,7 @@ import kotlin.io.path.exists
 
 enum class NavigationItem(val title: String, val subtitle: String) {
     TASKS("研发任务", "Tasks"),
+    ARCHIVED("已归档", "Archived"),
     SERVICES("服务仓库", "Services"),
     UAT("UAT 构建", "UAT Builds"),
     SETTINGS("设置", "Settings"),
@@ -190,7 +191,13 @@ class DesktopApplication(
         private set(value) { sessionStore.tasks = value }
     var navigation: NavigationItem
         get() = sessionStore.navigation
-        set(value) { sessionStore.navigation = value }
+        set(value) {
+            val changed = sessionStore.navigation != value
+            sessionStore.navigation = value
+            if (changed && value in setOf(NavigationItem.TASKS, NavigationItem.ARCHIVED)) {
+                refreshRequirementStatuses()
+            }
+        }
     var selectedTask: TaskManifest?
         get() = sessionStore.selectedTask
         private set(value) { sessionStore.selectedTask = value }
@@ -342,7 +349,7 @@ class DesktopApplication(
 
     fun canBuildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
         val group = config.groups.firstOrNull { it.id == task.groupId } ?: return false
-        if (!group.uatTagEnabled || workspace.status == WorkspaceStatus.ARCHIVED || workspace.status == WorkspaceStatus.FAILED) {
+        if (!group.uatTagEnabled || workspace.status == WorkspaceStatus.FAILED) {
             return false
         }
         val service = group.services.firstOrNull { it.id == workspace.groupServiceId } ?: return false
@@ -401,6 +408,7 @@ class DesktopApplication(
     fun selectTask(task: TaskManifest) {
         selectedTask = task
         refreshCurrentTaskGitStatus()
+        refreshRequirementStatus(task)
     }
 
     fun setTheme(theme: ThemePreference) = mutateConfig("正在更新主题…", "主题已更新") { it.copy(theme = theme) }
@@ -708,11 +716,11 @@ class DesktopApplication(
 
     fun archiveTask(task: TaskManifest, force: Boolean = false) = runOperation("正在归档任务…", "任务已归档", block = {
         tasksApplication.archive(config, taskDirectory(task), force)
-    }, onSuccess = { reloadTasks(it.folderName) })
+    }, onSuccess = { reloadTasks(it.folderName); navigation = NavigationItem.ARCHIVED })
 
     fun restoreTask(task: TaskManifest) = runOperation("正在恢复任务…", "任务已恢复", block = {
         tasksApplication.restore(config, taskDirectory(task))
-    }, onSuccess = { reloadTasks(it.folderName) })
+    }, onSuccess = { reloadTasks(it.folderName); navigation = NavigationItem.TASKS })
 
     /** Runs Git safety checks away from Compose's event-dispatch thread. */
     fun requestDeleteRisk(task: TaskManifest) {
@@ -728,7 +736,7 @@ class DesktopApplication(
             }
             deleteRiskInspections = deleteRiskInspections + (
                 key to result.fold(
-                    onSuccess = { DeleteRiskInspection(loading = false, risks = it) },
+                    onSuccess = { risks -> DeleteRiskInspection(loading = false, risks = risks) },
                     onFailure = { DeleteRiskInspection(loading = false, error = it.message ?: "删除风险检查失败") },
                 )
             )
@@ -739,9 +747,10 @@ class DesktopApplication(
         deleteRiskInspections = deleteRiskInspections - task.taskDirectoryName
     }
 
-    fun deleteTask(task: TaskManifest, forceDiscard: Boolean) = runOperation("正在删除任务…", "任务已删除", block = {
-        tasksApplication.delete(config, taskDirectory(task), forceDiscard)
-    }, onSuccess = { reloadTasks() })
+    fun deleteTask(task: TaskManifest, forceDiscard: Boolean) =
+        runOperation("正在删除任务…", "任务已删除", block = {
+            tasksApplication.delete(config, taskDirectory(task), forceDiscard)
+        }, onSuccess = { reloadTasks() })
 
     fun buildTag(task: TaskManifest, workspace: ServiceWorkspace) = runOperation("正在构建 UAT Tag…", "UAT Tag 操作已完成", block = {
         // A module key removes ambiguity when one repository contributes multiple workspaces.
@@ -875,6 +884,17 @@ class DesktopApplication(
                     requirementParticipants - task.folderName
                 } else requirementParticipants + (task.folderName to info.participants)
             }
+        }
+    }
+
+    private fun refreshRequirementStatus(task: TaskManifest) {
+        val workItem = FeishuWorkItemLink.parse(task.requirementLink) ?: return
+        scope.launch {
+            val info = withContext(ioDispatcher) { runCatching { requirementMetadataProvider.fetch(task.requirementLink, configuredProjectKey(workItem)) }.getOrNull() }
+            if (tasks.none { it.folderName == task.folderName }) return@launch
+            requirementParticipants = if (info == null || info.participants.isEmpty) requirementParticipants - task.folderName else requirementParticipants + (task.folderName to info.participants)
+            val status = info?.status
+            requirementStatuses = if (status == null) requirementStatuses - task.folderName else requirementStatuses + (task.folderName to status)
         }
     }
 

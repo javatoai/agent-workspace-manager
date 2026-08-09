@@ -4,16 +4,18 @@ package com.snowball.awm.core
 data class RequirementDraftState(
     val requirementLink: String = "",
     val taskName: String = "",
+    val requirementTitle: String? = null,
     val branch: String = "",
     val nameEdited: Boolean = false,
     val branchEdited: Boolean = false,
     val metadataLoading: Boolean = false,
     val metadataHint: String? = null,
 ) {
-    fun changeRequirement(value: String, branchPrefix: String): RequirementDraftState {
+    fun changeRequirement(value: String, branchPrefix: String, title: String? = null): RequirementDraftState {
         val resolved = BranchPrefixResolver.resolve(branchPrefix, value)
         return copy(
             requirementLink = value,
+            requirementTitle = title?.takeIf(String::isNotBlank),
             branch = if (branchEdited) branch else resolved ?: branchPrefix,
             metadataLoading = FeishuWorkItemLink.parse(value) != null,
             metadataHint = if (BranchPrefixResolver.containsUnresolvedPlaceholder(branchPrefix) && resolved == null) {
@@ -37,7 +39,7 @@ data class RequirementDraftState(
         if (requestedLink != requirementLink) return this
         val title = metadata?.title?.takeIf(String::isNotBlank)
         return copy(
-            taskName = if (!nameEdited && title != null) title else taskName,
+            requirementTitle = title,
             metadataLoading = false,
             metadataHint = if (metadata == null) "未获取到需求标题，可手工填写" else metadataHint,
         )

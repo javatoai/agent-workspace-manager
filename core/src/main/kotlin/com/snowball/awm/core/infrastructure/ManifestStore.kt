@@ -30,13 +30,16 @@ class ManifestStore(
     },
 ) : TaskManifestRepository {
     override fun save(taskDirectory: Path, manifest: TaskManifest) {
-        require(manifest.schemaVersion == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
+        require(SchemaVersionCompatibility.isCompatible(manifest.schemaVersion, CURRENT_TASK_MANIFEST_SCHEMA_VERSION)) {
             "不能写入任务 JSON 版本 ${manifest.schemaVersion}，当前版本为 $CURRENT_TASK_MANIFEST_SCHEMA_VERSION"
         }
         taskDirectory.createDirectories()
         val target = taskDirectory.resolve(FILE_NAME)
         val temporary = Files.createTempFile(taskDirectory, ".$FILE_NAME-", ".tmp")
-        Files.writeString(temporary, json.encodeToString(manifest))
+        Files.writeString(
+            temporary,
+            json.encodeToString(manifest.copy(schemaVersion = CURRENT_TASK_MANIFEST_SCHEMA_VERSION)),
+        )
         try {
             Files.move(
                 temporary,
@@ -55,7 +58,7 @@ class ManifestStore(
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
             ?.contentOrNull
-        require(version == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
+        require(SchemaVersionCompatibility.isCompatible(version, CURRENT_TASK_MANIFEST_SCHEMA_VERSION)) {
             "任务 JSON 版本不受支持：${version ?: "缺少 schemaVersion"}，当前版本为 " +
                 CURRENT_TASK_MANIFEST_SCHEMA_VERSION
         }
@@ -81,7 +84,7 @@ class ManifestStore(
                         .jsonObject["schemaVersion"]
                         ?.jsonPrimitive
             ?.contentOrNull
-                    if (version == CURRENT_TASK_MANIFEST_SCHEMA_VERSION) {
+                    if (SchemaVersionCompatibility.isCompatible(version, CURRENT_TASK_MANIFEST_SCHEMA_VERSION)) {
                         current.add(directory to json.decodeFromString(content))
                     } else {
                         unsupported.add(directory)
