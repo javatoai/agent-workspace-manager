@@ -107,6 +107,18 @@ class MeegleRequirementMetadataProviderTest {
     }
 
     @Test
+    fun `uses configured project key for a custom Feishu space`() {
+        val runner = RecordingRunner(CommandResult(0, """{"name":"自定义空间标题"}""", ""))
+        val provider = MeegleRequirementMetadataProvider(runner, isWindows = false)
+
+        assertEquals(
+            "自定义空间标题",
+            provider.fetch("https://project.feishu.cn/payment/userstory/detail/123", "project-payment")?.title,
+        )
+        assertEquals("project-payment", runner.command?.get(runner.command!!.indexOf("--project-key") + 1))
+    }
+
+    @Test
     fun `returns null when cli fails or status is absent`() {
         assertNull(
             MeegleRequirementMetadataProvider(

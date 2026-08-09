@@ -59,22 +59,28 @@ class DesktopApplicationTest {
         store.save(
             AppConfig(
                 taskRoot = root.resolve("tasks").toString(),
-                groups = listOf(GroupConfig("g", "G")),
+                repositories = listOf(
+                    RepositoryConfig("repo", "Service", root.resolve("service").toString(), root.resolve("service/.git").toString()),
+                ),
+                groups = listOf(
+                    GroupConfig("g", "G", services = listOf(GroupServiceConfig.standard("service", "repo", "Service"))),
+                ),
             ),
         )
         val controller = DesktopApplication(paths = paths, configStore = store)
         try {
             val preview = controller.previewAgents(
-                folderName = "TASK-1",
+                folderName = "支付 订单优化",
                 branch = "feature/task-1",
                 groupId = "g",
-                serviceIds = emptySet(),
+                serviceIds = setOf("service"),
                 cloneOverrides = emptyMap(),
                 requirementLink = "REQ-123 raw requirement",
                 notes = "notes",
             )
 
             assertContains(preview, "REQ-123 raw requirement")
+            assertContains(preview, root.resolve("tasks").resolve("支付 订单优化").toString())
         } finally {
             controller.close()
         }

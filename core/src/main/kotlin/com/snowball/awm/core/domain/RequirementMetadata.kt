@@ -21,11 +21,11 @@ data class FeishuWorkItemLink(
     val space: String,
     val kind: String,
     val workItemId: String,
-    val projectKey: String,
+    val projectKey: String?,
 ) {
     companion object {
         private val linkPattern = Regex(
-            """^https?://project\.feishu\.cn/(obt|rta)/(userstory|othertask|bug|technical)/detail/(\d+)(?:[/?#].*)?$""",
+            """^https?://project\.feishu\.cn/([A-Za-z0-9_-]+)/(userstory|othertask|bug|technical)/detail/(\d+)(?:[/?#].*)?$""",
             RegexOption.IGNORE_CASE,
         )
         private val projectKeys = mapOf(
@@ -41,7 +41,7 @@ data class FeishuWorkItemLink(
                 space = space,
                 kind = match.groupValues[2].lowercase(Locale.ROOT),
                 workItemId = match.groupValues[3],
-                projectKey = projectKeys.getValue(space),
+                projectKey = projectKeys[space],
             )
         }
     }

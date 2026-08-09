@@ -13,8 +13,13 @@ class MeegleRequirementMetadataProvider(
     private val isWindows: Boolean = System.getProperty("os.name")
         .lowercase(Locale.ROOT)
         .contains("win"),
-) : RequirementMetadataProvider {
-    override fun fetch(requirementLink: String): RequirementMetadata? {
+) : ProjectScopedRequirementMetadataProvider {
+    override fun fetch(requirementLink: String): RequirementMetadata? =
+        FeishuWorkItemLink.parse(requirementLink)?.projectKey?.let { projectKey ->
+            fetch(requirementLink, projectKey)
+        }
+
+    override fun fetch(requirementLink: String, projectKey: String): RequirementMetadata? {
         val workItem = FeishuWorkItemLink.parse(requirementLink) ?: return null
         val result = runCatching {
             runner.run(
@@ -23,7 +28,7 @@ class MeegleRequirementMetadataProvider(
                     "workitem",
                     "get",
                     "--project-key",
-                    workItem.projectKey,
+                    projectKey,
                     "--work-item-id",
                     workItem.workItemId,
                     "--format",

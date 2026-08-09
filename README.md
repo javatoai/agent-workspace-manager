@@ -59,7 +59,7 @@ macOS 构建 DMG：
 
 每个任务目录包含严格版本的 `agent-workspace.json`、最终合成的 `AGENTS.md`、Tag 构建历史以及服务 Worktree 或独立克隆。
 
-0.3.0 使用全新的严格 schema：配置 v6、任务 v5。AWM 不读取、不迁移也不删除旧 TaskWT 数据。
+0.3.0 使用全新的严格 schema：配置 v7、任务 v5。AWM 不读取、不迁移也不删除旧 TaskWT 数据。
 
 ## 构建产物
 

@@ -25,7 +25,12 @@ class MeegleRequirementLinkSource(
                     .forEach { id -> links += "https://project.feishu.cn/${project.simpleName}/$path/detail/$id" }
             } }
         }
-        return RequirementLinkLoadResult(links.map { url -> RequirementLinkCandidate(metadata.fetch(url)?.title ?: "未读取到需求标题", url, sourceId) }, failures)
+        return RequirementLinkLoadResult(links.map { url ->
+            val projectKey = projects.firstOrNull { project ->
+                url.startsWith("https://project.feishu.cn/${project.simpleName}/", ignoreCase = true)
+            }?.projectKey
+            RequirementLinkCandidate(metadata.fetch(url, projectKey)?.title ?: "未读取到需求标题", url, sourceId)
+        }, failures)
     }
     private fun query(project: MeegleProjectConfig, type: String, where: String, failures: MutableList<RequirementLinkFailure>, sprint: String?): List<String> {
         val mql = "SELECT `Item Id` FROM `${project.projectKey}`.`$type` WHERE $where LIMIT 100"

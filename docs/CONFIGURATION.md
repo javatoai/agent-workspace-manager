@@ -17,7 +17,7 @@ agents/groups/<groupId>/AGENTS.md
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {

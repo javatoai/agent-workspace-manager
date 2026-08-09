@@ -34,6 +34,7 @@ import com.snowball.awm.core.RepositoryInfo
 import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RequirementMetadataProvider
+import com.snowball.awm.core.fetch
 import com.snowball.awm.core.RequirementParticipants
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
@@ -262,7 +263,8 @@ class DesktopApplication(
     fun requestRequirementMetadata(link: String, onResult: (RequirementMetadata?) -> Unit) {
         val revision = ++metadataRequestRevision
         metadataJob?.cancel()
-        if (FeishuWorkItemLink.parse(link) == null) {
+        val workItem = FeishuWorkItemLink.parse(link)
+        if (workItem == null) {
             // Plain-text references are allowed. Clear the UI state immediately
             // because no local CLI lookup will run for them.
             onResult(null)
@@ -271,7 +273,7 @@ class DesktopApplication(
         metadataJob = scope.launch {
             delay(250)
             val metadata = withContext(ioDispatcher) {
-                runCatching { requirementMetadataProvider.fetch(link) }.getOrNull()
+                runCatching { requirementMetadataProvider.fetch(link, configuredProjectKey(workItem)) }.getOrNull()
             }
             if (revision == metadataRequestRevision) onResult(metadata)
         }
@@ -558,9 +560,10 @@ class DesktopApplication(
         notes: String,
     ): String {
         val root = config.taskRoot?.let(Path::of) ?: paths.temp
-        val normalizedName = folderName.trim().ifBlank { "任务名称" }
+        val normalizedName = folderName.ifBlank { "任务名称" }
         val normalizedBranch = branch.trim().ifBlank { "feature/example" }
-        val directoryName = runCatching { TaskNaming.directoryName(normalizedName) }.getOrDefault("preview")
+        val directoryName = runCatching { TaskNaming.requireValidDirectoryName(normalizedName) }
+            .getOrDefault("任务名称")
         val now = AwmTime.format(Instant.now())
         val taskDirectory = root.resolve(directoryName)
         val repositoriesById = config.repositories.associateBy(RepositoryConfig::id)
@@ -842,10 +845,10 @@ class DesktopApplication(
     }
 
     fun refreshRequirementStatuses() {
-        tasks.filter { FeishuWorkItemLink.parse(it.requirementLink) != null }.forEach { task ->
+        tasks.mapNotNull { task -> FeishuWorkItemLink.parse(task.requirementLink)?.let { task to it } }.forEach { (task, workItem) ->
             scope.launch {
                 val info = withContext(ioDispatcher) {
-                    runCatching { requirementMetadataProvider.fetch(task.requirementLink) }.getOrNull()
+                    runCatching { requirementMetadataProvider.fetch(task.requirementLink, configuredProjectKey(workItem)) }.getOrNull()
                 }
                 if (tasks.none { it.folderName == task.folderName }) return@launch
                 val status = info?.status
@@ -858,6 +861,12 @@ class DesktopApplication(
             }
         }
     }
+
+    /** Resolves a configured Meegle project key for arbitrary user-defined Feishu space names. */
+    private fun configuredProjectKey(workItem: FeishuWorkItemLink): String? =
+        config.meegleProjects.firstOrNull { project -> project.simpleName.equals(workItem.space, ignoreCase = true) }
+            ?.projectKey
+            ?: workItem.projectKey
 
     fun dismissMessages() {
         operationCoordinator.dismiss()
