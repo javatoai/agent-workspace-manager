@@ -962,7 +962,6 @@ private fun SettingsScreen(controller: DesktopApplication) {
     var webStorm by remember(controller.config.webStormExecutable) { mutableStateOf(controller.config.webStormExecutable.orEmpty()) }
     var terminal by remember(controller.config.terminalExecutable) { mutableStateOf(controller.config.terminalExecutable.orEmpty()) }
     var advancedExpanded by remember { mutableStateOf(false) }
-    var meegleAutoLoad by remember(controller.config.meegleAutoLoadRequirementLinks) { mutableStateOf(controller.config.meegleAutoLoadRequirementLinks) }
     val meegleProjects = remember(controller.config.meegleProjects) { mutableStateMapOf<Int, MeegleProjectConfig>().apply { controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) } } }
     var newGroup by remember { mutableStateOf(false) }
     var renameGroup by remember { mutableStateOf<GroupConfig?>(null) }
@@ -992,35 +991,6 @@ private fun SettingsScreen(controller: DesktopApplication) {
                         ThemePreference.entries.forEach { theme -> FilterChip(controller.config.theme == theme, { controller.setTheme(theme) }, label = { Text(theme.displayName) }) }
                     }
                     Button(onClick = { controller.updateTaskRoot(taskRoot) }, enabled = taskRoot.isNotBlank()) { Text("保存目录") }
-                }
-            }
-            }
-            item {
-            SettingsCard("高级设置", "配置创建任务时可自动拉取的飞书需求链接来源。") {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("飞书需求链接来源", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                    Switch(advancedExpanded, { advancedExpanded = it })
-                }
-                if (advancedExpanded) {
-                    Text("Meegle 空间", style = MaterialTheme.typography.titleSmall)
-                    meegleProjects.toSortedMap().forEach { (index, project) ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(project.projectKey, { value -> meegleProjects[index] = project.copy(projectKey = value) }, Modifier.weight(1f), label = { Text("空间 Key") }, singleLine = true)
-                            OutlinedTextField(project.simpleName, { value -> meegleProjects[index] = project.copy(simpleName = value) }, Modifier.weight(1f), label = { Text("空间短名") }, singleLine = true)
-                            IconButton(onClick = { meegleProjects.remove(index) }) { Icon(Icons.Outlined.Delete, "删除空间") }
-                        }
-                    }
-                    OutlinedButton(onClick = { meegleProjects[(meegleProjects.keys.maxOrNull() ?: -1) + 1] = MeegleProjectConfig("space-key", "space-name") }) { Icon(Icons.Outlined.Add, null); Text("添加空间") }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("创建任务时自动拉取飞书需求链接", Modifier.weight(1f))
-                        Switch(meegleAutoLoad, { checked ->
-                            if (!checked) meegleAutoLoad = false
-                            else if (controller.updateMeegleSettings(meegleProjects.toSortedMap().values.toList(), true)) meegleAutoLoad = true
-                        })
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Button(onClick = { controller.updateMeegleSettings(meegleProjects.toSortedMap().values.toList(), meegleAutoLoad) }) { Text("保存飞书需求配置") }
-                    }
                 }
             }
             }
@@ -1097,6 +1067,31 @@ private fun SettingsScreen(controller: DesktopApplication) {
                 PathField("终端", terminal, { terminal = it }, !controller.pathPickerBusy) { controller.chooseFile(terminal) { terminal = it } }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Button(onClick = { controller.updateExecutables(idea, webStorm, terminal) }) { Text("保存工具配置") }
+                }
+            }
+            }
+            item {
+            SettingsCard("高级设置", "配置创建任务时可自动拉取的飞书需求链接来源。") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("飞书需求链接来源", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                    Switch(advancedExpanded, { advancedExpanded = it })
+                }
+                if (advancedExpanded) {
+                    meegleProjects.toSortedMap().forEach { (index, project) ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(project.projectKey, { value -> meegleProjects[index] = project.copy(projectKey = value) }, Modifier.weight(1f), label = { Text("project_key") }, singleLine = true)
+                            OutlinedTextField(project.simpleName, { value -> meegleProjects[index] = project.copy(simpleName = value) }, Modifier.weight(1f), label = { Text("simple_name") }, singleLine = true)
+                            IconButton(onClick = { meegleProjects.remove(index) }) { Icon(Icons.Outlined.Delete, "删除空间") }
+                        }
+                    }
+                    OutlinedButton(onClick = { meegleProjects[(meegleProjects.keys.maxOrNull() ?: -1) + 1] = MeegleProjectConfig("space-key", "space-name") }) { Icon(Icons.Outlined.Add, null); Text("添加空间") }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("创建任务时自动拉取飞书需求链接", Modifier.weight(1f))
+                        Switch(controller.config.meegleAutoLoadRequirementLinks, { checked -> controller.updateMeegleSettings(meegleProjects.toSortedMap().values.toList(), checked) })
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Button(onClick = { controller.updateMeegleSettings(meegleProjects.toSortedMap().values.toList(), controller.config.meegleAutoLoadRequirementLinks) }) { Text("保存飞书需求配置") }
+                    }
                 }
             }
             }
@@ -1368,7 +1363,9 @@ private fun CreateTaskDialog(
                                         Column(Modifier.weight(1f)) {
                                             Text(service.displayName, style = MaterialTheme.typography.titleSmall)
                                             Text(
-                                                if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个模块 · ${service.strategy.displayName}" else "默认 ${service.cloneDefaultBranch} · ${service.strategy.displayName}",
+                                                if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
+                                                    if (service.modules.size > 1) "${service.modules.size} 个模块 · ${service.strategy.displayName}" else service.strategy.displayName
+                                                } else "默认 ${service.cloneDefaultBranch} · ${service.strategy.displayName}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )

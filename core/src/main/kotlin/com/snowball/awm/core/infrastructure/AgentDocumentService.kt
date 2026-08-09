@@ -31,7 +31,7 @@ interface AgentDocuments {
 class AgentDocumentService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
 ) : AgentDocuments {
-    fun ensureGlobalFile(): Path = ensureFile(paths.globalAgents, DEFAULT_GLOBAL_INSTRUCTIONS)
+    fun ensureGlobalFile(): Path = ensureFile(paths.globalAgents)
 
     fun ensureGroupFile(groupId: String): Path = ensureFile(paths.groupAgents(groupId))
 
@@ -187,15 +187,6 @@ class AgentDocumentService(
     }
 
     companion object {
-        val DEFAULT_GLOBAL_INSTRUCTIONS = """
-            # Agent 自测约定
-
-            - 启动本地服务前动态探测空闲端口。
-            - 通过环境变量或启动参数覆盖端口，不修改仓库中的端口配置文件。
-            - 端口冲突时重新选择空闲端口，不终止或占用其他任务的进程。
-            - 自测完成后报告实际端口与访问地址。
-        """.trimIndent() + "\n"
-
         const val GENERATED_BEGIN = "<!-- AWM:GENERATED:BEGIN -->"
         const val GENERATED_END = "<!-- AWM:GENERATED:END -->"
         const val TASK_NOTES_BEGIN = "<!-- AWM:TASK-NOTES:BEGIN -->"

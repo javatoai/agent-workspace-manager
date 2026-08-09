@@ -1,6 +1,7 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 7
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 5
@@ -23,7 +24,9 @@ enum class ThemePreference {
 /** One explicitly configured Feishu Project space used to discover requirement links. */
 @Serializable
 data class MeegleProjectConfig(
+    @SerialName("project_key")
     val projectKey: String,
+    @SerialName("simple_name")
     val simpleName: String,
 ) {
     init {

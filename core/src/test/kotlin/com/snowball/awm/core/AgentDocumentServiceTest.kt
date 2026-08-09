@@ -14,11 +14,11 @@ class AgentDocumentServiceTest {
     lateinit var temporary: Path
 
     @Test
-    fun `new global file receives self-test defaults but existing content is never overwritten`() {
+    fun `new global file is empty and existing content is never overwritten`() {
         val paths = ApplicationPaths(temporary.resolve("defaults-home"))
         val service = AgentDocumentService(paths)
         service.ensureGlobalFile()
-        assertTrue(Files.readString(paths.globalAgents).contains("动态探测空闲端口"))
+        assertEquals("", Files.readString(paths.globalAgents))
 
         Files.writeString(paths.globalAgents, "用户自己的规则")
         service.ensureGlobalFile()
