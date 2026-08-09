@@ -74,7 +74,7 @@ class ConfigStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
-        assertEquals(6, store.load().schemaVersion)
+        assertEquals(7, store.load().schemaVersion)
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
@@ -84,7 +84,7 @@ class ConfigStoreTest {
     fun `unsupported config is rejected without being rewritten`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         Files.createDirectories(paths.home)
-        val legacy = """{"schemaVersion":5,"groups":[]}"""
+        val legacy = """{"schemaVersion":6,"groups":[]}"""
         Files.writeString(paths.config, legacy)
 
         val store = ConfigStore(paths)

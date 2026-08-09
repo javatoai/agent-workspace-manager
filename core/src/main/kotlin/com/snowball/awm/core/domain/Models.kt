@@ -2,7 +2,7 @@ package com.snowball.awm.core
 
 import kotlinx.serialization.Serializable
 
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 6
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = 7
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = 5
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
@@ -18,6 +18,18 @@ enum class ThemePreference {
     SYSTEM,
     LIGHT,
     DARK,
+}
+
+/** One explicitly configured Feishu Project space used to discover requirement links. */
+@Serializable
+data class MeegleProjectConfig(
+    val projectKey: String,
+    val simpleName: String,
+) {
+    init {
+        require(projectKey.matches(Regex("[A-Za-z0-9_-]+"))) { "Meegle 空间 Key 只能包含字母、数字、下划线和连字符" }
+        require(simpleName.matches(Regex("[A-Za-z0-9_-]+"))) { "Meegle 空间短名只能包含字母、数字、下划线和连字符" }
+    }
 }
 
 @Serializable
@@ -171,7 +183,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 6 is intentionally strict and contains no compatibility-only fields. */
+/** Version 7 is intentionally strict and contains no compatibility-only fields. */
 @Serializable
 data class AppConfig(
     val schemaVersion: Int = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -184,6 +196,9 @@ data class AppConfig(
     val ideaExecutable: String? = null,
     val webStormExecutable: String? = null,
     val terminalExecutable: String? = null,
+    val meegleProjects: List<MeegleProjectConfig> = emptyList(),
+    /** Controls only opening the create-task dialog; it never runs at app startup. */
+    val meegleAutoLoadRequirementLinks: Boolean = false,
 ) {
     init {
         require(groups.isNotEmpty()) { "至少需要一个组" }
@@ -191,6 +206,9 @@ data class AppConfig(
         require(repositories.map { it.id }.distinct().size == repositories.size) { "仓库 ID 不能重复" }
         require(repositories.map { it.gitCommonDirectory.lowercase() }.distinct().size == repositories.size) {
             "同一 Git common directory 只能配置一次"
+        }
+        require(meegleProjects.map(MeegleProjectConfig::projectKey).distinct().size == meegleProjects.size) {
+            "Meegle 空间 Key 不能重复"
         }
         val repositoryById = repositories.associateBy(RepositoryConfig::id)
         groups.flatMap(GroupConfig::services).forEach { service ->

@@ -13,7 +13,7 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.3.0 的 `config.json` 使用严格 schema 6。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.3.0 的 `config.json` 使用严格 schema 7。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
