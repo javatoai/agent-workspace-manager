@@ -29,7 +29,9 @@ class MeegleRequirementMetadataProvider(
                     "--format",
                     "json",
                 ),
-                timeout = Duration.ofSeconds(20),
+                // Metadata is optional while creating a task. A short bound
+                // prevents an unavailable local CLI from blocking the form.
+                timeout = Duration.ofSeconds(8),
             )
         }.getOrNull() ?: return null
         if (!result.succeeded) return null

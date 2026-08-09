@@ -220,6 +220,7 @@ class DesktopApplication(
         private set
     private var gitStatusRevision = 0L
     private var metadataJob: Job? = null
+    private var metadataRequestRevision = 0L
     var requirementLinkCandidates by mutableStateOf<List<RequirementLinkCandidate>>(emptyList())
         private set
     var requirementLinksLoading by mutableStateOf(false)
@@ -259,16 +260,20 @@ class DesktopApplication(
         workspaceGitHealth[normalizedWorkspacePath(workspace)]
 
     fun requestRequirementMetadata(link: String, onResult: (RequirementMetadata?) -> Unit) {
+        val revision = ++metadataRequestRevision
         metadataJob?.cancel()
         if (FeishuWorkItemLink.parse(link) == null) {
+            // Plain-text references are allowed. Clear the UI state immediately
+            // because no local CLI lookup will run for them.
+            onResult(null)
             return
         }
         metadataJob = scope.launch {
-            delay(450)
+            delay(250)
             val metadata = withContext(ioDispatcher) {
                 runCatching { requirementMetadataProvider.fetch(link) }.getOrNull()
             }
-            onResult(metadata)
+            if (revision == metadataRequestRevision) onResult(metadata)
         }
     }
 

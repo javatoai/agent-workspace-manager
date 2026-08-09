@@ -37,4 +37,23 @@ class RequirementDraftStateTest {
         )
         assertEquals(current, current.applyMetadata("https://project.feishu.cn/obt/userstory/detail/1", RequirementMetadata("旧标题", null)))
     }
+
+    @Test
+    fun `plain text requirement never leaves metadata loading`() {
+        val result = RequirementDraftState().changeRequirement("PAY-1024", "feature/{num}_")
+
+        assertFalse(result.metadataLoading)
+    }
+
+    @Test
+    fun `missing metadata clears loading and keeps manual entry usable`() {
+        val linked = RequirementDraftState().changeRequirement(
+            "https://project.feishu.cn/obt/userstory/detail/7060612727",
+            "feature/{num}_",
+        )
+        val result = linked.applyMetadata(linked.requirementLink, null)
+
+        assertFalse(result.metadataLoading)
+        assertEquals(linked.requirementLink, result.requirementLink)
+    }
 }

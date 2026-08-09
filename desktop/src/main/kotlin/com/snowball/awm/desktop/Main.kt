@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1289,6 +1290,8 @@ private fun CreateTaskDialog(
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedToolIds by remember { mutableStateOf(initialGroup.defaultWorkspaceToolIds.toSet()) }
     var rightTab by remember { mutableStateOf("notes") }
+    var requirementMenuExpanded by remember { mutableStateOf(false) }
+    var requirementSearch by remember { mutableStateOf("") }
     val overrides = remember { mutableStateMapOf<String, String>() }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
@@ -1330,59 +1333,76 @@ private fun CreateTaskDialog(
                     ) {
                     Column(Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                         SectionHeader("任务信息", "名称和分支将用于创建任务目录与 Git 分支")
-                        OutlinedTextField(
-                            draft.requirementLink,
-                            { draft = draft.changeRequirement(it, group.defaultBranchPrefix) },
-                            Modifier.fillMaxWidth(),
-                            label = { Text("飞书需求链接（可选）") },
-                            supportingText = {
-                                when {
-                                    draft.metadataLoading -> Text("正在读取需求标题…")
-                                    draft.metadataHint != null -> Text(draft.metadataHint!!)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                            OutlinedTextField(
+                                draft.requirementLink,
+                                { draft = draft.changeRequirement(it, group.defaultBranchPrefix) },
+                                Modifier.weight(1f),
+                                label = { Text("飞书需求链接（可选）") },
+                                supportingText = {
+                                    when {
+                                        draft.metadataLoading -> Text("正在读取需求标题…")
+                                        draft.metadataHint != null -> Text(draft.metadataHint!!)
+                                    }
+                                },
+                                singleLine = true,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Box {
+                                OutlinedButton(
+                                    onClick = { requirementMenuExpanded = true },
+                                    enabled = controller.requirementLinkCandidates.isNotEmpty(),
+                                    modifier = Modifier.padding(top = 8.dp),
+                                ) { Text("选择需求") }
+                                DropdownMenu(
+                                    expanded = requirementMenuExpanded,
+                                    onDismissRequest = { requirementMenuExpanded = false },
+                                    modifier = Modifier.widthIn(min = 520.dp, max = 680.dp),
+                                ) {
+                                    OutlinedTextField(
+                                        requirementSearch,
+                                        { requirementSearch = it },
+                                        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                                        label = { Text("搜索标题或链接") },
+                                        singleLine = true,
+                                    )
+                                    val matchingLinks = controller.requirementLinkCandidates.filter {
+                                        requirementSearch.isBlank() ||
+                                            it.title.contains(requirementSearch, true) ||
+                                            it.url.contains(requirementSearch, true)
+                                    }
+                                    Column(
+                                        Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                                    ) {
+                                        matchingLinks.forEach { candidate ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                        Text(
+                                                            candidate.url,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        )
+                                                    }
+                                                },
+                                                onClick = {
+                                                    draft = draft.changeRequirement(candidate.url, group.defaultBranchPrefix)
+                                                    requirementMenuExpanded = false
+                                                },
+                                            )
+                                        }
+                                    }
                                 }
-                            },
-                            singleLine = true,
-                        )
+                            }
+                        }
                         if (controller.requirementLinksLoading) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(Modifier.width(8.dp))
                                 Text("正在拉取飞书需求链接", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        val matchingLinks = controller.requirementLinkCandidates.filter {
-                            draft.requirementLink.isBlank() ||
-                                it.title.contains(draft.requirementLink, true) ||
-                                it.url.contains(draft.requirementLink, true)
-                        }
-                        if (matchingLinks.isNotEmpty()) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                            ) {
-                                Column(
-                                    Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState()),
-                                ) {
-                                    matchingLinks.forEach { candidate ->
-                                        TextButton(
-                                            onClick = {
-                                                draft = draft.changeRequirement(candidate.url, group.defaultBranchPrefix)
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                        ) {
-                                            Column(Modifier.fillMaxWidth()) {
-                                                Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                Text(
-                                                    candidate.url,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
                             }
                         }
                         OutlinedTextField(draft.taskName, { draft = draft.editName(it) }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, placeholder = { Text("例如：PAY-1024 支付订单优化") }, singleLine = true)
@@ -1522,11 +1542,17 @@ private fun CreateTaskDialog(
 /** Read-only Material 3 rendering used exclusively for generated AGENTS.md previews. */
 @Composable
 private fun AgentsMarkdownPreview(content: String) {
+    val verticalScroll = rememberScrollState()
+    val horizontalScroll = rememberScrollState()
     Markdown(
         content = content,
         colors = markdownColor(),
         typography = markdownTypography(),
-        modifier = Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(15.dp)
+            .verticalScroll(verticalScroll)
+            .horizontalScroll(horizontalScroll),
         // Parsing is asynchronous; retaining the last result avoids preview flicker while typing.
         retainState = true,
     )

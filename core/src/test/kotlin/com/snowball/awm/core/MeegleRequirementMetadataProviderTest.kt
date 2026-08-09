@@ -57,6 +57,7 @@ class MeegleRequirementMetadataProviderTest {
             ),
             runner.command,
         )
+        assertEquals(Duration.ofSeconds(8), runner.timeout)
     }
 
     @Test
@@ -125,6 +126,7 @@ class MeegleRequirementMetadataProviderTest {
         private val result: CommandResult,
     ) : CommandRunner {
         var command: List<String>? = null
+        var timeout: Duration? = null
 
         override fun run(
             command: List<String>,
@@ -133,6 +135,7 @@ class MeegleRequirementMetadataProviderTest {
             environment: Map<String, String>,
         ): CommandResult {
             this.command = command
+            this.timeout = timeout
             return result
         }
     }
