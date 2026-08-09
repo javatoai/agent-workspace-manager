@@ -250,6 +250,7 @@ class DesktopApplication(
         set(value) {
             sessionStore.navigation = value
             if (value in setOf(NavigationItem.TASKS, NavigationItem.ARCHIVED)) {
+                taskController.refreshGitStatus()
                 requirementController.refreshAll()
             }
         }
@@ -348,10 +349,10 @@ class DesktopApplication(
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun updateTaskRoot(value: String) = settingsController.updateTaskRoot(value)
     fun updateExecutables(idea: String, webStorm: String, terminal: String) = settingsController.updateExecutables(idea, webStorm, terminal)
-    fun addGroup(name: String) = settingsController.addGroup(name)
-    fun renameGroup(groupId: String, name: String) = settingsController.renameGroup(groupId, name)
+    fun addGroup(name: String, onCompleted: () -> Unit = {}) = settingsController.addGroup(name, onCompleted)
+    fun renameGroup(groupId: String, name: String, onCompleted: () -> Unit = {}) = settingsController.renameGroup(groupId, name, onCompleted)
     fun moveGroup(groupId: String, offset: Int) = settingsController.moveGroup(groupId, offset)
-    fun deleteGroup(groupId: String) = settingsController.deleteGroup(groupId)
+    fun deleteGroup(groupId: String, onCompleted: () -> Unit = {}) = settingsController.deleteGroup(groupId, onCompleted)
     fun setGroupTagEnabled(groupId: String, enabled: Boolean) = settingsController.setGroupTagEnabled(groupId, enabled)
     fun updateGroupDefaults(groupId: String, branchPrefix: String, workspaceToolIds: List<String>) =
         settingsController.updateGroupDefaults(groupId, branchPrefix, workspaceToolIds)
@@ -363,12 +364,14 @@ class DesktopApplication(
     fun remoteBranchState(repositoryId: String, remote: String) = settingsController.remoteBranchState(repositoryId, remote)
     fun addRepository(groupId: String, selectedDirectory: String, strategy: WorkspaceStrategy) =
         settingsController.addRepository(groupId, selectedDirectory, strategy)
-    fun addRepositories(groupId: String, selectedDirectories: List<String>) =
-        settingsController.addRepositories(groupId, selectedDirectories)
+    fun addRepositories(groupId: String, selectedDirectories: List<String>, onCompleted: () -> Unit = {}) =
+        settingsController.addRepositories(groupId, selectedDirectories, onCompleted)
     fun clearRepositoryAddResult() = settingsController.clearRepositoryAddResult()
-    fun updateService(groupId: String, service: GroupServiceConfig) = settingsController.updateService(groupId, service)
+    fun updateService(groupId: String, service: GroupServiceConfig, onCompleted: () -> Unit = {}) =
+        settingsController.updateService(groupId, service, onCompleted)
     fun moveService(groupId: String, serviceId: String, offset: Int) = settingsController.moveService(groupId, serviceId, offset)
-    fun removeService(groupId: String, serviceId: String) = settingsController.removeService(groupId, serviceId)
+    fun removeService(groupId: String, serviceId: String, onCompleted: () -> Unit = {}) =
+        settingsController.removeService(groupId, serviceId, onCompleted)
     fun readGlobalAgents(): String = agentInstructionsController.readGlobal()
     fun saveGlobalAgents(content: String) = agentInstructionsController.saveGlobal(content)
     fun markGlobalAgentsEdited(content: String) = agentInstructionsController.markGlobalEdited(content)
@@ -385,29 +388,33 @@ class DesktopApplication(
         requirementLink: String,
         notes: String,
         workspaceToolIds: List<String> = emptyList(),
-    ) = taskController.create(folderName, branch, groupId, serviceIds, requirementLink, notes, workspaceToolIds)
+        onCompleted: () -> Unit = {},
+    ) = taskController.create(folderName, branch, groupId, serviceIds, requirementLink, notes, workspaceToolIds, onCompleted)
 
     fun retryWorkspaceTool(task: TaskManifest, toolId: String) = taskController.retryWorkspaceTool(task, toolId)
 
     fun readTaskNotes(task: TaskManifest): String = agentInstructionsController.readTaskNotes(task)
     fun saveTaskNotes(task: TaskManifest, notes: String) = agentInstructionsController.saveTaskNotes(task, notes)
     fun markTaskNotesEdited(task: TaskManifest, notes: String) = agentInstructionsController.markTaskNotesEdited(task, notes)
-    fun archiveTask(task: TaskManifest, force: Boolean = false) = taskController.archive(task)
+    fun archiveTask(task: TaskManifest, force: Boolean = false, onCompleted: () -> Unit = {}) = taskController.archive(task, onCompleted)
 
-    fun restoreTask(task: TaskManifest) = taskController.restore(task)
+    fun restoreTask(task: TaskManifest, onCompleted: () -> Unit = {}) = taskController.restore(task, onCompleted)
 
     /** Runs Git safety checks away from Compose's event-dispatch thread. */
     fun requestDeleteRisk(task: TaskManifest) = taskController.requestDeleteRisk(task)
 
     fun clearDeleteRisk(task: TaskManifest) = taskController.clearDeleteRisk(task)
 
-    fun deleteTask(task: TaskManifest, forceDiscard: Boolean) = taskController.delete(task, forceDiscard)
+    fun deleteTask(task: TaskManifest, forceDiscard: Boolean, onCompleted: () -> Unit = {}) =
+        taskController.delete(task, forceDiscard, onCompleted)
 
     fun buildTag(task: TaskManifest, workspace: ServiceWorkspace) = deliveryController.build(task, workspace)
-    fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>) = deliveryController.buildBatch(task, workspaces)
+    fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>, onCompleted: () -> Unit = {}) =
+        deliveryController.buildBatch(task, workspaces, onCompleted)
     fun clearBatchTagResults() = deliveryController.clearBatchResults()
 
-    fun addServices(task: TaskManifest, serviceIds: List<String>) = taskController.addServices(task, serviceIds)
+    fun addServices(task: TaskManifest, serviceIds: List<String>, onCompleted: () -> Unit = {}) =
+        taskController.addServices(task, serviceIds, onCompleted)
 
     fun retryFailedServices(task: TaskManifest, serviceIds: List<String>? = null) = taskController.retry(task, serviceIds)
 
@@ -474,9 +481,7 @@ class DesktopApplication(
 
     private fun reloadTasks(preferredFolder: String? = selectedTask?.folderName) {
         val loaded = scanTasks(config)
-        tasks = loaded.manifests
-        selectedTask = preferredFolder?.let { folder -> loaded.manifests.firstOrNull { it.folderName == folder } }
-            ?: loaded.manifests.firstOrNull()
+        sessionStore.replaceTasks(loaded.manifests, preferredFolder)
         deliveryController.reloadHistory()
         requirementController.reconcileTasks()
         refreshCurrentTaskGitStatus()

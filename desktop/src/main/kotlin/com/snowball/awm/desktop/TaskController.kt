@@ -101,9 +101,7 @@ class TaskController internal constructor(
     }, onSuccess = { (updatedConfig, loaded) ->
         val selectedFolder = session.selectedTask?.folderName
         onConfigApplied(updatedConfig)
-        session.tasks = loaded.manifests
-        session.selectedTask = selectedFolder?.let { folder -> loaded.manifests.firstOrNull { it.folderName == folder } }
-            ?: loaded.manifests.firstOrNull()
+        session.replaceTasks(loaded.manifests, selectedFolder)
         onTasksChanged()
         onRequirementsRefresh(true)
         refreshGitStatus()
@@ -118,6 +116,7 @@ class TaskController internal constructor(
         link: String,
         notes: String,
         toolIds: List<String>,
+        onCompleted: () -> Unit = {},
     ): Boolean = operations.run("正在创建任务…", "任务已创建", block = {
         val created = tasks.create(
             session.config,
@@ -127,22 +126,25 @@ class TaskController internal constructor(
     }, onSuccess = { created ->
         reloadTasks(created.folderName)
         session.navigation = NavigationItem.TASKS
+        onCompleted()
     })
 
-    fun archive(task: TaskManifest): Boolean =
+    fun archive(task: TaskManifest, onCompleted: () -> Unit = {}): Boolean =
         operations.run("正在归档任务…", "任务已归档", block = {
             tasks.archive(session.config, taskDirectory(task), false)
         }, onSuccess = {
             reloadTasks(it.folderName)
             session.navigation = NavigationItem.ARCHIVED
+            onCompleted()
         })
 
-    fun restore(task: TaskManifest): Boolean =
+    fun restore(task: TaskManifest, onCompleted: () -> Unit = {}): Boolean =
         operations.run("正在恢复任务…", "任务已恢复", block = {
             tasks.restore(session.config, taskDirectory(task))
         }, onSuccess = {
             reloadTasks(it.folderName)
             session.navigation = NavigationItem.TASKS
+            onCompleted()
         })
 
     fun requestDeleteRisk(task: TaskManifest) {
@@ -165,15 +167,15 @@ class TaskController internal constructor(
         deleteRisks = deleteRisks - task.taskDirectoryName
     }
 
-    fun delete(task: TaskManifest, discardChanges: Boolean): Boolean =
+    fun delete(task: TaskManifest, discardChanges: Boolean, onCompleted: () -> Unit = {}): Boolean =
         operations.run("正在删除任务…", "任务已删除", block = {
             tasks.delete(session.config, taskDirectory(task), discardChanges)
-        }, onSuccess = { reloadTasks() })
+        }, onSuccess = { reloadTasks(); onCompleted() })
 
-    fun addServices(task: TaskManifest, serviceIds: List<String>): Boolean =
+    fun addServices(task: TaskManifest, serviceIds: List<String>, onCompleted: () -> Unit = {}): Boolean =
         operations.run("正在追加服务…", "服务已追加", block = {
             tasks.addServices(session.config, taskDirectory(task), AddGroupedTaskServicesRequest(serviceIds))
-        }, onSuccess = { reloadTasks(it.folderName) })
+        }, onSuccess = { reloadTasks(it.folderName); onCompleted() })
 
     fun retry(task: TaskManifest, serviceIds: List<String>? = null): Boolean =
         operations.run("正在重试失败服务…", "失败服务已重试", block = {
@@ -208,9 +210,7 @@ class TaskController internal constructor(
 
     private fun reloadTasks(preferredFolder: String? = session.selectedTask?.folderName) {
         val loaded = scanTasks(session.config)
-        session.tasks = loaded.manifests
-        session.selectedTask = preferredFolder?.let { folder -> loaded.manifests.firstOrNull { it.folderName == folder } }
-            ?: loaded.manifests.firstOrNull()
+        session.replaceTasks(loaded.manifests, preferredFolder)
         onTasksChanged()
         refreshGitStatus()
         loaded.warning?.let { onError(IllegalStateException(it)) }

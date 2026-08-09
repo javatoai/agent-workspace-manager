@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.TaskLifecycleStatus
 
 /** Owns navigation and selection independently from feature controllers. */
 class AppSessionStore(
@@ -15,9 +16,35 @@ class AppSessionStore(
         internal set
     var tasks by mutableStateOf(initialTasks)
         internal set
-    var navigation by mutableStateOf(NavigationItem.TASKS)
-    var selectedTask by mutableStateOf(initialTasks.firstOrNull())
+    private var navigationState by mutableStateOf(NavigationItem.TASKS)
+    var navigation: NavigationItem
+        get() = navigationState
+        set(value) {
+            navigationState = value
+            reconcileSelection()
+        }
+    var selectedTask by mutableStateOf(initialTasks.firstOrNull { it.lifecycleStatus == TaskLifecycleStatus.ACTIVE })
         internal set
+
+    fun replaceTasks(newTasks: List<TaskManifest>, preferredFolder: String? = selectedTask?.folderName) {
+        tasks = newTasks
+        selectedTask = preferredFolder?.let { folder -> newTasks.firstOrNull { it.folderName == folder } }
+        reconcileSelection()
+    }
+
+    private fun reconcileSelection() {
+        val archived = when (navigationState) {
+            NavigationItem.TASKS -> false
+            NavigationItem.ARCHIVED -> true
+            else -> return
+        }
+        val current = selectedTask
+        if (current == null || (current.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) != archived) {
+            selectedTask = tasks.firstOrNull {
+                (it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) == archived
+            }
+        }
+    }
 }
 
 /** Centralizes operation progress and one-shot user feedback. */

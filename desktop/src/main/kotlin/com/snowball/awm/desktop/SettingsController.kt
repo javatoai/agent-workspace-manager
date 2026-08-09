@@ -78,10 +78,10 @@ class SettingsController internal constructor(
         )
     }
 
-    fun addGroup(name: String) = mutateWithService("正在创建组…", "组已创建") { groups.addGroup(name) }
-    fun renameGroup(groupId: String, name: String) = mutateWithService("正在重命名组…", "组已重命名") { groups.renameGroup(groupId, name) }
+    fun addGroup(name: String, onCompleted: () -> Unit = {}) = mutateWithService("正在创建组…", "组已创建", onCompleted) { groups.addGroup(name) }
+    fun renameGroup(groupId: String, name: String, onCompleted: () -> Unit = {}) = mutateWithService("正在重命名组…", "组已重命名", onCompleted) { groups.renameGroup(groupId, name) }
     fun moveGroup(groupId: String, offset: Int) = mutateWithService("正在更新组顺序…", "组顺序已更新") { groups.moveGroup(groupId, offset) }
-    fun deleteGroup(groupId: String) = mutateWithService("正在删除空组…", "空组已删除") {
+    fun deleteGroup(groupId: String, onCompleted: () -> Unit = {}) = mutateWithService("正在删除空组…", "空组已删除", onCompleted) {
         require(session.tasks.none { it.groupId == groupId }) { "该组还有研发任务，不能删除" }
         groups.deleteGroup(groupId)
     }
@@ -124,7 +124,7 @@ class SettingsController internal constructor(
         onSuccess = applyConfig,
     )
 
-    fun addRepositories(groupId: String, paths: List<String>): Boolean = operations.run(
+    fun addRepositories(groupId: String, paths: List<String>, onCompleted: () -> Unit = {}): Boolean = operations.run(
         "正在批量添加仓库…",
         "仓库批量添加完成",
         block = { groups.addRepositories(groupId, paths.map(Path::of)) },
@@ -133,13 +133,15 @@ class SettingsController internal constructor(
             repositoryAddResult = result
             val suffix = if (result.skipped.isNotEmpty()) "，跳过 ${result.skipped.size} 个目录" else ""
             showStatus("已添加 ${result.added.size} 个服务$suffix")
+            onCompleted()
         },
     )
 
     fun clearRepositoryAddResult() { repositoryAddResult = null }
-    fun updateService(groupId: String, service: GroupServiceConfig) = mutateWithService("正在保存服务配置…", "服务配置已保存") { groups.updateService(groupId, service) }
+    fun updateService(groupId: String, service: GroupServiceConfig, onCompleted: () -> Unit = {}) =
+        mutateWithService("正在保存服务配置…", "服务配置已保存", onCompleted) { groups.updateService(groupId, service) }
     fun moveService(groupId: String, serviceId: String, offset: Int) = mutateWithService("正在更新服务顺序…", "服务顺序已更新") { groups.moveService(groupId, serviceId, offset) }
-    fun removeService(groupId: String, serviceId: String) = mutateWithService("正在移除服务…", "服务已移除") {
+    fun removeService(groupId: String, serviceId: String, onCompleted: () -> Unit = {}) = mutateWithService("正在移除服务…", "服务已移除", onCompleted) {
         require(session.tasks.none { task -> task.groupId == groupId && task.services.any { it.groupServiceId == serviceId } }) {
             "该服务仍被研发任务引用，不能从组内移除"
         }
@@ -153,8 +155,15 @@ class SettingsController internal constructor(
         onSuccess = applyConfig,
     )
 
-    private fun mutateWithService(active: String, success: String, block: () -> AppConfig): Boolean =
-        operations.run(active, success, block, applyConfig)
+    private fun mutateWithService(
+        active: String,
+        success: String,
+        onCompleted: () -> Unit = {},
+        block: () -> AppConfig,
+    ): Boolean = operations.run(active, success, block) {
+        applyConfig(it)
+        onCompleted()
+    }
 
     private fun <T> choose(pick: suspend () -> T?, complete: (T?) -> Unit) {
         if (pathPickerBusy) return

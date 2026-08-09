@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -87,6 +88,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -140,6 +142,7 @@ import org.jetbrains.compose.resources.painterResource
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.launch
 import java.awt.Dimension
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -149,6 +152,7 @@ import java.util.UUID
 @Composable
 internal fun ServicesScreen(controller: DesktopApplication) {
     var editTarget by remember { mutableStateOf<Pair<String, GroupServiceConfig>?>(null) }
+    var removeTarget by remember { mutableStateOf<Pair<String, GroupServiceConfig>?>(null) }
     var addToGroup by remember { mutableStateOf<String?>(null) }
     var selectedGroupId by remember { mutableStateOf(controller.config.groups.firstOrNull()?.id) }
     LaunchedEffect(controller.config.groups.map(GroupConfig::id)) {
@@ -219,15 +223,23 @@ internal fun ServicesScreen(controller: DesktopApplication) {
                 onEdit = { editTarget = group.id to service },
                 onUp = { controller.moveService(group.id, service.id, -1) },
                 onDown = { controller.moveService(group.id, service.id, 1) },
-                onRemove = { controller.removeService(group.id, service.id) })
+                onRemove = { removeTarget = group.id to service })
         }
     }
     addToGroup?.let { groupId -> AddRepositoryDialog(controller, onDismiss = { addToGroup = null }) { paths ->
-        if (controller.settingsController.addRepositories(groupId, paths)) addToGroup = null
+        controller.settingsController.addRepositories(groupId, paths) { addToGroup = null }
     } }
     editTarget?.let { (groupId, service) -> ServiceEditorDialog(controller, service, onDismiss = { editTarget = null }) {
-        if (controller.settingsController.updateService(groupId, it)) editTarget = null
+        controller.settingsController.updateService(groupId, it) { editTarget = null }
     } }
+    removeTarget?.let { (groupId, service) ->
+        ConfirmDialog(
+            title = "从组中移除服务？",
+            message = "将移除“${service.displayName}”在当前组中的配置，不会删除原仓库，也不会改动已有任务。仍被任务引用时操作会被安全阻止。",
+            onDismiss = { removeTarget = null },
+            onConfirm = { controller.removeService(groupId, service.id) { removeTarget = null } },
+        )
+    }
 }
 
 @Composable
@@ -267,10 +279,10 @@ private fun ServiceCard(
                 Text(repository?.rootPath ?: "仓库配置缺失", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个基础分支模块" else "${service.cloneModules.size} 个固定分支模块", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = onUp, enabled = canMoveUp) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
-            IconButton(onClick = onDown, enabled = canMoveDown) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
+            ActionIconButton("上移服务", onUp, enabled = canMoveUp) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
+            ActionIconButton("下移服务", onDown, enabled = canMoveDown) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
             OutlinedButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("配置") }
-            IconButton(onClick = onRemove) { Icon(Icons.Outlined.Delete, "移除", tint = MaterialTheme.colorScheme.error) }
+            ActionIconButton("从当前组移除服务", onRemove) { Icon(Icons.Outlined.Delete, "移除", tint = MaterialTheme.colorScheme.error) }
         }
     }
 }
@@ -285,7 +297,7 @@ internal fun UatScreen(controller: DesktopApplication) {
             SectionHeader("UAT 构建历史", "构建操作请在研发任务的工作区行中执行；这里仅保留结果记录")
         }
         if (controller.tagHistory.isEmpty()) {
-            item { EmptyState("还没有 UAT 构建历史", "进入研发任务，在对应工作区点击“UAT Tag”。") { controller.navigation = NavigationItem.TASKS } }
+            item { EmptyState("还没有 UAT 构建历史", "进入研发任务，在对应工作区点击“UAT Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS } }
         } else {
             items(controller.tagHistory, key = { it.operationId }) { operation ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
@@ -303,7 +315,7 @@ internal fun UatScreen(controller: DesktopApplication) {
                             Text(operation.updatedAt, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         StatusPill(operation.state.name)
-                        IconButton(onClick = {
+                        ActionIconButton("复制 UAT 构建记录", onClick = {
                             val copy = buildString {
                                 append("服务名："); append(operation.serviceName); append('\n')
                                 operation.tag?.let { append("Tag："); append(it) } ?: run {
@@ -333,6 +345,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     }
     var newGroup by remember { mutableStateOf(false) }
     var renameGroup by remember { mutableStateOf<GroupConfig?>(null) }
+    var deleteGroupTarget by remember { mutableStateOf<GroupConfig?>(null) }
     var agentGroupId by remember(controller.config.groups) { mutableStateOf(controller.config.groups.first().id) }
     var agentScope by remember { mutableStateOf("global") }
     var globalAgents by remember(controller.agentRevision) { mutableStateOf(controller.readGlobalAgents()) }
@@ -341,12 +354,49 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             controller.config.groups.forEach { group -> put(group.id, controller.readGroupAgents(group.id)) }
         }
     }
+    val sections = listOf(
+        "basic" to "基础设置",
+        "groups" to "组",
+        "agents" to "Agent 说明",
+        "tools" to "开发工具",
+        "advanced" to "高级设置",
+    )
+    val initialSection = remember { WindowPreferences.load().settingsSection }
+    var selectedSection by remember { mutableStateOf(initialSection.takeIf { key -> sections.any { it.first == key } } ?: "basic") }
+    val listState = rememberLazyListState()
+    val uiScope = rememberCoroutineScope()
+    val itemOffset = if (controller.configurationLoadError == null) 0 else 1
+    LaunchedEffect(initialSection, itemOffset) {
+        val index = sections.indexOfFirst { it.first == selectedSection }.coerceAtLeast(0)
+        listState.scrollToItem(index + itemOffset)
+    }
 
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(
-            Modifier.widthIn(max = 1080.dp).fillMaxHeight().align(Alignment.TopCenter).padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+        Column(
+            Modifier.widthIn(max = 1080.dp).fillMaxHeight().align(Alignment.TopCenter)
+                .padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
         ) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                sections.forEachIndexed { index, (key, label) ->
+                    FilterChip(
+                        selected = selectedSection == key,
+                        onClick = {
+                            selectedSection = key
+                            WindowPreferences.saveSettingsSection(key)
+                            uiScope.launch { listState.animateScrollToItem(index + itemOffset) }
+                        },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            LazyColumn(
+                Modifier.weight(1f),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
             controller.configurationLoadError?.let { error ->
                 item {
                     OutlinedCard(
@@ -391,6 +441,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                         index = index,
                         groupCount = controller.config.groups.size,
                         onRename = { renameGroup = group },
+                        onDelete = { deleteGroupTarget = group },
                     )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -423,7 +474,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                         TextButton(onClick = {
                             if (isGlobal) controller.revealGlobalAgents() else controller.revealGroupAgents(agentGroupId)
                         }) { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("打开位置") }
-                        IconButton(onClick = { controller.copyText(agentPath, "完整路径已复制") }) { Icon(Icons.Outlined.ContentCopy, "复制完整路径") }
+                        ActionIconButton("复制 Agent 文件完整路径", { controller.copyText(agentPath, "完整路径已复制") }) {
+                            Icon(Icons.Outlined.ContentCopy, "复制完整路径")
+                        }
                     }
                 }
                 if (isGlobal) {
@@ -486,7 +539,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                             label = { Text("simple_name") },
                             singleLine = true,
                         )
-                        IconButton(onClick = { meegleProjects.remove(index) }) {
+                        ActionIconButton("删除飞书项目配置", { meegleProjects.remove(index) }) {
                             Icon(Icons.Outlined.Delete, "删除项目")
                         }
                     }
@@ -508,14 +561,23 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                 }
             }
             }
+            }
         }
     }
     if (newGroup) NameDialog("创建组", "", onDismiss = { newGroup = false }) {
-        if (controller.addGroup(it)) newGroup = false
+        controller.addGroup(it) { newGroup = false }
     }
     renameGroup?.let { group -> NameDialog("重命名组", group.name, onDismiss = { renameGroup = null }) {
-        if (controller.renameGroup(group.id, it)) renameGroup = null
+        controller.renameGroup(group.id, it) { renameGroup = null }
     } }
+    deleteGroupTarget?.let { group ->
+        ConfirmDialog(
+            title = "删除空组？",
+            message = "将删除组“${group.name}”。仅当组内没有服务且没有任务引用时才会执行，此操作不会删除任何仓库目录。",
+            onDismiss = { deleteGroupTarget = null },
+            onConfirm = { controller.deleteGroup(group.id) { deleteGroupTarget = null } },
+        )
+    }
 }
 
 @Composable
@@ -525,6 +587,7 @@ private fun GroupSettingsRow(
     index: Int,
     groupCount: Int,
     onRename: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     var branchPrefix by remember(group.id, group.defaultBranchPrefix) { mutableStateOf(group.defaultBranchPrefix) }
     var selectedToolIds by remember(group.id, group.defaultWorkspaceToolIds) {
@@ -545,11 +608,12 @@ private fun GroupSettingsRow(
                 Spacer(Modifier.width(8.dp))
                 Switch(group.uatTagEnabled, { controller.setGroupTagEnabled(group.id, it) })
                 if (groupCount > 1) {
-                    IconButton(onClick = { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
-                    IconButton(onClick = { controller.moveGroup(group.id, 1) }, enabled = index < groupCount - 1) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
-                    IconButton(onClick = onRename) { Icon(Icons.Outlined.Edit, "重命名") }
-                    IconButton(
-                        onClick = { runCatching { controller.deleteGroup(group.id) }.onFailure(controller::showError) },
+                    ActionIconButton("上移组", { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
+                    ActionIconButton("下移组", { controller.moveGroup(group.id, 1) }, enabled = index < groupCount - 1) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
+                    ActionIconButton("重命名组", onRename) { Icon(Icons.Outlined.Edit, "重命名") }
+                    ActionIconButton(
+                        label = "删除空组",
+                        onClick = onDelete,
                         enabled = group.services.isEmpty(),
                     ) { Icon(Icons.Outlined.Delete, "删除") }
                 }

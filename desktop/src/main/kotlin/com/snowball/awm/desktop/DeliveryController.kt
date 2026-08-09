@@ -35,7 +35,7 @@ class DeliveryController internal constructor(
 
     fun canBuild(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
         val group = session.config.groups.firstOrNull { it.id == task.groupId } ?: return false
-        if (!group.uatTagEnabled || workspace.health == WorkspaceHealth.FAILED) return false
+        if (!group.uatTagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
         val service = group.services.firstOrNull { it.id == workspace.groupServiceId } ?: return false
         return when (service.strategy) {
             WorkspaceStrategy.STANDARD_WORKTREE -> service.modules.firstOrNull { it.id == workspace.moduleId }?.uatTagEnabled == true
@@ -50,11 +50,11 @@ class DeliveryController internal constructor(
         onSuccess = { result = it; reloadHistory(); refreshGitStatus() },
     )
 
-    fun buildBatch(task: TaskManifest, workspaces: List<ServiceWorkspace>): Boolean = operations.run(
+    fun buildBatch(task: TaskManifest, workspaces: List<ServiceWorkspace>, onCompleted: () -> Unit = {}): Boolean = operations.run(
         "正在批量构建 UAT Tag…",
         "批量 UAT Tag 操作已完成",
         block = { adapter.executeBatch(session.config, taskDirectory(task), workspaces.map(ServiceWorkspace::selectionKey)) },
-        onSuccess = { batchResults = it; reloadHistory(); refreshGitStatus() },
+        onSuccess = { batchResults = it; reloadHistory(); refreshGitStatus(); onCompleted() },
     )
 
     fun clearResult() { result = null }

@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -63,6 +64,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -80,6 +82,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -232,17 +238,24 @@ internal fun AddRepositoryDialog(controller: DesktopApplication, onDismiss: () -
 @Composable
 internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupServiceConfig, onDismiss: () -> Unit, onSave: (GroupServiceConfig) -> Unit) {
     val json = remember { Json { prettyPrint = true; encodeDefaults = true } }
+    val initialBootstrapText = remember(service) { json.encodeToString(service.bootstrap) }
     var name by remember { mutableStateOf(service.displayName) }
     var enabled by remember { mutableStateOf(service.enabled) }
     var ide by remember { mutableStateOf(service.ideType) }
     var strategy by remember { mutableStateOf(service.strategy) }
     var modules by remember { mutableStateOf(service.modules) }
     var cloneModules by remember { mutableStateOf(service.cloneModules.ifEmpty { listOf(IndependentCloneModuleConfig(id = "clone-default")) }) }
-    var bootstrapText by remember { mutableStateOf(json.encodeToString(service.bootstrap)) }
+    var bootstrapText by remember { mutableStateOf(initialBootstrapText) }
     var bootstrapError by remember { mutableStateOf<String?>(null) }
     var showBootstrapExample by remember { mutableStateOf(false) }
     var bootstrapCopied by remember { mutableStateOf(false) }
-    Dialog(onDismissRequest = onDismiss) {
+    var confirmDiscard by remember { mutableStateOf(false) }
+    val hasDraftChanges = name != service.displayName || enabled != service.enabled || ide != service.ideType ||
+        strategy != service.strategy || modules != service.modules ||
+        cloneModules != service.cloneModules.ifEmpty { listOf(IndependentCloneModuleConfig(id = "clone-default")) } ||
+        bootstrapText != initialBootstrapText
+    val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
+    Dialog(onDismissRequest = requestDismiss) {
         Surface(
             Modifier.widthIn(min = 780.dp, max = 920.dp).heightIn(min = 620.dp, max = 820.dp),
             shape = RoundedCornerShape(22.dp),
@@ -319,7 +332,7 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     Text("修改仅影响后续任务", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = onDismiss) { Text("取消") }
+                    TextButton(onClick = requestDismiss) { Text("取消") }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
                         val bootstrap = if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
@@ -388,6 +401,63 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
             }
         }
     }
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            title = "放弃服务配置修改？",
+            message = "尚未保存的模块、分支、Tag 和 Bootstrap 配置将丢失。",
+            onDismiss = { confirmDiscard = false },
+            onDiscard = onDismiss,
+        )
+    }
+}
+
+@Composable
+internal fun UatResultDialog(
+    title: String,
+    content: String,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            Modifier.widthIn(min = 680.dp, max = 860.dp).heightIn(min = 360.dp, max = 680.dp),
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Text(title, Modifier.padding(horizontal = 22.dp, vertical = 18.dp), style = MaterialTheme.typography.titleLarge)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Surface(
+                    Modifier.weight(1f).fillMaxWidth().padding(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            content,
+                            Modifier.fillMaxSize().padding(14.dp)
+                                .verticalScroll(rememberScrollState())
+                                .horizontalScroll(rememberScrollState()),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    OutlinedButton(onClick = onCopy) {
+                        Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("复制")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = onDismiss) { Text("完成") }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -403,7 +473,9 @@ private fun CloneModuleEditor(
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(module.name, { onChange(module.copy(name = it)) }, Modifier.weight(1f), label = { Text("显示名称（可选）") })
-                IconButton(onClick = onDelete, enabled = canDelete) { Icon(Icons.Outlined.Delete, "删除模块") }
+                ActionIconButton("删除标准 Worktree 模块", onDelete, enabled = canDelete) {
+                    Icon(Icons.Outlined.Delete, "删除模块")
+                }
             }
             RemoteBranchPicker(module.branch, { onChange(module.copy(branch = it)) }, "固定远程分支", repositoryId, controller, Modifier.fillMaxWidth())
             Row(verticalAlignment = Alignment.CenterVertically) { Text("允许参与 UAT Tag", Modifier.weight(1f)); Switch(module.uatTagEnabled, { onChange(module.copy(uatTagEnabled = it)) }) }
@@ -427,7 +499,13 @@ private fun RemoteBranchPicker(value: String, onValueChange: (String) -> Unit, l
     val state = controller.remoteBranchState(repositoryId, remote)
     Box(modifier) {
         OutlinedTextField(value, onValueChange, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
-            trailingIcon = { IconButton(onClick = { controller.loadRemoteBranches(repositoryId, remote); query = ""; expanded = true }) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支") } })
+            trailingIcon = {
+                ActionIconButton("搜索并选择远程分支", {
+                    controller.loadRemoteBranches(repositoryId, remote)
+                    query = ""
+                    expanded = true
+                }) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支") }
+            })
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.widthIn(min = 560.dp, max = 720.dp), containerColor = MaterialTheme.colorScheme.surfaceVariant, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
             OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 8.dp), label = { Text("搜索远程分支") }, singleLine = true)
             when (state) {
@@ -457,7 +535,9 @@ private fun ModuleEditor(module: ServiceModuleConfig, repositoryId: String, cont
                     placeholder = { Text("单分支默认服务名，多分支默认基础分支末段") },
                 )
                 RemoteBranchPicker(module.baseRef, { onChange(module.copy(baseRef = it)) }, "基础分支", repositoryId, controller, Modifier.weight(1f))
-                IconButton(onClick = onDelete, enabled = canDelete) { Icon(Icons.Outlined.Delete, "删除模块") }
+                ActionIconButton("删除独立克隆模块", onDelete, enabled = canDelete) {
+                    Icon(Icons.Outlined.Delete, "删除模块")
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("UAT Tag", Modifier.weight(1f)); Switch(module.uatTagEnabled, { onChange(module.copy(uatTagEnabled = it)) })
@@ -499,7 +579,7 @@ internal fun DeleteTaskDialog(controller: DesktopApplication, task: TaskManifest
         } },
         confirmButton = { Button(
             onClick = {
-                if (controller.deleteTask(task, risks.isNotEmpty())) onDismiss()
+                controller.deleteTask(task, risks.isNotEmpty(), onCompleted = onDismiss)
             },
             enabled = !loading && inspectionError == null && !safetyCheckFailed && (risks.isEmpty() || discard) && !controller.busy,
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -514,13 +594,39 @@ internal fun ConfirmDialog(title: String, message: String, onDismiss: () -> Unit
 }
 
 @Composable
+internal fun DiscardChangesDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            Button(
+                onClick = onDiscard,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            ) { Text("放弃修改") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("继续编辑") } },
+    )
+}
+
+@Composable
 internal fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var value by remember { mutableStateOf(initial) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { OutlinedTextField(value, { value = it }, label = { Text("名称") }, singleLine = true) }, confirmButton = { Button(onClick = { onSave(value) }, enabled = value.isNotBlank()) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }
 
 @Composable
-internal fun EmptyState(title: String, subtitle: String, action: () -> Unit) {
+internal fun EmptyState(
+    title: String,
+    subtitle: String,
+    actionLabel: String? = null,
+    action: (() -> Unit)? = null,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
@@ -537,10 +643,31 @@ internal fun EmptyState(title: String, subtitle: String, action: () -> Unit) {
                 }
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
-                Button(onClick = action) { Text("继续") }
+                if (action != null && actionLabel != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Button(onClick = action) { Text(actionLabel) }
+                }
             }
         }
+    }
+}
+
+/** Visible hover help for compact desktop icon actions. */
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+internal fun ActionIconButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+    ) {
+        IconButton(onClick = onClick, modifier = modifier, enabled = enabled) { content() }
     }
 }
 

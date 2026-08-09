@@ -164,6 +164,7 @@ internal fun CreateTaskDialog(
     var requirementMenuExpanded by remember { mutableStateOf(false) }
     var requirementSearch by remember { mutableStateOf("") }
     var serviceSearch by remember(groupId) { mutableStateOf("") }
+    var confirmDiscard by remember { mutableStateOf(false) }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
     val taskNameMissing = draft.taskName.isBlank()
@@ -171,6 +172,11 @@ internal fun CreateTaskDialog(
     // error treatment for an entered name that cannot become a safe directory.
     val taskNameError = draft.taskName.takeUnless(String::isBlank)
         ?.let(TaskNaming::directoryNameValidationError)
+    val unresolvedBranch = BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch)
+    val hasDraftChanges = draft.requirementLink.isNotBlank() || draft.taskName.isNotBlank() ||
+        draft.branchEdited || notes.isNotBlank() || selected.isNotEmpty() || groupId != initialGroup.id ||
+        selectedToolIds != initialGroup.defaultWorkspaceToolIds.toSet()
+    val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
     val preview = remember(draft.taskName, draft.branch, groupId, selected, draft.requirementLink, notes) {
         controller.previewAgents(draft.taskName, draft.branch, groupId, selected, draft.requirementLink, notes)
     }
@@ -181,7 +187,7 @@ internal fun CreateTaskDialog(
         }
     }
     LaunchedEffect(Unit) { controller.requirementController.loadCandidates() }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = requestDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.90f).widthIn(max = 1540.dp),
             shape = RoundedCornerShape(22.dp),
@@ -303,6 +309,9 @@ internal fun CreateTaskDialog(
                             Modifier.fillMaxWidth(),
                             label = { Text("任务分支") },
                             placeholder = { Text("例如：feature/PAY-1024") },
+                            supportingText = if (unresolvedBranch) {
+                                { Text("需求链接未解析出编号，请补充链接或手工修改分支") }
+                            } else null,
                             singleLine = true,
                         )
                         if (controller.config.groups.size > 1) {
@@ -407,12 +416,16 @@ internal fun CreateTaskDialog(
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (selected.isEmpty()) "至少选择一个服务" else "将创建 ${selected.size} 个服务入口",
+                            when {
+                                selected.isEmpty() -> "请选择至少一个服务"
+                                unresolvedBranch -> "分支中仍有未解析的 {num}"
+                                else -> "将创建 ${selected.size} 个服务入口"
+                            },
                             Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (selected.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        TextButton(onClick = onDismiss) { Text("取消") }
+                        TextButton(onClick = requestDismiss) { Text("取消") }
                         Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = {
@@ -420,13 +433,21 @@ internal fun CreateTaskDialog(
                                 onCreate(draft.taskName, draft.branch, groupId, selected.toList(), draft.requirementLink, notes, availableTools)
                             },
                             enabled = !taskNameMissing && taskNameError == null && draft.branch.isNotBlank() &&
-                                !BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch) &&
+                                !unresolvedBranch &&
                                 selected.isNotEmpty() && !controller.busy,
                         ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
                     }
                 }
             }
         }
+    }
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            title = "放弃创建任务？",
+            message = "已填写的任务信息、服务选择和人工说明将不会保留。",
+            onDismiss = { confirmDiscard = false },
+            onDiscard = onDismiss,
+        )
     }
 }
 

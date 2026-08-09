@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -99,6 +100,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.mikepenz.markdown.compose.Markdown
@@ -149,7 +151,12 @@ fun main() {
     FileKit.init(appId = "com.snowball.awm")
     application {
         val controller = remember { DesktopApplication() }
-        val state = rememberWindowState(width = 1600.dp, height = 980.dp)
+        val windowPreferences = remember { WindowPreferences.load() }
+        val state = rememberWindowState(
+            width = windowPreferences.width.dp,
+            height = windowPreferences.height.dp,
+            placement = if (windowPreferences.maximized) WindowPlacement.Maximized else WindowPlacement.Floating,
+        )
         Window(
             onCloseRequest = {
                 if (controller.busy) {
@@ -159,7 +166,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.5.0",
+            title = "Agent Workspace Manager 0.5.1",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {
@@ -172,7 +179,11 @@ fun main() {
                     override fun windowGainedFocus(event: WindowEvent?) = controller.agentInstructionsController.onWindowFocused()
                 }
                 window.addWindowFocusListener(listener)
-                onDispose { window.removeWindowFocusListener(listener) }
+                onDispose {
+                    val maximized = window.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0
+                    WindowPreferences.saveWindow(window.width, window.height, maximized)
+                    window.removeWindowFocusListener(listener)
+                }
             }
             AwmTheme(controller.config.theme) { AgentWorkspaceApp(controller) }
         }
@@ -238,18 +249,18 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
 
     if (showCreate) {
         CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools ->
-            if (controller.taskController.create(name, branch, group, services, link, notes, tools)) {
+            controller.taskController.create(name, branch, group, services, link, notes, tools) {
                 showCreate = false
             }
         }
     }
     controller.tagResult?.let { result ->
         val output = TagOutputFormatter.format(controller.selectedTask?.requirementLink.orEmpty(), listOf(result), includeFailures = true)
-        AlertDialog(
-            onDismissRequest = controller::clearTagResult,
-            title = { Text("UAT 构建结果") },
-            text = { Text(output) },
-            confirmButton = { Row { OutlinedButton(onClick = { controller.copyText(output, "构建结果已复制") }) { Text("复制") }; Spacer(Modifier.width(8.dp)); Button(onClick = controller::clearTagResult) { Text("完成") } } },
+        UatResultDialog(
+            title = "UAT 构建结果",
+            content = output,
+            onDismiss = controller::clearTagResult,
+            onCopy = { controller.copyText(output, "构建结果已复制") },
         )
     }
     controller.batchTagResults?.let { results ->
@@ -259,14 +270,16 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
             onDismissRequest = controller::clearBatchTagResults,
             title = { Text("批量 UAT 构建结果") },
             text = {
-                Column(Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    results.forEach { result ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(result.serviceName, fontWeight = FontWeight.SemiBold)
-                                Text(result.tag ?: result.message.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SelectionContainer {
+                    Column(Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        results.forEach { result ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(result.serviceName, fontWeight = FontWeight.SemiBold)
+                                    Text(result.tag ?: result.message.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                StatusPill(result.state.name)
                             }
-                            StatusPill(result.state.name)
                         }
                     }
                 }
@@ -288,7 +301,7 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                     result.skipped.forEach { skipped ->
                         Text(
                             "跳过 ${skipped.path}\n${skipped.reason}",
-                            color = MaterialTheme.colorScheme.error,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -331,7 +344,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("AWM", style = MaterialTheme.typography.titleLarge)
-                    Text("Workspace studio · 0.5.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Workspace studio · 0.5.1", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.height(24.dp))

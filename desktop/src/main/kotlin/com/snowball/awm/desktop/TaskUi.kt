@@ -149,14 +149,20 @@ import java.util.UUID
 @Composable
 internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCreate: () -> Unit) {
     if (controller.needsTaskRoot) {
-        EmptyState("请先配置任务根目录", "设置完成后即可创建第一个研发任务") {
+        EmptyState("请先配置任务根目录", "设置完成后即可创建第一个研发任务", "前往设置") {
             controller.navigation = NavigationItem.SETTINGS
         }
         return
     }
     val visibleTasks = controller.tasks.filter { (it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) == archived }
     if (visibleTasks.isEmpty()) {
-        EmptyState(if (archived) "还没有已归档任务" else "还没有研发任务", if (archived) "归档后的任务会保留在这里，可随时恢复。" else "从已配置的服务创建 Worktree 或独立克隆") { onCreate() }
+        if (archived) {
+            EmptyState("还没有已归档任务", "归档后的任务会保留在这里，可随时恢复。", "返回研发任务") {
+                controller.navigation = NavigationItem.TASKS
+            }
+        } else {
+            EmptyState("还没有研发任务", "从已配置的服务创建 Worktree 或独立克隆", "创建第一个任务", onCreate)
+        }
         return
     }
     Row(
@@ -319,7 +325,8 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
                             )
                             // Keep the copy affordance directly beside the link instead of
                             // letting a weighted text field push it to the opposite edge.
-                            IconButton(
+                            ActionIconButton(
+                                label = "复制需求链接",
                                 onClick = { controller.copyText(task.requirementLink, "需求链接已复制") },
                                 modifier = Modifier.size(30.dp),
                             ) {
@@ -396,17 +403,17 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
         }
     }
     if (confirmArchive) ConfirmDialog("归档任务", "任务将移至已归档，工作区和代码不会被删除。", onDismiss = { confirmArchive = false }) {
-        if (controller.archiveTask(task)) confirmArchive = false
+        controller.archiveTask(task, onCompleted = { confirmArchive = false })
     }
     if (confirmDelete) DeleteTaskDialog(controller, task) {
         controller.clearDeleteRisk(task)
         confirmDelete = false
     }
     if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids ->
-        if (controller.addServices(task, ids)) showAddServices = false
+        controller.addServices(task, ids) { showAddServices = false }
     }
     if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
-        if (controller.deliveryController.buildBatch(task, selected)) showBatchTag = false
+        controller.deliveryController.buildBatch(task, selected) { showBatchTag = false }
     }
     if (showBranchInfo) BranchInfoDialog(controller.branchInfo(task), onDismiss = { showBranchInfo = false }) {
         controller.copyText(controller.branchInfo(task), "分支信息已复制")
@@ -493,13 +500,13 @@ private fun WorkspaceCard(controller: DesktopApplication, task: TaskManifest, wo
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     ) {
                         Row(Modifier.padding(horizontal = 3.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { controller.terminal(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
+                            ActionIconButton("在终端中打开", { controller.terminal(workspace.worktreePath) }, Modifier.size(34.dp)) {
                                 Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
                             }
-                            IconButton(onClick = { controller.openDirectory(workspace.worktreePath) }, modifier = Modifier.size(34.dp)) {
+                            ActionIconButton("打开工作区文件夹", { controller.openDirectory(workspace.worktreePath) }, Modifier.size(34.dp)) {
                                 Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
                             }
-                            IconButton(onClick = { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, modifier = Modifier.size(34.dp)) {
+                            ActionIconButton("复制工作区完整路径", { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, Modifier.size(34.dp)) {
                                 Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
                             }
                         }

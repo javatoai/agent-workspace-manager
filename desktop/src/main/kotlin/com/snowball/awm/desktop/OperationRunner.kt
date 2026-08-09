@@ -23,10 +23,14 @@ class OperationRunner internal constructor(
         }
         scope.launch {
             val result = withContext(dispatcher) { runCatching(block) }
-            result.onSuccess {
-                coordinator.succeed(successMessage)
-                onSuccess(it)
-            }.onFailure(coordinator::fail)
+            result.fold(
+                onSuccess = { value ->
+                    runCatching { onSuccess(value) }
+                        .onSuccess { coordinator.succeed(successMessage) }
+                        .onFailure(coordinator::fail)
+                },
+                onFailure = coordinator::fail,
+            )
         }
         return true
     }
