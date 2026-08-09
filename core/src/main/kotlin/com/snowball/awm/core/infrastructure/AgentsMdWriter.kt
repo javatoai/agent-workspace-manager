@@ -36,7 +36,7 @@ object AgentsMdWriter {
         val notes = appendix.trim()
 
         return buildString {
-            appendLine("# 任务工作区说明（AGENTS）")
+            appendLine("**任务工作区说明（AGENTS）**")
             appendLine()
             appendLine("> 本文件由 Agent Workspace Manager 生成。系统区会随任务说明保存而更新；人工说明区会被保留。")
             appendLine()

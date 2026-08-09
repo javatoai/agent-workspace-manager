@@ -1579,7 +1579,22 @@ private fun AgentsMarkdownPreview(content: String) {
     Markdown(
         content = content,
         colors = markdownColor(),
-        typography = markdownTypography(),
+        // Default Markdown h1/h2 styles map to Material display styles, which are intentionally
+        // too prominent inside a compact task preview. Keep the document hierarchy while using
+        // the same visual scale as the rest of the application.
+        typography = markdownTypography(
+            h1 = MaterialTheme.typography.titleLarge,
+            h2 = MaterialTheme.typography.titleMedium,
+            h3 = MaterialTheme.typography.titleSmall,
+            h4 = MaterialTheme.typography.labelLarge,
+            h5 = MaterialTheme.typography.labelLarge,
+            h6 = MaterialTheme.typography.labelLarge,
+            text = MaterialTheme.typography.bodyMedium,
+            paragraph = MaterialTheme.typography.bodyMedium,
+            table = MaterialTheme.typography.bodySmall,
+            code = MaterialTheme.typography.bodySmall,
+            inlineCode = MaterialTheme.typography.bodySmall,
+        ),
         modifier = Modifier
             .fillMaxSize()
             .padding(15.dp)
