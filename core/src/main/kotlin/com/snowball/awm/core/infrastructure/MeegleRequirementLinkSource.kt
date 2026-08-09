@@ -37,13 +37,42 @@ class MeegleRequirementLinkSource(
     }
     private fun itemIds(element: JsonElement): List<String> = mutableListOf<String>().also { collectItemIds(element, it) }
     private fun collectItemIds(element: JsonElement, results: MutableList<String>) { when (element) {
-        is JsonObject -> element.forEach { (key, value) ->
-            if (key.replace("_", "").replace(" ", "").lowercase() in setOf("itemid", "workitemid")) {
-                (value as? JsonPrimitive)?.content?.takeIf(String::isNotBlank)?.let(results::add)
-            } else collectItemIds(value, results)
+        is JsonObject -> {
+            // Actual `workitem query --format json` responses encode each selected
+            // column as { key: "work_item_id", value: { long_value: ... } }.
+            // Read that pair before recursively handling simpler fixture shapes.
+            val typedFieldKey = (element["key"] as? JsonPrimitive)?.content.orEmpty()
+            if (typedFieldKey.normalizedFieldName() in itemIdFieldNames) {
+                itemIdValue(element["value"] ?: return)?.let(results::add)
+                return
+            }
+            element.forEach { (key, value) ->
+                if (key.normalizedFieldName() in itemIdFieldNames) {
+                    itemIdValue(value)?.let(results::add)
+                } else collectItemIds(value, results)
+            }
         }
         is kotlinx.serialization.json.JsonArray -> element.forEach { collectItemIds(it, results) }
         else -> Unit
     } }
-    private companion object { val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }; val types = linkedMapOf("User Story" to "userstory", "Tech Improvement" to "technical", "Bug" to "bug", "Task" to "othertask") }
+
+    private fun String.normalizedFieldName(): String = replace("_", "").replace(" ", "").lowercase()
+
+    /**
+     * The Meegle CLI represents selected fields as typed values (for example
+     * `value.long_value`), while lightweight fixtures may use a direct JSON
+     * primitive.  Restricting this unwrapping to the known typed-value keys
+     * keeps unrelated numeric response fields out of the result set.
+     */
+    private fun itemIdValue(value: JsonElement): String? = when (value) {
+        is JsonPrimitive -> value.content.takeIf(String::isNotBlank)
+        is JsonObject -> listOf("long_value", "string_value", "text_value")
+            .firstNotNullOfOrNull { key -> value[key]?.let(::itemIdValue) }
+        else -> null
+    }
+    private companion object {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val itemIdFieldNames = setOf("itemid", "workitemid")
+        val types = linkedMapOf("User Story" to "userstory", "Tech Improvement" to "technical", "Bug" to "bug", "Task" to "othertask")
+    }
 }

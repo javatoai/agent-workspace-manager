@@ -11,8 +11,8 @@ class MeegleRequirementLinkSourceTest {
                 if (command.contains("version")) return CommandResult(0, "1", "")
                 val mql = command[command.indexOf("--mql") + 1]
                 val json = when {
-                    mql.contains(".`Bug`") -> """{"data":{"Item Id":"22"}}"""
-                    mql.contains(".`Sprint`") -> """{"data":{"Item Id":"11"}}"""
+                    mql.contains(".`Bug`") -> typedIdResponse("22")
+                    mql.contains(".`Sprint`") -> typedIdResponse("11")
                     else -> "{}"
                 }
                 return CommandResult(0, json, "")
@@ -23,4 +23,8 @@ class MeegleRequirementLinkSourceTest {
         assertEquals(listOf("https://project.feishu.cn/obt/bug/detail/22"), result.candidates.map { it.url })
         assertEquals("标题", result.candidates.single().title)
     }
+
+    private fun typedIdResponse(id: String) = """
+        {"data":{"1":[{"moql_field_list":[{"key":"work_item_id","name":"Item Id","value":{"long_value":$id}}]}]}}
+    """.trimIndent()
 }
