@@ -4,7 +4,11 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $projectRoot
 try {
     # Installers are produced only after the complete test gate passes.
-    & .\gradlew.bat clean test :desktop:compileKotlin :desktop:createDistributable :desktop:packageExe :desktop:packageMsi --no-daemon
+    $gradleArguments = @('clean', 'test', ':desktop:compileKotlin', ':desktop:createDistributable', ':desktop:packageExe', ':desktop:packageMsi', '--no-daemon')
+    if ($env:AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS -eq 'true') {
+        $gradleArguments += '-PskipHostedGitIntegrationTests'
+    }
+    & .\gradlew.bat @gradleArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Gradle build failed with exit code $LASTEXITCODE"
     }

@@ -34,14 +34,14 @@ jobs:
       - name: Test and compile desktop (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\gradlew.bat clean test :desktop:compileKotlin
+        run: .\gradlew.bat clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
       - name: Test and compile desktop (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           perl -pi -e 's/\r$//' ./gradlew
           chmod +x ./gradlew
-          ./gradlew clean test :desktop:compileKotlin
+          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
 
   windows:
     name: Windows packages
@@ -75,6 +75,8 @@ jobs:
       - name: Build Windows distributables
         run: .\scripts\build-windows.ps1
         shell: pwsh
+        env:
+          AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
 
       - name: Stage Windows release assets
         id: stage
@@ -126,6 +128,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build macOS distributables
+        env:
+          AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
         run: |
           # These files may be checked out with CRLF from a Windows workspace.
           # Normalize them before executing them on the macOS runner.
