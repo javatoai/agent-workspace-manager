@@ -1,13 +1,14 @@
 package com.snowball.awm.core
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import org.junit.jupiter.api.io.TempDir
 
 class AgentDocumentServiceTest {
     @TempDir
@@ -32,7 +33,7 @@ class AgentDocumentServiceTest {
         service.saveGlobal("全局约定")
         service.saveGroup("growth", "增长组约定")
         val taskDirectory = temporary.resolve("tasks").resolve("OBT-123")
-        val manifest = manifest(groupId = "growth", updatedAt = "2026-08-08T00:00:00Z")
+        val manifest = manifest(groupId = "growth")
 
         service.writeTaskDocument(taskDirectory, manifest, emptyList(), "任务第一次说明")
         val first = Files.readString(taskDirectory.resolve("AGENTS.md"))
@@ -42,16 +43,11 @@ class AgentDocumentServiceTest {
         val directlyEdited = first.replace("任务第一次说明", "模型直接追加的任务说明")
         Files.writeString(taskDirectory.resolve("AGENTS.md"), directlyEdited)
         service.saveGlobal("更新后的全局约定")
-        service.writeTaskDocument(
-            taskDirectory,
-            manifest.copy(updatedAt = "2026-08-08T01:00:00Z"),
-            emptyList(),
-        )
+        service.writeTaskDocument(taskDirectory, manifest, emptyList())
 
         val refreshed = Files.readString(taskDirectory.resolve("AGENTS.md"))
         assertTrue(refreshed.contains("更新后的全局约定"))
         assertTrue(refreshed.contains("模型直接追加的任务说明"))
-        assertTrue(refreshed.contains("2026-08-08T01:00:00Z"))
     }
 
     @Test
@@ -63,7 +59,7 @@ class AgentDocumentServiceTest {
         val malformed = "人工文件，没有 AWM 标记"
         Files.writeString(taskDirectory.resolve("AGENTS.md"), malformed)
 
-        assertThrows(AgentDocumentFormatException::class.java) {
+        assertFailsWith<AgentDocumentFormatException> {
             service.writeTaskDocument(taskDirectory, manifest(), emptyList())
         }
         assertEquals(malformed, Files.readString(taskDirectory.resolve("AGENTS.md")))
@@ -72,8 +68,7 @@ class AgentDocumentServiceTest {
     @Test
     fun `reserved markers are rejected in user maintained content`() {
         val service = AgentDocumentService(ApplicationPaths(temporary.resolve("home-reserved")))
-
-        kotlin.test.assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<IllegalArgumentException> {
             service.saveGlobal("do not write ${AgentDocumentService.TASK_NOTES_BEGIN}")
         }
     }
@@ -90,8 +85,7 @@ class AgentDocumentServiceTest {
     }
 
     @Test
-    fun `generated workspace table shows creation base without source repository or requirement routing prose`() {
-        val taskDirectory = temporary.resolve("tasks").resolve("table")
+    fun `generated workspace table keeps the edit boundary without redundant task facts`() {
         val workspace = ServiceWorkspace(
             repositoryId = "repo",
             serviceName = "订单服务",
@@ -103,29 +97,30 @@ class AgentDocumentServiceTest {
             baseRef = "origin/master",
         )
         val rendered = AgentsMdWriter.render(
-            taskDirectory,
-            manifest().copy(services = listOf(workspace), updatedAt = "2026-08-08 08:00:00"),
+            temporary.resolve("tasks").resolve("table"),
+            manifest().copy(services = listOf(workspace)),
             emptyList(),
-            "",
+            "人工说明",
         )
 
-        assertTrue("| 服务名 | 创建基线 | 策略 | Worktree 路径 | 分支 | 状态 |" in rendered)
+        assertTrue("需求链接" in rendered)
         assertTrue("origin/master" in rendered)
+        assertTrue("STANDARD_WORKTREE" in rendered)
         assertTrue("C:/tasks/table/orders" in rendered)
-        kotlin.test.assertFalse("C:/source/orders" in rendered)
-        kotlin.test.assertFalse("需求上下文以「需求链接」为准" in rendered)
+        assertTrue("人工说明" in rendered)
+        assertFalse("C:/source/orders" in rendered)
+        assertFalse("## 基本信息" in rendered)
+        assertFalse("feature/orders" in rendered)
+        assertFalse("READY" in rendered)
     }
 
-    private fun manifest(
-        groupId: String = DEFAULT_GROUP_ID,
-        updatedAt: String = Instant.EPOCH.toString(),
-    ) = TaskManifest(
+    private fun manifest(groupId: String = DEFAULT_GROUP_ID) = TaskManifest(
         folderName = "OBT-123",
         taskDirectoryName = "OBT-123",
         featureBranch = "feature/OBT-123",
-        requirementLink = "需求",
+        requirementLink = "https://project.feishu.cn/obt/userstory/detail/123",
         createdAt = Instant.EPOCH.toString(),
-        updatedAt = updatedAt,
+        updatedAt = Instant.EPOCH.toString(),
         status = WorkspaceStatus.READY,
         services = emptyList(),
         groupId = groupId,

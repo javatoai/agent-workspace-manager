@@ -1,18 +1,49 @@
 package com.snowball.awm.core
 
+import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.text.Normalizer
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 object TaskNaming {
-    private const val MAX_DIRECTORY_NAME_LENGTH = 80
+    const val MAX_DIRECTORY_NAME_LENGTH = 80
+    private val invalidDirectoryCharacters = Regex("""[<>:"/\\\\|?*\p{Cc}]""")
 
+    /**
+     * Validates a task name used verbatim as its future task directory.
+     *
+     * Existing configuration identifiers still use [directoryName], which sanitises values for
+     * backwards-safe identifiers. New task directories instead fail explicitly so the user never
+     * receives a silently altered folder name.
+     */
+    fun directoryNameValidationError(value: String): String? {
+        val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
+        if (normalized.isBlank()) return "任务名称 / 文件夹名称不能为空"
+        if (normalized != normalized.trim()) return "任务名称 / 文件夹名称不能以空白开头或结尾"
+        if (normalized.endsWith('.')) return "任务名称 / 文件夹名称不能以点结尾"
+        if (invalidDirectoryCharacters.containsMatchIn(normalized)) {
+            return "任务名称 / 文件夹名称不能包含 < > : \" / \\ | ? * 等非法字符"
+        }
+        if (isWindowsReservedName(normalized)) return "任务名称 / 文件夹名称不能使用 Windows 保留名"
+        if (normalized.length > MAX_DIRECTORY_NAME_LENGTH) {
+            return "任务名称 / 文件夹名称不能超过 $MAX_DIRECTORY_NAME_LENGTH 个字符"
+        }
+        return null
+    }
+
+    /** Returns the normalised, unmodified task-directory name or rejects an unsafe value. */
+    fun requireValidDirectoryName(value: String): String {
+        val error = directoryNameValidationError(value)
+        require(error == null) { error ?: "任务名称 / 文件夹名称不合法" }
+        return Normalizer.normalize(value, Normalizer.Form.NFKC)
+    }
+
+    /** Creates a stable safe identifier for configuration records, not a user task directory. */
     fun directoryName(folderName: String): String {
         require(folderName.isNotBlank()) { "文件夹名不能为空" }
         val normalized = Normalizer.normalize(folderName.trim(), Normalizer.Form.NFKC)
         val safe = normalized
-            .replace(Regex("""[<>:"/\\|?*\p{Cc}]"""), "-")
+            .replace(invalidDirectoryCharacters, "-")
             .replace(Regex("""\s+"""), "-")
             .replace(Regex("""-+"""), "-")
             .trim(' ', '.', '-')

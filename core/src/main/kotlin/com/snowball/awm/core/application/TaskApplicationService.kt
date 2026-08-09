@@ -59,8 +59,11 @@ class TaskApplicationService(
     fun create(config: AppConfig, request: CreateGroupedTaskRequest): TaskManifest {
         val taskRoot = config.taskRoot?.let(Path::of)
             ?: error("尚未配置任务根目录")
-        val taskDirectory = taskRoot.resolve(TaskNaming.directoryName(request.folderName.trim()))
-        return operationLock.withLock(taskDirectory) { createUnlocked(config, request, taskRoot, taskDirectory) }
+        val folderName = TaskNaming.requireValidDirectoryName(request.folderName)
+        val taskDirectory = taskRoot.resolve(folderName)
+        return operationLock.withLock(taskDirectory) {
+            createUnlocked(config, request, taskRoot, taskDirectory, folderName)
+        }
     }
 
     private fun createUnlocked(
@@ -68,8 +71,8 @@ class TaskApplicationService(
         request: CreateGroupedTaskRequest,
         taskRoot: Path,
         taskDirectory: Path,
+        folderName: String,
     ): TaskManifest {
-        val folderName = request.folderName.trim()
         val featureBranch = request.featureBranch.trim()
         require(folderName.isNotEmpty()) { "任务名称不能为空" }
         require(featureBranch.isNotEmpty() && featureBranch.none(Char::isWhitespace)) { "任务分支不能为空或包含空格" }
@@ -85,7 +88,7 @@ class TaskApplicationService(
                 ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$id")
         }
         val repositories = config.repositories.associateBy(RepositoryConfig::id)
-        val taskDirectoryName = TaskNaming.directoryName(folderName)
+        val taskDirectoryName = folderName
         taskRoot.toAbsolutePath().normalize().let { normalizedRoot ->
             Files.createDirectories(normalizedRoot)
             require(taskDirectory.toAbsolutePath().normalize().parent == normalizedRoot) { "任务目录必须是任务根目录的直接子目录" }

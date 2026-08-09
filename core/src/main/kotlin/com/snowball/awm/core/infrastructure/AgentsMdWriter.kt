@@ -1,10 +1,10 @@
 package com.snowball.awm.core
 
-import java.util.Locale
-
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 
+/** Writes the generated system section of a task-level AGENTS.md document. */
 object AgentsMdWriter {
     const val FILE_NAME = "AGENTS.md"
 
@@ -17,32 +17,28 @@ object AgentsMdWriter {
         Files.writeString(taskDirectory.resolve(FILE_NAME), render(taskDirectory, manifest, allRepositories, appendix))
     }
 
+    /**
+     * Renders only task context that an agent needs to safely change code.
+     *
+     * Task names, branches and lifecycle state are intentionally omitted: they duplicate the UI
+     * and become stale quickly, whereas the worktree baseline and path define the edit boundary.
+     */
     fun render(
         taskDirectory: Path,
         manifest: TaskManifest,
         allRepositories: List<RepositoryInfo>,
         appendix: String,
     ): String {
-        val taskRepoIds = manifest.services.map { it.repositoryId }.toSet()
-        val others = allRepositories
-            .filter { it.id !in taskRepoIds }
+        val taskRepositoryIds = manifest.services.map { it.repositoryId }.toSet()
+        val otherRepositories = allRepositories
+            .filter { it.id !in taskRepositoryIds }
             .sortedBy { it.name.lowercase(Locale.ROOT) }
-        val appendixTrimmed = appendix.trim()
+        val notes = appendix.trim()
 
         return buildString {
             appendLine("# 任务工作区说明（AGENTS）")
             appendLine()
-            appendLine("> 本文件由 Agent Workspace Manager 自动生成，请勿手改；变更任务后会覆盖重写。")
-            appendLine()
-            appendLine("## 基本信息")
-            appendLine()
-            appendLine("| 项 | 值 |")
-            appendLine("|----|-----|")
-            appendLine("| 文件夹名 | ${escapeCell(manifest.folderName)} |")
-            appendLine("| 任务目录 | `${taskDirectory.toAbsolutePath().normalize()}` |")
-            appendLine("| Feature 分支 | `${manifest.featureBranch}` |")
-            appendLine("| 状态 | ${manifest.status.name} |")
-            appendLine("| 更新时间 | ${manifest.updatedAt} |")
+            appendLine("> 本文件由 Agent Workspace Manager 生成。系统区会随任务说明保存而更新；人工说明区会被保留。")
             appendLine()
             appendLine("## 需求链接")
             appendLine()
@@ -50,59 +46,50 @@ object AgentsMdWriter {
             appendLine()
             appendLine("## 本任务可改动的 Worktree")
             appendLine()
-            appendLine("| 服务名 | 创建基线 | 策略 | Worktree 路径 | 分支 | 状态 |")
-            appendLine("|--------|----------|------|---------------|------|------|")
-            if (manifest.services.isEmpty()) {
-                appendLine("| （无） |  |  |  |  |  |")
+            appendLine("| 服务名 | 创建基线 | 策略 | Worktree 路径 |")
+            appendLine("|--------|----------|------|---------------|")
+            val workspaces = manifest.services.distinctBy { workspace ->
+                listOf(
+                    workspace.serviceName,
+                    workspace.baseRef.orEmpty(),
+                    workspace.strategy.name,
+                    workspace.worktreePath,
+                )
+            }
+            if (workspaces.isEmpty()) {
+                appendLine("| （无） |  |  |  |")
             } else {
-                manifest.services.distinctBy { workspace ->
-                    listOf(
-                        workspace.serviceName,
-                        workspace.worktreePath,
-                        workspace.branch,
-                        workspace.baseRef.orEmpty(),
-                        workspace.strategy.name,
-                        workspace.status.name,
-                    )
-                }.forEach { workspace ->
+                workspaces.forEach { workspace ->
                     appendLine(
-                        "| ${escapeCell(workspace.serviceName)} | `${workspace.baseRef ?: workspace.branch}` | ${workspace.strategy.name} | " +
-                            "`${workspace.worktreePath}` | `${workspace.branch}` | ${workspace.status.name} |",
+                        "| ${escapeCell(workspace.serviceName)} | `${workspace.baseRef ?: workspace.branch}` | " +
+                            "${workspace.strategy.name} | `${workspace.worktreePath}` |",
                     )
                 }
             }
             appendLine()
-            appendLine("## 其它本地服务（只读上下文）")
+            appendLine("## 其他本地服务（只读上下文）")
             appendLine()
-            appendLine(
-                "下列仓库**不在**本任务 Worktree 中。可用于阅读代码、梳理调用链与全局上下文；" +
-                    "**禁止**在这些主 checkout 路径下直接改代码或提交。",
-            )
+            appendLine("下列仓库不在本任务 Worktree 中。它们仅用于阅读代码和梳理调用链，禁止直接修改或提交。")
             appendLine()
             appendLine("| 服务名 | 本地仓库路径 |")
-            appendLine("|--------|----------------|")
-            if (others.isEmpty()) {
+            appendLine("|--------|--------------|")
+            if (otherRepositories.isEmpty()) {
                 appendLine("| （无） |  |")
             } else {
-                others.forEach { repo ->
-                    appendLine("| ${escapeCell(repo.name)} | `${repo.rootPath}` |")
+                otherRepositories.forEach { repository ->
+                    appendLine("| ${escapeCell(repository.name)} | `${repository.rootPath}` |")
                 }
             }
             appendLine()
             appendLine("## Agent 使用提示")
             appendLine()
-            appendLine("- **改代码**：仅允许修改上方「本任务可改动的 Worktree」中的路径；不要改主 checkout，也不要改「其它本地服务」表中的路径。")
-            appendLine("- **读代码**：可以阅读「其它本地服务」及本任务 worktree，以了解全链路上下文。")
-            appendLine(
-                "- **范围不够时**：若评估改动需要额外服务仓库，**不要擅自改主仓**；应明确告知用户，" +
-                    "请其在 Agent Workspace Manager 中「添加服务」为本任务增加对应 Worktree 后再改。",
-            )
-            appendLine("- 每个工作区的实际分支以上表为准；多模块可能按基础分支派生后缀，独立克隆使用创建任务时选择的远程分支。")
-            if (appendixTrimmed.isNotEmpty()) {
+            appendLine("- 只允许修改上方“本任务可改动的 Worktree”中的路径；不要修改主 checkout 或其他本地服务。")
+            appendLine("- 需要额外服务时，请先让用户在 Agent Workspace Manager 中为本任务添加服务。")
+            if (notes.isNotEmpty()) {
                 appendLine()
-                appendLine("## 自定义说明")
+                appendLine("## 任务人工说明")
                 appendLine()
-                appendLine(appendixTrimmed)
+                appendLine(notes)
             }
             appendLine()
         }

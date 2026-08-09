@@ -12,6 +12,27 @@ import kotlin.test.assertTrue
 
 class TaskApplicationServiceTest {
     @Test
+    fun `create rejects an unsafe task directory name before provisioning`() {
+        val root = Files.createTempDirectory("unsafe-task-name-")
+        val service = TaskApplicationService(operationLock = NoOpTaskOperationLock)
+
+        assertFailsWith<IllegalArgumentException> {
+            service.create(
+                taskConfig(root),
+                CreateGroupedTaskRequest(
+                    folderName = "unsafe:name",
+                    featureBranch = "feature/unsafe-name",
+                    groupId = "alpha",
+                    serviceIds = listOf("standard"),
+                ),
+            )
+        }
+        Files.list(root).use { children ->
+            assertTrue(!children.findAny().isPresent)
+        }
+    }
+
+    @Test
     fun `task belongs to selected group and delegates each service to its strategy`() {
         val root = Files.createTempDirectory("task-app-")
         val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)

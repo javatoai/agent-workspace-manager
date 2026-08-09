@@ -116,6 +116,7 @@ import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ServiceModuleConfig
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.TaskNaming
 import com.snowball.awm.core.RequirementDraftState
 import com.snowball.awm.core.WorkspaceToolLaunchStatus
 import com.snowball.awm.core.ThemePreference
@@ -1292,9 +1293,11 @@ private fun CreateTaskDialog(
     var rightTab by remember { mutableStateOf("notes") }
     var requirementMenuExpanded by remember { mutableStateOf(false) }
     var requirementSearch by remember { mutableStateOf("") }
+    var serviceSearch by remember(groupId) { mutableStateOf("") }
     val overrides = remember { mutableStateMapOf<String, String>() }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
+    val taskNameError = TaskNaming.directoryNameValidationError(draft.taskName)
     val preview = remember(draft.taskName, draft.branch, groupId, selected, overrides.toMap(), draft.requirementLink, notes) {
         controller.previewAgents(draft.taskName, draft.branch, groupId, selected, overrides.toMap(), draft.requirementLink, notes)
     }
@@ -1327,7 +1330,7 @@ private fun CreateTaskDialog(
                 }
                 Row(Modifier.weight(1f).padding(20.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Surface(
-                        Modifier.weight(0.4f).fillMaxHeight(),
+                        Modifier.weight(1f).fillMaxHeight(),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
                         shape = RoundedCornerShape(15.dp),
                     ) {
@@ -1358,6 +1361,11 @@ private fun CreateTaskDialog(
                                     expanded = requirementMenuExpanded,
                                     onDismissRequest = { requirementMenuExpanded = false },
                                     modifier = Modifier.widthIn(min = 520.dp, max = 680.dp),
+                                    shape = MaterialTheme.shapes.medium,
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    tonalElevation = 0.dp,
+                                    shadowElevation = 4.dp,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 ) {
                                     OutlinedTextField(
                                         requirementSearch,
@@ -1405,7 +1413,16 @@ private fun CreateTaskDialog(
                                 Text("正在拉取飞书需求链接", style = MaterialTheme.typography.bodySmall)
                             }
                         }
-                        OutlinedTextField(draft.taskName, { draft = draft.editName(it) }, Modifier.fillMaxWidth(), label = { Text("任务名称") }, placeholder = { Text("例如：PAY-1024 支付订单优化") }, singleLine = true)
+                        OutlinedTextField(
+                            value = draft.taskName,
+                            onValueChange = { draft = draft.editName(it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("任务名称 / 文件夹名称") },
+                            placeholder = { Text("例如：PAY-1024 支付订单优化") },
+                            isError = taskNameError != null,
+                            supportingText = { taskNameError?.let { Text(it) } },
+                            singleLine = true,
+                        )
                         OutlinedTextField(
                             draft.branch,
                             { draft = draft.editBranch(it) },
@@ -1428,13 +1445,28 @@ private fun CreateTaskDialog(
                                     selected = emptySet()
                                     overrides.clear()
                                     selectedToolIds = candidate.defaultWorkspaceToolIds.toSet()
+                                    serviceSearch = ""
                                     draft = draft.changeGroup(candidate.defaultBranchPrefix)
                                 }, label = { Text(candidate.name) }) }
                             }
                         }
                         Spacer(Modifier.height(2.dp))
                         SectionHeader("选择服务", "标准服务创建 Worktree，独立克隆直接切换配置分支")
-                        group.services.filter { it.enabled }.forEach { service ->
+                        OutlinedTextField(
+                            value = serviceSearch,
+                            onValueChange = { serviceSearch = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("搜索服务") },
+                            placeholder = { Text("按服务显示名称搜索") },
+                            singleLine = true,
+                        )
+                        val visibleServices = group.services
+                            .filter { it.enabled }
+                            .filter { serviceSearch.isBlank() || it.displayName.contains(serviceSearch, ignoreCase = true) }
+                        if (visibleServices.isEmpty()) {
+                            Text("没有匹配的服务", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        visibleServices.forEach { service ->
                             val checked = service.id in selected
                             OutlinedCard(
                                 Modifier.fillMaxWidth().clickable { selected = if (checked) selected - service.id else selected + service.id },
@@ -1471,7 +1503,7 @@ private fun CreateTaskDialog(
                         }
                     }
                     }
-                    Column(Modifier.weight(0.6f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             FilterChip(rightTab == "notes", { rightTab = "notes" }, label = { Text("任务人工说明") })
                             Spacer(Modifier.width(8.dp))
@@ -1528,7 +1560,7 @@ private fun CreateTaskDialog(
                                 val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
                                 onCreate(draft.taskName, draft.branch, groupId, selected.toList(), draft.requirementLink, overrides.toMap(), notes, availableTools)
                             },
-                            enabled = draft.taskName.isNotBlank() && draft.branch.isNotBlank() &&
+                            enabled = taskNameError == null && draft.branch.isNotBlank() &&
                                 !BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch) &&
                                 selected.isNotEmpty() && !controller.busy,
                         ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
