@@ -151,6 +151,14 @@ class DesktopApplication(
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val initial = runCatching { configStore.load() }
+    /**
+     * A malformed on-disk configuration must never be mistaken for a new, empty
+     * configuration.  The app still needs an in-memory model to render an error
+     * state, but saves remain blocked by [ConfigStore] until the user fixes or
+     * replaces the invalid file.
+     */
+    var configurationLoadError by mutableStateOf(initial.exceptionOrNull()?.message)
+        private set
     private val agentMonitor by lazy {
         AgentFileMonitor(onChange = { change ->
             scope.launch { handleAgentFileChange(change) }
@@ -264,12 +272,24 @@ class DesktopApplication(
         }
     }
 
+    /**
+     * Persists Feishu link-source settings as one serialized operation.  The
+     * command check, atomic write and subsequent read all run off the UI thread;
+     * applying the re-read value makes disk the sole source of truth after save.
+     */
     fun updateMeegleSettings(projects: List<MeegleProjectConfig>, autoLoad: Boolean): Boolean {
-        if (autoLoad && !requirementLinkSource.isInstalled()) {
-            showError(IllegalStateException("未检测到Meegle命令")); return false
-        }
-        return mutateConfig("正在保存飞书需求链接配置…", "飞书需求链接配置已保存") {
-            it.copy(meegleProjects = projects, meegleAutoLoadRequirementLinks = autoLoad)
+        val current = config
+        return configurationMutation("正在保存飞书需求链接配置…", "飞书需求链接配置已保存") {
+            if (autoLoad && !requirementLinkSource.isInstalled()) {
+                throw IllegalStateException("未检测到Meegle命令")
+            }
+            configStore.save(
+                current.copy(
+                    meegleProjects = projects,
+                    meegleAutoLoadRequirementLinks = autoLoad,
+                ),
+            )
+            configStore.load()
         }
     }
 
@@ -987,6 +1007,7 @@ class DesktopApplication(
 
     private fun applyConfig(updated: AppConfig) {
         config = updated
+        configurationLoadError = null
         if (navigation == NavigationItem.UAT && !TagNavigationPolicy.isVisible(updated)) {
             navigation = NavigationItem.TASKS
         }
@@ -1002,7 +1023,8 @@ class DesktopApplication(
         transform: (AppConfig) -> AppConfig,
     ): Boolean =
         runOperation(activeMessage, successMessage, block = {
-            transform(config).also(configStore::save)
+            configStore.save(transform(config))
+            configStore.load()
         }, onSuccess = ::applyConfig)
 
     private fun configurationMutation(

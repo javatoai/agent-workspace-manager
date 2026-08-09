@@ -99,6 +99,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.mikepenz.markdown.compose.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
 import com.snowball.awm.core.AgentConflictResolution
 import com.snowball.awm.core.BootstrapConfig
 import com.snowball.awm.core.BootstrapPresets
@@ -979,6 +982,26 @@ private fun SettingsScreen(controller: DesktopApplication) {
             Modifier.widthIn(max = 1080.dp).fillMaxHeight().align(Alignment.TopCenter).padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            controller.configurationLoadError?.let { error ->
+                item {
+                    OutlinedCard(
+                        Modifier.fillMaxWidth(),
+                        colors = CardDefaults.outlinedCardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("配置加载失败", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "未使用默认配置覆盖磁盘文件。请修复或删除 config.json 后重新打开应用。$error",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            }
             item {
             SettingsCard("基础设置", "启动只读取这些本地配置，不扫描仓库。") {
                 PathField("任务根目录", taskRoot, { taskRoot = it }, !controller.pathPickerBusy) {
@@ -1408,7 +1431,7 @@ private fun CreateTaskDialog(
                                 shape = RoundedCornerShape(14.dp),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             ) {
-                                Text(preview, Modifier.padding(15.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall)
+                                AgentsMarkdownPreview(preview)
                             }
                         }
                     }
@@ -1451,6 +1474,19 @@ private fun CreateTaskDialog(
             }
         }
     }
+}
+
+/** Read-only Material 3 rendering used exclusively for generated AGENTS.md previews. */
+@Composable
+private fun AgentsMarkdownPreview(content: String) {
+    Markdown(
+        content = content,
+        colors = markdownColor(),
+        typography = markdownTypography(),
+        modifier = Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()),
+        // Parsing is asynchronous; retaining the last result avoids preview flicker while typing.
+        retainState = true,
+    )
 }
 
 @Composable

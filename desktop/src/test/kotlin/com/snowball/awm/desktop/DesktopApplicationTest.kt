@@ -2,6 +2,8 @@ package com.snowball.awm.desktop
 
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ApplicationPaths
+import com.snowball.awm.core.CommandResult
+import com.snowball.awm.core.CommandRunner
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.ManifestStore
 import com.snowball.awm.core.RepositoryConfig
@@ -11,6 +13,8 @@ import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.GroupConfig
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.RequirementMetadataProvider
+import com.snowball.awm.core.MeegleProjectConfig
+import com.snowball.awm.core.MeegleRequirementLinkSource
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.TaskWorkspaceContext
 import com.snowball.awm.core.TaskWorkspaceToolAvailability
@@ -31,8 +35,65 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertContains
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 
 class DesktopApplicationTest {
+    @Test
+    fun `invalid disk configuration remains visible and is never overwritten`() {
+        val root = Files.createTempDirectory("awm-invalid-config")
+        val paths = ApplicationPaths(root.resolve("home"))
+        Files.createDirectories(paths.home)
+        val original = "{ invalid json"
+        Files.writeString(paths.config, original)
+
+        val controller = DesktopApplication(paths = paths, configStore = ConfigStore(paths))
+        try {
+            assertNotNull(controller.configurationLoadError)
+            assertEquals(original, Files.readString(paths.config))
+        } finally {
+            controller.close()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `saving Feishu settings reloads the persisted switch value`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-meegle-settings")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val source = MeegleRequirementLinkSource(
+            runner = object : CommandRunner {
+                override fun run(
+                    command: List<String>,
+                    workingDirectory: Path?,
+                    timeout: java.time.Duration,
+                    environment: Map<String, String>,
+                ) = CommandResult(0, "meegle", "")
+            },
+            isWindows = false,
+        )
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            requirementLinkSource = source,
+            ioDispatcher = dispatcher,
+        )
+        try {
+            val projects = listOf(MeegleProjectConfig("obt", "obt"))
+            controller.updateMeegleSettings(projects, autoLoad = true)
+            advanceUntilIdle()
+
+            assertEquals(true, controller.config.meegleAutoLoadRequirementLinks)
+            assertEquals(projects, controller.config.meegleProjects)
+            assertEquals(controller.config, store.load())
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun `agents preview includes the current requirement link`() {
         val root = Files.createTempDirectory("awm-preview-link")
