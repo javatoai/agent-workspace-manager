@@ -31,14 +31,14 @@ Desktop -> Application -> Domain
 
 ## 持久化
 
-- 全局配置：`~/AgentWorkspaceManager/config.json`
-- 全局说明：`~/AgentWorkspaceManager/agents/global/AGENTS.md`
-- 组说明：`~/AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md`
+- 全局配置：`~/.AgentWorkspaceManager/config.json`
+- 全局说明：`~/.AgentWorkspaceManager/agents/global/AGENTS.md`
+- 组说明：`~/.AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md`
 - 任务清单：`<taskDir>/agent-workspace.json`
 - 最终说明：`<taskDir>/AGENTS.md`
 - Tag 操作快照：`<taskDir>/tag-operations/*.json`
 - 构建历史：`<taskDir>/tag-build-history.jsonl`
-- 仓库锁：`~/AgentWorkspaceManager/locks/<git-common-dir-hash>.lock`
+- 仓库锁：`~/.AgentWorkspaceManager/locks/<git-common-dir-hash>.lock`
 
 配置和任务使用严格 schema。文件写入采用同目录临时文件加原子替换，避免进程中断留下半个 JSON 或覆盖用户正在维护的 Agent 文档。
 

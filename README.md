@@ -48,7 +48,7 @@ macOS 构建 DMG：
 ## 数据位置
 
 ```text
-~/AgentWorkspaceManager/
+~/.AgentWorkspaceManager/
 ├── config.json
 ├── agents/
 │   ├── global/AGENTS.md

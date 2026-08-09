@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\AgentWorkspaceManager`，macOS 使用 `~/AgentWorkspaceManager`。0.3.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.3.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md

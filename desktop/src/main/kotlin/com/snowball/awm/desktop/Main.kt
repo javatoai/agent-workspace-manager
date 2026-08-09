@@ -1021,8 +1021,8 @@ private fun SettingsScreen(controller: DesktopApplication) {
                 val isGlobal = agentScope == "global"
                 val agentPath = if (isGlobal) controller.globalAgentsPath else controller.groupAgentsPath(agentGroupId)
                 Text(
-                    if (isGlobal) "对所有任务生效；也可直接编辑 ~/AgentWorkspaceManager/agents/global/AGENTS.md，程序会自动同步。"
-                    else "仅对当前组生效；也可直接编辑 ~/AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
+                    if (isGlobal) "对所有任务生效；也可直接编辑 ~/.AgentWorkspaceManager/agents/global/AGENTS.md，程序会自动同步。"
+                    else "仅对当前组生效；也可直接编辑 ~/.AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

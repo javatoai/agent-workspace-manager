@@ -8,7 +8,7 @@
 2. `fetch --prune --tags` 配置的 Remote。
 3. 比较本地和远端 Feature 分支；远端领先或已分叉时停止，不自动 pull/rebase。
 4. 解析远端测试分支的精确 SHA。
-5. 在 `AgentWorkspaceManager/temp/tag-build` 下创建 Detached 临时 Worktree。
+5. 在 `.AgentWorkspaceManager/temp/tag-build` 下创建 Detached 临时 Worktree。
 6. 执行不提交的合并检测，收集冲突文件并清理临时 Worktree。
 7. 展示合并方式、提交列表、Diff Stat 和预计 Tag。
 

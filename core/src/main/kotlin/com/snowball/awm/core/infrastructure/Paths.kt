@@ -21,6 +21,6 @@ data class ApplicationPaths(
     companion object {
         fun systemDefault(
             userHome: String = System.getProperty("user.home"),
-        ): ApplicationPaths = ApplicationPaths(Path(userHome).resolve("AgentWorkspaceManager"))
+        ): ApplicationPaths = ApplicationPaths(Path(userHome).resolve(".AgentWorkspaceManager"))
     }
 }

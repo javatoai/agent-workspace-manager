@@ -15,6 +15,14 @@ class ConfigStoreTest {
     lateinit var temporary: Path
 
     @Test
+    fun `system default stores application data in hidden home directory`() {
+        assertEquals(
+            temporary.resolve(".AgentWorkspaceManager"),
+            ApplicationPaths.systemDefault(temporary.toString()).home,
+        )
+    }
+
+    @Test
     fun `missing config returns one hidden default group`() {
         val store = ConfigStore(ApplicationPaths(temporary.resolve("home")))
 
