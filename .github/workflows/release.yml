@@ -14,8 +14,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify:
+    name: Verify on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Test and compile desktop (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\gradlew.bat clean test :desktop:compileKotlin
+      - name: Test and compile desktop (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          perl -pi -e 's/\r$//' ./gradlew
+          chmod +x ./gradlew
+          ./gradlew clean test :desktop:compileKotlin
+
   windows:
     name: Windows packages
+    needs: verify
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -57,15 +87,15 @@ jobs:
 
           $portable = Get-ChildItem 'desktop\build\compose\binaries\main\zip\*-portable.zip' | Select-Object -First 1
           if (-not $portable) { throw 'Portable zip not found' }
-          Copy-Item $portable.FullName (Join-Path $out "Task-Worktree-Manager-$version-windows-portable.zip")
+          Copy-Item $portable.FullName (Join-Path $out "Agent-Workspace-Manager-$version-windows-portable.zip")
 
           $exe = Get-ChildItem 'desktop\build\compose\binaries\main\exe\*.exe' | Select-Object -First 1
           if (-not $exe) { throw 'EXE installer not found' }
-          Copy-Item $exe.FullName (Join-Path $out "Task-Worktree-Manager-$version-windows-setup.exe")
+          Copy-Item $exe.FullName (Join-Path $out "Agent-Workspace-Manager-$version-windows-setup.exe")
 
           $msi = Get-ChildItem 'desktop\build\compose\binaries\main\msi\*.msi' | Select-Object -First 1
           if (-not $msi) { throw 'MSI installer not found' }
-          Copy-Item $msi.FullName (Join-Path $out "Task-Worktree-Manager-$version-windows.msi")
+          Copy-Item $msi.FullName (Join-Path $out "Agent-Workspace-Manager-$version-windows.msi")
 
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Get-ChildItem $out | ForEach-Object { Write-Host $_.FullName }
@@ -80,6 +110,7 @@ jobs:
 
   macos:
     name: macOS packages
+    needs: verify
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -100,7 +131,7 @@ jobs:
           # Normalize them before executing them on the macOS runner.
           perl -pi -e 's/\r$//' ./gradlew ./scripts/build-macos.sh
           chmod +x ./gradlew ./scripts/build-macos.sh
-          MAC_PACKAGE_VERSION=2.0.0 ./scripts/build-macos.sh
+          MAC_PACKAGE_VERSION=3.0.0 ./scripts/build-macos.sh
 
       - name: Show macOS packaging diagnostics
         if: always()
@@ -119,7 +150,7 @@ jobs:
           version=$(sed -n 's/.*version *= *"\([^"]*\)".*/\1/p' build.gradle.kts | head -n1)
           mkdir -p dist/macos
           dmg=$(ls desktop/build/compose/binaries/main/dmg/*.dmg | head -n1)
-          cp "$dmg" "dist/macos/Task-Worktree-Manager-${version}-macos.dmg"
+          cp "$dmg" "dist/macos/Agent-Workspace-Manager-${version}-macos.dmg"
           ls -la dist/macos
 
       - name: Upload macOS artifacts
@@ -155,7 +186,7 @@ jobs:
           short_sha="${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "name=Task Worktree Manager ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=Agent Workspace Manager ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "make_latest=true" >> "$GITHUB_OUTPUT"
           else
@@ -175,7 +206,7 @@ jobs:
           make_latest: ${{ steps.meta.outputs.make_latest }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           body: |
-            自动构建 Task Worktree Manager 桌面产物。
+            自动构建 Agent Workspace Manager 桌面产物。
 
             - **Windows**：绿色 portable zip、Setup EXE、MSI
             - **macOS**：DMG

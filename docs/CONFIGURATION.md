@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\TaskWorktreeManager`，macOS 使用 `~/TaskWorktreeManager`。0.2.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\AgentWorkspaceManager`，macOS 使用 `~/AgentWorkspaceManager`。0.3.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.2.0 的 `config.json` 使用严格 schema 5。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.3.0 的 `config.json` 使用严格 schema 6。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {
@@ -34,8 +34,8 @@ agents/groups/<groupId>/AGENTS.md
     {
       "id": "default",
       "name": "默认组",
-      "createTagEnabled": true,
-      "defaultBranchPrefix": "feature/",
+      "uatTagEnabled": true,
+      "defaultBranchPrefix": "feature/zhangsan_{num}_",
       "defaultWorkspaceToolIds": ["codex"],
       "services": [
         {
@@ -51,14 +51,14 @@ agents/groups/<groupId>/AGENTS.md
               "name": "",
               "baseRef": "origin/master",
               "baseRemote": "origin",
-              "tagEnabled": true,
+              "uatTagEnabled": true,
               "uatRef": "origin/release/test",
               "initialUatTag": null,
               "tagMessagePrefix": "UAT"
             }
           ],
           "cloneDefaultBranch": null,
-          "cloneTagEnabled": false,
+          "cloneUatTagEnabled": false,
           "cloneUatRef": "origin/release/test",
           "cloneInitialUatTag": null,
           "cloneTagMessagePrefix": "UAT",
@@ -74,7 +74,7 @@ agents/groups/<groupId>/AGENTS.md
 }
 ```
 
-未知字段、旧 schema 或未来 schema 都会被拒绝，应用不会自动迁移或改写原文件。迁移旧数据请按[旧数据手工迁移指南](LEGACY-DATA-MIGRATION.md)操作。
+未知字段、旧 schema 或未来 schema 都会被拒绝，应用不会自动迁移或改写原文件。旧 TaskWT 用户目录与任务文件不会被读取、迁移或删除。
 
 ## 组
 
@@ -83,6 +83,7 @@ agents/groups/<groupId>/AGENTS.md
 - 设置页可创建、重命名、排序组；只有空组可以删除，且必须保留至少一个组。
 - 一个仓库可以加入多个组，但同一组内只能出现一次。
 - 组内服务也使用数组保存并支持排序。
+- `defaultBranchPrefix` 可包含唯一占位符 `{num}`。飞书链接优先使用工作项 ID；其他 URL 忽略 query/fragment 后从 path 取最后一段数字，普通文本取最后一段数字。无法解析时必须手工修正分支后才能创建。
 
 ## 人工添加仓库
 
@@ -95,7 +96,9 @@ agents/groups/<groupId>/AGENTS.md
 5. 每个目录独立校验，不递归扫描其子目录、父目录或同级目录；
 6. 合法仓库批量写入一次配置，新增服务默认采用标准 Worktree，之后可在服务配置中修改策略。
 
-应用启动不会再次调用 Git。用户点击顶部“刷新”后才重新校验已经配置的仓库。
+应用启动不会重新校验全部仓库或访问远端；只对当前任务执行本地只读 Git 状态检查。用户点击顶部“刷新”后才重新校验已经配置的仓库。
+
+当前任务会异步运行 `git status --porcelain=v2 -z --untracked-files=all`，展示包括未跟踪文件在内的未提交文件数；同时只比较本地已知 upstream 与 `HEAD`，不会为了状态展示执行 Fetch 或访问远端。
 
 ## 服务工作区策略
 
@@ -118,8 +121,8 @@ agents/groups/<groupId>/AGENTS.md
 
 有效 Tag 入口需要同时满足：
 
-1. 任务所属组的 `createTagEnabled` 已开启；
-2. 标准模块的 `tagEnabled` 或独立克隆的 `cloneTagEnabled` 已开启。
+1. 任务所属组的 `uatTagEnabled` 已开启；
+2. 标准模块的 `uatTagEnabled` 或独立克隆的 `cloneUatTagEnabled` 已开启。
 
 独立克隆启用后，以任务中实际克隆的分支参与 UAT，而不是重新派生 Feature 分支。
 
@@ -135,13 +138,13 @@ agents/groups/<groupId>/AGENTS.md
 冲突时任务级优先，其次是组级，再其次是全局。任务文件用以下协议分隔系统区和人工区：
 
 ```text
-<!-- TASKWT:GENERATED:BEGIN -->
+<!-- AWM:GENERATED:BEGIN -->
 …系统生成内容…
-<!-- TASKWT:GENERATED:END -->
+<!-- AWM:GENERATED:END -->
 
-<!-- TASKWT:TASK-NOTES:BEGIN -->
+<!-- AWM:TASK-NOTES:BEGIN -->
 …用户可编辑内容…
-<!-- TASKWT:TASK-NOTES:END -->
+<!-- AWM:TASK-NOTES:END -->
 ```
 
 重新生成只替换系统区并保留人工区。应用使用 WatchService、窗口聚焦补检、内容哈希、防抖和原子写入同步文件；外部修改与未保存编辑冲突时必须由用户选择磁盘版本或本地版本。标记缺失或重复时会停止自动覆盖，等待用户修复。
@@ -152,11 +155,11 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 
 ## 任务工作区工具与任务 schema
 
-`taskwt.json` 使用严格 schema 4。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。
+`agent-workspace.json` 使用严格 schema 5。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "workspaceToolLaunches": [
     {
       "toolId": "codex",
@@ -170,4 +173,4 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 
 未注册的工具 ID 会原样保留在配置中并在界面显示为“当前不可用”。Core 只认识通用工具 ID 和执行结果，不依赖 Codex、Claude、Cursor 的 URI 或命令。
 
-TaskWT 生成的任务、Tag 操作、历史记录、JSONL 事件和 AGENTS.md 时间统一使用 `Asia/Shanghai` 时区，格式为 `yyyy-MM-dd HH:mm:ss`。这不会重写 Git 提交时间、远程 Tag 原始时间或文件系统修改时间。
+AWM 生成的任务、Tag 操作、历史记录、JSONL 事件和 AGENTS.md 时间统一使用 `Asia/Shanghai` 时区，格式为 `yyyy-MM-dd HH:mm:ss`。这不会重写 Git 提交时间、远程 Tag 原始时间或文件系统修改时间。

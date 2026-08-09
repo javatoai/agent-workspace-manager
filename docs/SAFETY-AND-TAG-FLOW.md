@@ -8,7 +8,7 @@
 2. `fetch --prune --tags` 配置的 Remote。
 3. 比较本地和远端 Feature 分支；远端领先或已分叉时停止，不自动 pull/rebase。
 4. 解析远端测试分支的精确 SHA。
-5. 在 `TaskWorktreeManager/temp/tag-build` 下创建 Detached 临时 Worktree。
+5. 在 `AgentWorkspaceManager/temp/tag-build` 下创建 Detached 临时 Worktree。
 6. 执行不提交的合并检测，收集冲突文件并清理临时 Worktree。
 7. 展示合并方式、提交列表、Diff Stat 和预计 Tag。
 
@@ -36,7 +36,7 @@
 
 ## Tag 规则
 
-桌面端只展示同时通过两级开关的 Tag 入口：任务所属组的 `createTagEnabled` 为开，且对应标准模块的 `tagEnabled` 或独立克隆的 `cloneTagEnabled` 为开。独立克隆以任务中实际检出的分支参与 UAT，不会为 Tag 再创建 Feature 分支。
+桌面端只展示同时通过两级开关的 Tag 入口：任务所属组的 `uatTagEnabled` 为开，且对应标准模块的 `uatTagEnabled` 或独立克隆的 `cloneUatTagEnabled` 为开。独立克隆以任务中实际检出的分支参与 UAT，不会为 Tag 再创建 Feature 分支。
 
 有效格式：
 

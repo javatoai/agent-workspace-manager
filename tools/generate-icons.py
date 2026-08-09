@@ -1,4 +1,4 @@
-"""Generate deterministic app icons from the TaskWT vector geometry."""
+"""Generate deterministic app icons from the AWM vector geometry."""
 
 from __future__ import annotations
 

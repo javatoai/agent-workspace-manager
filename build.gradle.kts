@@ -6,8 +6,8 @@ plugins {
 }
 
 allprojects {
-    group = "com.snowball.taskwt"
-    version = "0.2.0"
+    group = "com.snowball.awm"
+    version = "0.3.0"
 }
 
 subprojects {

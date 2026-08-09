@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "task-worktree-manager"
+rootProject.name = "agent-workspace-manager"
 
 include(":core")
 include(":desktop")
