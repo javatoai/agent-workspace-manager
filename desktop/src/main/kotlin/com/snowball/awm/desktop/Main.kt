@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -1576,33 +1577,38 @@ private fun CreateTaskDialog(
 private fun AgentsMarkdownPreview(content: String) {
     val verticalScroll = rememberScrollState()
     val horizontalScroll = rememberScrollState()
-    Markdown(
-        content = content,
-        colors = markdownColor(),
-        // Default Markdown h1/h2 styles map to Material display styles, which are intentionally
-        // too prominent inside a compact task preview. Keep the document hierarchy while using
-        // the same visual scale as the rest of the application.
-        typography = markdownTypography(
-            h1 = MaterialTheme.typography.titleLarge,
-            h2 = MaterialTheme.typography.titleMedium,
-            h3 = MaterialTheme.typography.titleSmall,
-            h4 = MaterialTheme.typography.labelLarge,
-            h5 = MaterialTheme.typography.labelLarge,
-            h6 = MaterialTheme.typography.labelLarge,
-            text = MaterialTheme.typography.bodyMedium,
-            paragraph = MaterialTheme.typography.bodyMedium,
-            table = MaterialTheme.typography.bodySmall,
-            code = MaterialTheme.typography.bodySmall,
-            inlineCode = MaterialTheme.typography.bodySmall,
-        ),
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(15.dp)
-            .verticalScroll(verticalScroll)
-            .horizontalScroll(horizontalScroll),
-        // Parsing is asynchronous; retaining the last result avoids preview flicker while typing.
-        retainState = true,
-    )
+    BoxWithConstraints(Modifier.fillMaxSize().padding(15.dp)) {
+        val previewWidth = maxWidth
+        Box(Modifier.fillMaxSize().verticalScroll(verticalScroll)) {
+            // Scroll containers must not both measure Markdown itself. Keeping Markdown at least
+            // as wide as the viewport makes prose start at the left edge; only a wide table or
+            // path overflows into the inner horizontal scroll area.
+            Box(Modifier.widthIn(min = previewWidth).horizontalScroll(horizontalScroll)) {
+                Markdown(
+                    content = content,
+                    colors = markdownColor(),
+                    // Default Markdown h1/h2 styles map to Material display styles, which are
+                    // too prominent inside a compact task preview.
+                    typography = markdownTypography(
+                        h1 = MaterialTheme.typography.titleLarge,
+                        h2 = MaterialTheme.typography.titleMedium,
+                        h3 = MaterialTheme.typography.titleSmall,
+                        h4 = MaterialTheme.typography.labelLarge,
+                        h5 = MaterialTheme.typography.labelLarge,
+                        h6 = MaterialTheme.typography.labelLarge,
+                        text = MaterialTheme.typography.bodyMedium,
+                        paragraph = MaterialTheme.typography.bodyMedium,
+                        table = MaterialTheme.typography.bodySmall,
+                        code = MaterialTheme.typography.bodySmall,
+                        inlineCode = MaterialTheme.typography.bodySmall,
+                    ),
+                    modifier = Modifier.widthIn(min = previewWidth),
+                    // Parsing is asynchronous; retaining the last result avoids preview flicker while typing.
+                    retainState = true,
+                )
+            }
+        }
+    }
 }
 
 @Composable
