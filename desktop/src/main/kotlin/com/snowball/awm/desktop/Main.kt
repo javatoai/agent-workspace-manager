@@ -1298,7 +1298,11 @@ private fun CreateTaskDialog(
     val overrides = remember { mutableStateMapOf<String, String>() }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
-    val taskNameError = TaskNaming.directoryNameValidationError(draft.taskName)
+    val taskNameMissing = draft.taskName.isBlank()
+    // An untouched create form is incomplete rather than erroneous. Reserve the
+    // error treatment for an entered name that cannot become a safe directory.
+    val taskNameError = draft.taskName.takeUnless(String::isBlank)
+        ?.let(TaskNaming::directoryNameValidationError)
     val preview = remember(draft.taskName, draft.branch, groupId, selected, overrides.toMap(), draft.requirementLink, notes) {
         controller.previewAgents(draft.taskName, draft.branch, groupId, selected, overrides.toMap(), draft.requirementLink, notes)
     }
@@ -1430,11 +1434,6 @@ private fun CreateTaskDialog(
                             Modifier.fillMaxWidth(),
                             label = { Text("任务分支") },
                             placeholder = { Text("例如：feature/PAY-1024") },
-                            supportingText = {
-                                if (BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch)) {
-                                    Text("{num} 尚未解析，请补充需求编号或手工修改分支", color = MaterialTheme.colorScheme.error)
-                                }
-                            },
                             singleLine = true,
                         )
                         if (controller.config.groups.size > 1) {
@@ -1561,7 +1560,7 @@ private fun CreateTaskDialog(
                                 val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
                                 onCreate(draft.taskName, draft.branch, groupId, selected.toList(), draft.requirementLink, overrides.toMap(), notes, availableTools)
                             },
-                            enabled = taskNameError == null && draft.branch.isNotBlank() &&
+                            enabled = !taskNameMissing && taskNameError == null && draft.branch.isNotBlank() &&
                                 !BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch) &&
                                 selected.isNotEmpty() && !controller.busy,
                         ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
