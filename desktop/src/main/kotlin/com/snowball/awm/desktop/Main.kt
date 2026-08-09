@@ -166,7 +166,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.5.1",
+            title = "Agent Workspace Manager 0.5.2",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {
@@ -344,7 +344,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("AWM", style = MaterialTheme.typography.titleLarge)
-                    Text("Workspace studio · 0.5.1", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Workspace studio · 0.5.2", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.height(24.dp))

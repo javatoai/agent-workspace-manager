@@ -61,11 +61,11 @@ class ConfigurationInteractionPolicyTest {
 
         store.save(expected)
 
-        assertEquals("0.5.1", expected.schemaVersion)
+        assertEquals("0.5.2", expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
         assertTrue("\"uatRef\"" in json)
-        assertTrue("\"schemaVersion\": \"0.5.1\"" in json)
+        assertTrue("\"schemaVersion\": \"0.5.2\"" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
     }

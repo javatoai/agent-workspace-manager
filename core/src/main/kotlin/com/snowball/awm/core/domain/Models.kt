@@ -4,8 +4,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.5.1"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.5.1"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.5.2"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.5.2"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 

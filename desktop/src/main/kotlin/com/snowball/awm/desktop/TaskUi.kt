@@ -90,7 +90,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -236,15 +238,22 @@ private fun GroupHeader(name: String, count: Int, expanded: Boolean, onToggle: (
 
 @Composable
 private fun TaskCard(controller: DesktopApplication, task: TaskManifest, selected: Boolean, onSelect: (TaskManifest) -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+            .compositeOver(MaterialTheme.colorScheme.surface)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
     ElevatedCard(
-        onClick = { onSelect(task) },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clip(shape).clickable { onSelect(task) },
+        shape = shape,
         colors = CardDefaults.elevatedCardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f) else MaterialTheme.colorScheme.surface,
+            containerColor = containerColor,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 0.dp else 1.dp),
     ) {
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).background(containerColor)) {
             if (selected) Surface(Modifier.width(4.dp).fillMaxHeight(), color = MaterialTheme.colorScheme.primary) {}
             Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
