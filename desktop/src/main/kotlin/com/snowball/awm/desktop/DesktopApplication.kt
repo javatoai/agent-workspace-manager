@@ -18,6 +18,7 @@ import com.snowball.awm.core.CreateGroupedTaskRequest
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
 import com.snowball.awm.core.MeegleRequirementMetadataProvider
+import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.FeishuWorkItemLink
 import com.snowball.awm.core.GitRepositoryInspector
 import com.snowball.awm.core.GroupConfigurationService
@@ -259,6 +260,15 @@ class DesktopApplication(
                 runCatching { requirementMetadataProvider.fetch(link) }.getOrNull()
             }
             onResult(metadata)
+        }
+    }
+
+    /** Saves the configured Feishu project identities without enabling any automatic query. */
+    fun updateMeegleProjects(projects: List<MeegleProjectConfig>): Boolean {
+        val current = config
+        return configurationMutation("正在保存飞书需求配置…", "飞书需求配置已保存") {
+            configStore.save(current.copy(meegleProjects = projects))
+            configStore.load()
         }
     }
 

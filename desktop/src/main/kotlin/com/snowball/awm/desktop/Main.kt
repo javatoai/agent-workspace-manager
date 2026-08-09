@@ -111,6 +111,7 @@ import com.snowball.awm.core.IdeType
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
 import com.snowball.awm.core.GroupConfig
+import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ServiceModuleConfig
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
@@ -963,6 +964,11 @@ private fun SettingsScreen(controller: DesktopApplication) {
     var idea by remember(controller.config.ideaExecutable) { mutableStateOf(controller.config.ideaExecutable.orEmpty()) }
     var webStorm by remember(controller.config.webStormExecutable) { mutableStateOf(controller.config.webStormExecutable.orEmpty()) }
     var terminal by remember(controller.config.terminalExecutable) { mutableStateOf(controller.config.terminalExecutable.orEmpty()) }
+    val meegleProjects = remember(controller.config.meegleProjects) {
+        mutableStateMapOf<Int, MeegleProjectConfig>().apply {
+            controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) }
+        }
+    }
     var newGroup by remember { mutableStateOf(false) }
     var renameGroup by remember { mutableStateOf<GroupConfig?>(null) }
     var agentGroupId by remember(controller.config.groups) { mutableStateOf(controller.config.groups.first().id) }
@@ -1092,11 +1098,52 @@ private fun SettingsScreen(controller: DesktopApplication) {
             }
             item {
             SettingsCard("高级设置", "用于放置不影响日常任务管理的扩展配置。") {
+                Text("飞书需求项目", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "当前没有需要配置的高级选项。",
+                    "保存 project_key 和 simple_name，供后续飞书需求来源使用。当前不会自动拉取需求链接。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                meegleProjects.toSortedMap().forEach { (index, project) ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            project.projectKey,
+                            { value -> meegleProjects[index] = project.copy(projectKey = value) },
+                            Modifier.weight(1f),
+                            label = { Text("project_key") },
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            project.simpleName,
+                            { value -> meegleProjects[index] = project.copy(simpleName = value) },
+                            Modifier.weight(1f),
+                            label = { Text("simple_name") },
+                            singleLine = true,
+                        )
+                        IconButton(onClick = { meegleProjects.remove(index) }) {
+                            Icon(Icons.Outlined.Delete, "删除项目")
+                        }
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        val index = (meegleProjects.keys.maxOrNull() ?: -1) + 1
+                        meegleProjects[index] = MeegleProjectConfig("project_key", "simple_name")
+                    },
+                ) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("添加项目")
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(onClick = { controller.updateMeegleProjects(meegleProjects.toSortedMap().values.toList()) }) {
+                        Text("保存飞书需求配置")
+                    }
+                }
             }
             }
         }
