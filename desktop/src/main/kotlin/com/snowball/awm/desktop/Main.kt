@@ -1324,7 +1324,7 @@ private fun CreateTaskDialog(
                 }
                 Row(Modifier.weight(1f).padding(20.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Surface(
-                        Modifier.weight(1f).fillMaxHeight(),
+                        Modifier.weight(0.4f).fillMaxHeight(),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
                         shape = RoundedCornerShape(15.dp),
                     ) {
@@ -1451,7 +1451,7 @@ private fun CreateTaskDialog(
                         }
                     }
                     }
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Column(Modifier.weight(0.6f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             FilterChip(rightTab == "notes", { rightTab = "notes" }, label = { Text("任务人工说明") })
                             Spacer(Modifier.width(8.dp))
