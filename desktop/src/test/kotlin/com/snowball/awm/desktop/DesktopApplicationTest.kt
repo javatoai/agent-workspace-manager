@@ -18,7 +18,8 @@ import com.snowball.awm.core.TaskWorkspaceToolAvailability
 import com.snowball.awm.core.TaskWorkspaceToolDescriptor
 import com.snowball.awm.core.TaskWorkspaceToolLauncher
 import com.snowball.awm.core.TaskWorkspaceToolRegistry
-import com.snowball.awm.core.WorkspaceStatus
+import com.snowball.awm.core.WorkspaceHealth
+import com.snowball.awm.core.TaskLifecycleStatus
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.Dispatchers
@@ -237,7 +238,7 @@ class DesktopApplicationTest {
         featureBranch = "feature/$name",
         createdAt = updatedAt,
         updatedAt = updatedAt,
-        status = WorkspaceStatus.READY,
+        lifecycleStatus = TaskLifecycleStatus.ACTIVE,
         services = emptyList(),
     )
 

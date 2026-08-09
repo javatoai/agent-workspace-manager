@@ -28,7 +28,7 @@ class TagHistoryQueryServiceTest {
         featureBranch = "feature/$name",
         createdAt = "2026-08-08 08:00:00",
         updatedAt = "2026-08-08 08:00:00",
-        status = WorkspaceStatus.READY,
+        lifecycleStatus = TaskLifecycleStatus.ACTIVE,
         services = emptyList(),
     )
 

@@ -44,7 +44,7 @@ class TagBuildServiceIntegrationTest {
                 requirementLink = "https://example.com/req",
                 createdAt = now,
                 updatedAt = now,
-                status = WorkspaceStatus.READY,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = listOf(
                     ServiceWorkspace(
                         repositoryId = repositoryInfo.id,
@@ -53,7 +53,7 @@ class TagBuildServiceIntegrationTest {
                         worktreePath = featureWorktree.toString(),
                         ideType = IdeType.IDEA,
                         branch = "feature/TAG-1",
-                        status = WorkspaceStatus.READY,
+                        health = WorkspaceHealth.READY,
                         groupServiceId = "operation-center",
                     ),
                 ),
@@ -140,7 +140,7 @@ Builder: ${System.getProperty("user.name")}
                 featureBranch = "feature/TAG-PARTIAL",
                 createdAt = now,
                 updatedAt = now,
-                status = WorkspaceStatus.READY,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = listOf(
                     ServiceWorkspace(
                         repositoryId = repositoryInfo.id,
@@ -149,7 +149,7 @@ Builder: ${System.getProperty("user.name")}
                         worktreePath = featureWorktree.toString(),
                         ideType = IdeType.IDEA,
                         branch = "feature/TAG-PARTIAL",
-                        status = WorkspaceStatus.READY,
+                        health = WorkspaceHealth.READY,
                         groupServiceId = "operation-center",
                     ),
                 ),

@@ -123,14 +123,14 @@ class GitWorkspaceLifecycle(
                     WorkspaceStrategy.STANDARD_WORKTREE -> {
                         val repository = validateConfiguredRepository(config, workspace)
                         git.addExistingWorktree(repository, target, workspace.branch)
-                        restoredByPath[target.toString()] = workspace.copy(status = WorkspaceStatus.READY, warnings = emptyList())
+                        restoredByPath[target.toString()] = workspace.copy(health = WorkspaceHealth.READY, warnings = emptyList())
                         val service = config.group(manifest.groupId).services.firstOrNull { it.id == workspace.groupServiceId }
                         val initialized = service?.let { bootstrap.initialize(repository, target, it.bootstrap) }
                         workspace.copy(
-                            status = if (initialized == null || initialized.succeeded) {
-                                WorkspaceStatus.READY
+                            health = if (initialized == null || initialized.succeeded) {
+                                WorkspaceHealth.READY
                             } else {
-                                WorkspaceStatus.READY_WITH_WARNINGS
+                                WorkspaceHealth.READY_WITH_WARNINGS
                             },
                             warnings = initialized?.warnings.orEmpty(),
                         )
@@ -143,7 +143,7 @@ class GitWorkspaceLifecycle(
                             if (target.exists()) deleteRecursively(target)
                             throw error
                         }
-                        workspace.copy(status = WorkspaceStatus.READY, warnings = emptyList())
+                        workspace.copy(health = WorkspaceHealth.READY, warnings = emptyList())
                     }
                 }
                 restoredByPath[target.toString()] = restored
@@ -164,7 +164,7 @@ class GitWorkspaceLifecycle(
         }
         return manifest.services.map { workspace ->
             val restored = restoredByPath.getValue(Path.of(workspace.worktreePath).toAbsolutePath().normalize().toString())
-            workspace.copy(status = restored.status, warnings = restored.warnings)
+            workspace.copy(health = restored.health, warnings = restored.warnings)
         }
     }
 

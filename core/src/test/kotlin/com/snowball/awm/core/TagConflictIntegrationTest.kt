@@ -48,7 +48,7 @@ class TagConflictIntegrationTest {
                 featureBranch = "feature/CONFLICT-1",
                 createdAt = now,
                 updatedAt = now,
-                status = WorkspaceStatus.READY,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = listOf(
                     ServiceWorkspace(
                         repositoryId = repositoryInfo.id,
@@ -57,7 +57,7 @@ class TagConflictIntegrationTest {
                         worktreePath = featureWorktree.toString(),
                         ideType = IdeType.IDEA,
                         branch = "feature/CONFLICT-1",
-                        status = WorkspaceStatus.READY,
+                        health = WorkspaceHealth.READY,
                         groupServiceId = "conflict-service",
                     ),
                 ),

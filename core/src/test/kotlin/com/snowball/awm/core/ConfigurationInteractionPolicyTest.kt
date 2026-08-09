@@ -47,7 +47,7 @@ class ConfigurationInteractionPolicyTest {
     }
 
     @Test
-    fun `schema 0 4 0 round trip persists module UAT references`() {
+    fun `schema 0 5 0 round trip persists module UAT references`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         val store = ConfigStore(paths)
         val repository = RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git", "https://example.test/repo.git")
@@ -61,11 +61,11 @@ class ConfigurationInteractionPolicyTest {
 
         store.save(expected)
 
-        assertEquals("0.4.2", expected.schemaVersion)
+        assertEquals("0.5.0", expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
         assertTrue("\"uatRef\"" in json)
-        assertTrue("\"schemaVersion\": \"0.4.2\"" in json)
+        assertTrue("\"schemaVersion\": \"0.5.0\"" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
     }

@@ -13,7 +13,7 @@ class TaskBranchInfoFormatterTest {
             requirementLink = "https://project.feishu.cn/obt/userstory/detail/7060612727",
             createdAt = "2026-08-05T00:00:00Z",
             updatedAt = "2026-08-05T00:00:00Z",
-            status = WorkspaceStatus.READY,
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = listOf(
                 workspace("api-service", "feature/api"),
                 workspace("job-manager", "feature/job"),
@@ -37,7 +37,7 @@ job-manager：feature/job""",
             featureBranch = "feature/task",
             createdAt = "2026-08-05T00:00:00Z",
             updatedAt = "2026-08-05T00:00:00Z",
-            status = WorkspaceStatus.READY,
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = listOf(workspace("api-service", "feature/task")),
         )
 
@@ -51,6 +51,6 @@ job-manager：feature/job""",
         worktreePath = "D:/task/$name",
         ideType = IdeType.IDEA,
         branch = branch,
-        status = WorkspaceStatus.READY,
+        health = WorkspaceHealth.READY,
     )
 }

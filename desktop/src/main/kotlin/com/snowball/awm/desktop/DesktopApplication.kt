@@ -20,10 +20,7 @@ import com.snowball.awm.core.DesktopIntegration
 import com.snowball.awm.core.MeegleRequirementMetadataProvider
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.MeegleRequirementLinkSource
-import com.snowball.awm.core.RequirementLinkCandidate
-import com.snowball.awm.core.RequirementLinkFailure
 import com.snowball.awm.core.RequirementLinkFailureLog
-import com.snowball.awm.core.FeishuWorkItemLink
 import com.snowball.awm.core.GitRepositoryInspector
 import com.snowball.awm.core.GroupConfigurationService
 import com.snowball.awm.core.GroupServiceConfig
@@ -37,8 +34,7 @@ import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RemoteBranchRef
 import com.snowball.awm.core.ModuleDisplayNaming
 import com.snowball.awm.core.RequirementMetadataProvider
-import com.snowball.awm.core.fetch
-import com.snowball.awm.core.RequirementParticipants
+import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
 import com.snowball.awm.core.UatTagDeliveryAdapter
@@ -58,11 +54,10 @@ import com.snowball.awm.core.TaskWorkspaceToolDescriptor
 import com.snowball.awm.core.TaskWorkspaceToolRegistry
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.TagNavigationPolicy
-import com.snowball.awm.core.WorkspaceStatus
+import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.WorkspaceLayout
 import com.snowball.awm.core.WorkspaceToolLaunchService
-import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.WorkspaceGitHealth
 import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitStatusService
@@ -73,13 +68,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
@@ -176,10 +167,62 @@ class DesktopApplication(
     val operationCoordinator = OperationCoordinator(
         initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: initialTasks.warning,
     )
-    val taskController = TaskController(this)
-    val settingsController = SettingsController(this)
-    val agentInstructionsController = AgentInstructionsController(this)
-    val deliveryController = DeliveryController(this)
+    private val requirementMetadataCoordinator = RequirementMetadataCoordinator(
+        provider = requirementMetadataProvider,
+        scope = scope,
+        ioDispatcher = ioDispatcher,
+    )
+    val requirementController = RequirementController(
+        session = sessionStore,
+        scope = scope,
+        coordinator = requirementMetadataCoordinator,
+        linkSource = requirementLinkSource,
+        failureLog = requirementLinkFailures,
+        ioDispatcher = ioDispatcher,
+    )
+    val desktopActions = DesktopActions(
+        integration = desktopIntegration,
+        config = { config },
+        onSettingsRequired = { navigation = NavigationItem.SETTINGS },
+        onStatus = ::showStatus,
+        onError = ::showError,
+    )
+    val taskController by lazy {
+        TaskController(
+            stateProvider = { TaskUiState(config, tasks, selectedTask, workspaceGitHealth, busy) },
+            selectAction = ::selectTask,
+            refreshAction = ::refresh,
+            createAction = { name, branch, group, services, link, notes, tools ->
+                createTask(name, branch, group, services, link, notes, tools)
+            },
+            archiveAction = { archiveTask(it) },
+            restoreAction = ::restoreTask,
+            deleteAction = ::deleteTask,
+            addServicesAction = { task, services -> addServices(task, services) },
+            retryAction = ::retryFailedServices,
+        )
+    }
+    val settingsController by lazy {
+        SettingsController(
+            stateProvider = { SettingsUiState(config, remoteBranches, repositoryAddResult, pathPickerBusy) },
+            updateServiceAction = ::updateService,
+            addRepositoriesAction = ::addRepositories,
+        )
+    }
+    val agentInstructionsController by lazy {
+        AgentInstructionsController(
+            stateProvider = { AgentInstructionsUiState(agentRevision, agentConflict != null) },
+            resolveAction = ::resolveAgentConflict,
+            focusAction = ::onWindowFocused,
+        )
+    }
+    val deliveryController by lazy {
+        DeliveryController(
+            stateProvider = { DeliveryUiState(tagResult, batchTagResults, tagHistory) },
+            buildAction = ::buildTag,
+            buildBatchAction = ::buildTags,
+        )
+    }
 
     var config: AppConfig
         get() = sessionStore.config
@@ -192,10 +235,9 @@ class DesktopApplication(
     var navigation: NavigationItem
         get() = sessionStore.navigation
         set(value) {
-            val changed = sessionStore.navigation != value
             sessionStore.navigation = value
-            if (changed && value in setOf(NavigationItem.TASKS, NavigationItem.ARCHIVED)) {
-                refreshRequirementStatuses()
+            if (value in setOf(NavigationItem.TASKS, NavigationItem.ARCHIVED)) {
+                requirementController.refreshAll()
             }
         }
     var selectedTask: TaskManifest?
@@ -205,10 +247,6 @@ class DesktopApplication(
     val activeOperation: String? get() = operationCoordinator.activeMessage
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
-    var requirementStatuses by mutableStateOf<Map<String, String>>(emptyMap())
-        private set
-    var requirementParticipants by mutableStateOf<Map<String, RequirementParticipants>>(emptyMap())
-        private set
     var tagResult by mutableStateOf<TagOperation?>(null)
         private set
     var batchTagResults by mutableStateOf<List<TagOperation>?>(null)
@@ -230,12 +268,6 @@ class DesktopApplication(
     var workspaceGitHealth by mutableStateOf<Map<String, WorkspaceGitHealth>>(emptyMap())
         private set
     private var gitStatusRevision = 0L
-    private var metadataJob: Job? = null
-    private var metadataRequestRevision = 0L
-    var requirementLinkCandidates by mutableStateOf<List<RequirementLinkCandidate>>(emptyList())
-        private set
-    var requirementLinksLoading by mutableStateOf(false)
-        private set
 
     val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
     val showsUatNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
@@ -271,22 +303,7 @@ class DesktopApplication(
         workspaceGitHealth[normalizedWorkspacePath(workspace)]
 
     fun requestRequirementMetadata(link: String, onResult: (RequirementMetadata?) -> Unit) {
-        val revision = ++metadataRequestRevision
-        metadataJob?.cancel()
-        val workItem = FeishuWorkItemLink.parse(link)
-        if (workItem == null) {
-            // Plain-text references are allowed. Clear the UI state immediately
-            // because no local CLI lookup will run for them.
-            onResult(null)
-            return
-        }
-        metadataJob = scope.launch {
-            delay(250)
-            val metadata = withContext(ioDispatcher) {
-                runCatching { requirementMetadataProvider.fetch(link, configuredProjectKey(workItem)) }.getOrNull()
-            }
-            if (revision == metadataRequestRevision) onResult(metadata)
-        }
+        requirementController.requestDraftMetadata(link, onResult)
     }
 
     /** Saves the configured Feishu project identities without enabling any automatic query. */
@@ -298,32 +315,6 @@ class DesktopApplication(
         }
     }
 
-    /**
-     * Loads configured Feishu links once per create-task dialog.  The project
-     * list is the explicit opt-in, so no separate on/off switch is needed.
-     */
-    fun loadAutoRequirementLinks() {
-        if (config.meegleProjects.isEmpty() || requirementLinksLoading) return
-        requirementLinksLoading = true
-        scope.launch {
-            try {
-                val result = withContext(ioDispatcher) { requirementLinkSource.load(config.meegleProjects) }
-                result.failures.forEach(requirementLinkFailures::record)
-                requirementLinkCandidates = result.candidates
-            } catch (error: Exception) {
-                // Loading failures must not leave the create dialog permanently busy.
-                // Details stay in the local diagnostic log rather than surfacing raw CLI output.
-                requirementLinkFailures.record(
-                    RequirementLinkFailure(
-                        stage = "desktop-load",
-                        message = error.message ?: error::class.simpleName.orEmpty(),
-                    ),
-                )
-            } finally {
-                requirementLinksLoading = false
-            }
-        }
-    }
 
     fun refreshCurrentTaskGitStatus() {
         val task = selectedTask ?: run {
@@ -349,7 +340,7 @@ class DesktopApplication(
 
     fun canBuildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
         val group = config.groups.firstOrNull { it.id == task.groupId } ?: return false
-        if (!group.uatTagEnabled || workspace.status == WorkspaceStatus.FAILED) {
+        if (!group.uatTagEnabled || workspace.health == WorkspaceHealth.FAILED) {
             return false
         }
         val service = group.services.firstOrNull { it.id == workspace.groupServiceId } ?: return false
@@ -401,14 +392,14 @@ class DesktopApplication(
         refreshedConfig to refreshedTasks
     }, onSuccess = { (refreshedConfig, refreshedTasks) ->
         applySnapshot(refreshedConfig, refreshedTasks.manifests)
-        refreshRequirementStatuses()
+        requirementController.refreshAll(force = true)
         refreshedTasks.warning?.let { showError(IllegalStateException(it)) }
     })
 
     fun selectTask(task: TaskManifest) {
         selectedTask = task
         refreshCurrentTaskGitStatus()
-        refreshRequirementStatus(task)
+        requirementController.refresh(task)
     }
 
     fun setTheme(theme: ThemePreference) = mutateConfig("正在更新主题…", "主题已更新") { it.copy(theme = theme) }
@@ -649,7 +640,6 @@ class DesktopApplication(
             requirementLink = requirementLink.trim(),
             createdAt = now,
             updatedAt = now,
-            status = WorkspaceStatus.CREATING,
             services = previewWorkspaces,
             groupId = groupId,
         )
@@ -806,36 +796,21 @@ class DesktopApplication(
 
     fun clearTagResult() { tagResult = null }
 
-    fun openWorkspace(workspace: ServiceWorkspace) {
-        val executable = when (workspace.ideType) {
-            IdeType.IDEA -> config.ideaExecutable
-            IdeType.WEBSTORM -> config.webStormExecutable
-        }
-        if (executable.isNullOrBlank()) {
-            navigation = NavigationItem.SETTINGS
-            showError(IllegalStateException("请先在设置中配置 IDE 可执行文件"))
-            return
-        }
-        runCatching { desktopIntegration.openIde(Path.of(workspace.worktreePath), executable) }.onFailure(::showError)
-    }
+    fun openWorkspace(workspace: ServiceWorkspace) = desktopActions.openWorkspace(workspace)
 
-    fun reveal(path: String) = runCatching { desktopIntegration.reveal(Path.of(path)) }.onFailure(::showError)
-    fun openDirectory(path: String) = runCatching { desktopIntegration.openDirectory(Path.of(path)) }.onFailure(::showError)
+    fun reveal(path: String) = desktopActions.reveal(Path.of(path))
+    fun openDirectory(path: String) = desktopActions.openDirectory(Path.of(path))
 
     fun revealGlobalAgents() = runCatching {
-        desktopIntegration.reveal(agentDocuments.ensureGlobalFile())
+        desktopActions.reveal(agentDocuments.ensureGlobalFile()).getOrThrow()
     }.onFailure(::showError)
 
     fun revealGroupAgents(groupId: String) = runCatching {
-        desktopIntegration.reveal(agentDocuments.ensureGroupFile(groupId))
+        desktopActions.reveal(agentDocuments.ensureGroupFile(groupId)).getOrThrow()
     }.onFailure(::showError)
-    fun terminal(path: String) = runCatching {
-        desktopIntegration.openTerminal(Path.of(path), config.terminalExecutable)
-    }.onFailure(::showError)
-    fun openUrl(url: String) = runCatching { desktopIntegration.openUrl(url) }.onFailure(::showError)
-    fun copyText(text: String, message: String = "已复制") = runCatching {
-        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
-    }.onSuccess { showStatus(message) }.onFailure(::showError)
+    fun terminal(path: String) = desktopActions.terminal(Path.of(path))
+    fun openUrl(url: String) = desktopActions.openUrl(url)
+    fun copyText(text: String, message: String = "已复制") = desktopActions.copy(text, message)
 
     /** Called from Window.onFocusEvent as the inexpensive external-file fallback. */
     fun onWindowFocused() {
@@ -869,41 +844,6 @@ class DesktopApplication(
         })
     }
 
-    fun refreshRequirementStatuses() {
-        tasks.mapNotNull { task -> FeishuWorkItemLink.parse(task.requirementLink)?.let { task to it } }.forEach { (task, workItem) ->
-            scope.launch {
-                val info = withContext(ioDispatcher) {
-                    runCatching { requirementMetadataProvider.fetch(task.requirementLink, configuredProjectKey(workItem)) }.getOrNull()
-                }
-                if (tasks.none { it.folderName == task.folderName }) return@launch
-                val status = info?.status
-                requirementStatuses = if (status == null) {
-                    requirementStatuses - task.folderName
-                } else requirementStatuses + (task.folderName to status)
-                requirementParticipants = if (info == null || info.participants.isEmpty) {
-                    requirementParticipants - task.folderName
-                } else requirementParticipants + (task.folderName to info.participants)
-            }
-        }
-    }
-
-    private fun refreshRequirementStatus(task: TaskManifest) {
-        val workItem = FeishuWorkItemLink.parse(task.requirementLink) ?: return
-        scope.launch {
-            val info = withContext(ioDispatcher) { runCatching { requirementMetadataProvider.fetch(task.requirementLink, configuredProjectKey(workItem)) }.getOrNull() }
-            if (tasks.none { it.folderName == task.folderName }) return@launch
-            requirementParticipants = if (info == null || info.participants.isEmpty) requirementParticipants - task.folderName else requirementParticipants + (task.folderName to info.participants)
-            val status = info?.status
-            requirementStatuses = if (status == null) requirementStatuses - task.folderName else requirementStatuses + (task.folderName to status)
-        }
-    }
-
-    /** Resolves a configured Meegle project key for arbitrary user-defined Feishu space names. */
-    private fun configuredProjectKey(workItem: FeishuWorkItemLink): String? =
-        config.meegleProjects.firstOrNull { project -> project.simpleName.equals(workItem.space, ignoreCase = true) }
-            ?.projectKey
-            ?: workItem.projectKey
-
     fun dismissMessages() {
         operationCoordinator.dismiss()
     }
@@ -913,7 +853,7 @@ class DesktopApplication(
     }
 
     override fun close() {
-        metadataJob?.cancel()
+        requirementController.close()
         agentMonitor.close()
         scope.cancel()
     }
@@ -1029,6 +969,7 @@ class DesktopApplication(
         selectedTask = preferredFolder?.let { folder -> loaded.manifests.firstOrNull { it.folderName == folder } }
             ?: loaded.manifests.firstOrNull()
         reloadTagHistory()
+        requirementController.reconcileTasks()
         refreshCurrentTaskGitStatus()
         loaded.warning?.let { showError(IllegalStateException(it)) }
     }
@@ -1044,16 +985,19 @@ class DesktopApplication(
         selectedTask = selectedFolder?.let { folder -> tasks.firstOrNull { it.folderName == folder } }
             ?: tasks.firstOrNull()
         reloadTagHistory()
+        requirementController.reconcileTasks()
         refreshCurrentTaskGitStatus()
     }
 
     private fun applyConfig(updated: AppConfig) {
+        val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects
         config = updated
         configurationLoadError = null
         if (navigation == NavigationItem.UAT && !TagNavigationPolicy.isVisible(updated)) {
             navigation = NavigationItem.TASKS
         }
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
+        if (requirementConfigurationChanged) requirementController.onConfigurationChanged()
         updated.groups.forEach { group ->
             runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
         }

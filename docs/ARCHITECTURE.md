@@ -2,7 +2,7 @@
 
 ## 模块和分层
 
-0.4.2 只保留两个 Gradle 模块：
+0.5.0 只保留两个 Gradle 模块：
 
 ```text
 core      领域模型、应用编排、Git/JSON/文件系统基础设施
@@ -22,6 +22,8 @@ Desktop -> Application -> Domain
 - **Application**：通过用例服务编排配置、任务、刷新、工作区创建和 Agent 文档，不包含 Compose 控件。
 - **Infrastructure**：实现 Git、JSON、原子文件写入、WatchService 和外部系统适配器。
 - **Desktop**：`Main` 负责窗口、主题、导航和装配；`AppSessionStore`、`OperationCoordinator` 以及任务、设置、Agent、交付控制器维护展示状态和回调，不直接执行 Git 命令、解析 JSON 或拼接 AGENTS.md。
+
+0.5.0 将任务生命周期与工作区健康拆为两个正交模型。`TaskLifecycleStatus` 只决定活跃/归档导航；`WorkspaceHealth` 只决定创建、重试、Git、IDE 和交付能力。任务健康由工作区动态聚合，不写入 JSON。桌面层的 `RequirementController` 负责 Meegle 请求去重、缓存、并发限制和过期回写保护，`DesktopActions` 是剪贴板与操作系统动作的唯一边界。
 
 配置、任务、Git、工作区创建、Agent 文档和飞书集成都通过小接口及构造函数注入。标准 Worktree 与独立克隆是两个 `WorkspaceProvisioner` 策略，控制器只选择策略并展示结果。
 

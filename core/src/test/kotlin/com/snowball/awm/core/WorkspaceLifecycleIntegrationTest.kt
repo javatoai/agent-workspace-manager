@@ -48,12 +48,13 @@ class WorkspaceLifecycleIntegrationTest {
 
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val archived = application.archive(config, taskDirectory)
-        assertEquals(WorkspaceStatus.ARCHIVED, archived.status)
+        assertEquals(TaskLifecycleStatus.ARCHIVED, archived.lifecycleStatus)
         assertTrue(Files.exists(Path.of(created.services.first().worktreePath)))
         assertEquals(2, GitClient().worktrees(repositoryPath).size)
 
         val restored = application.restore(config, taskDirectory)
-        assertTrue(restored.services.all { it.status == WorkspaceStatus.READY })
+        assertEquals(TaskLifecycleStatus.ACTIVE, restored.lifecycleStatus)
+        assertTrue(restored.services.all { it.health == WorkspaceHealth.READY })
         assertEquals(2, GitClient().worktrees(repositoryPath).size)
 
         application.delete(config, taskDirectory)

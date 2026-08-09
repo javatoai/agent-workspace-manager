@@ -61,7 +61,7 @@ private fun workspace(repositoryId: String, serviceId: String, moduleId: String)
     worktreePath = "C:/task/repo",
     ideType = IdeType.IDEA,
     branch = "feature/x",
-    status = WorkspaceStatus.READY,
+    health = WorkspaceHealth.READY,
     groupServiceId = serviceId,
     moduleId = moduleId,
 )
@@ -80,7 +80,7 @@ private fun manifest(workspace: ServiceWorkspace) = TaskManifest(
     featureBranch = "feature/x",
     createdAt = "2026-08-08T00:00:00Z",
     updatedAt = "2026-08-08T00:00:00Z",
-    status = WorkspaceStatus.READY,
+    lifecycleStatus = TaskLifecycleStatus.ACTIVE,
     services = listOf(workspace),
     groupId = "g",
 )

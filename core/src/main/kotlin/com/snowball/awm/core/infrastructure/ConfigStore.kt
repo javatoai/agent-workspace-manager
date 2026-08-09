@@ -18,7 +18,7 @@ class UnsupportedConfigVersionException(
         "当前版本为 $CURRENT_APP_CONFIG_SCHEMA_VERSION。AWM 不读取或改写旧产品数据。",
 )
 
-/** Strict version-6 configuration repository backed by an atomic JSON file. */
+/** Strict release-versioned configuration repository backed by an atomic JSON file. */
 interface ConfigurationRepository {
     fun load(): AppConfig
     fun save(config: AppConfig)

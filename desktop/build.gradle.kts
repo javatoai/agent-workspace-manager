@@ -1,6 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
-val macPackageVersion = providers.gradleProperty("macPackageVersion").orElse("0.4.2")
+val macPackageVersion = providers.gradleProperty("macPackageVersion").orElse("0.5.0")
 
 plugins {
     kotlin("jvm")
@@ -45,7 +45,7 @@ compose.desktop {
             packageName = "Agent Workspace Manager"
             // macOS jpackage rejects versions whose first component is zero.
             // CI overrides this with a compatible internal app version while the
-            // project and release version remain 0.4.2.
+            // project and release version remain 0.5.0.
             packageVersion = macPackageVersion.get()
             description = "Task-level Agent development workspace orchestrator"
             vendor = "Snowball Technology"

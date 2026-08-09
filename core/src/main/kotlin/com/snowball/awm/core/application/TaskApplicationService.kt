@@ -118,7 +118,7 @@ class TaskApplicationService(
                 requirementLink = request.requirementLink.trim(),
                 createdAt = now,
                 updatedAt = now,
-                status = aggregateStatus(workspaces),
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = workspaces,
                 groupId = group.id,
             )
@@ -140,7 +140,7 @@ class TaskApplicationService(
                     featureBranch = featureBranch,
                     createdAt = AwmTime.format(Instant.now(clock)),
                     updatedAt = AwmTime.format(Instant.now(clock)),
-                    status = WorkspaceStatus.FAILED,
+                    lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                     services = workspaces,
                     groupId = group.id,
                 )
@@ -196,7 +196,6 @@ class TaskApplicationService(
             val added = created.flatMap { it.second }
             val updated = manifest.copy(
                 updatedAt = AwmTime.format(Instant.now(clock)),
-                status = if (manifest.status == WorkspaceStatus.ARCHIVED) WorkspaceStatus.ARCHIVED else aggregateStatus(manifest.services + added),
                 services = manifest.services + added,
             )
             manifests.save(taskDirectory, updated)
@@ -241,7 +240,7 @@ class TaskApplicationService(
     ): TaskManifest = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
         val failedIds = manifest.services
-            .filter { it.status == WorkspaceStatus.FAILED }
+            .filter { it.health == WorkspaceHealth.FAILED }
             .map(ServiceWorkspace::groupServiceId)
             .filter(String::isNotBlank)
             .toSet()
@@ -269,7 +268,6 @@ class TaskApplicationService(
             val retained = manifest.services.filterNot { it.groupServiceId in selected }
             val updated = manifest.copy(
                 updatedAt = AwmTime.format(Instant.now(clock)),
-                status = if (manifest.status == WorkspaceStatus.ARCHIVED) WorkspaceStatus.ARCHIVED else aggregateStatus(retained + replacements),
                 services = retained + replacements,
             )
             manifests.save(taskDirectory, updated)
@@ -323,12 +321,12 @@ class TaskApplicationService(
     fun archive(config: AppConfig, taskDirectory: Path, force: Boolean = false): TaskManifest =
         operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
-        require(manifest.status != WorkspaceStatus.ARCHIVED) { "任务已经归档" }
+        require(manifest.lifecycleStatus != TaskLifecycleStatus.ARCHIVED) { "任务已经归档" }
         // Archive is a navigation classification only. Workspaces remain intact
         // so an archived task can still be opened and resumed without Git work.
         val updated = manifest.copy(
             updatedAt = AwmTime.format(Instant.now(clock)),
-            status = WorkspaceStatus.ARCHIVED,
+            lifecycleStatus = TaskLifecycleStatus.ARCHIVED,
             services = manifest.services,
         )
         try {
@@ -342,10 +340,10 @@ class TaskApplicationService(
 
     fun restore(config: AppConfig, taskDirectory: Path): TaskManifest = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
-        require(manifest.status == WorkspaceStatus.ARCHIVED) { "只有已归档任务可以恢复" }
+        require(manifest.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) { "只有已归档任务可以恢复" }
         val updated = manifest.copy(
             updatedAt = AwmTime.format(Instant.now(clock)),
-            status = aggregateStatus(manifest.services),
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = manifest.services,
         )
         try {
@@ -367,12 +365,6 @@ class TaskApplicationService(
         if (risks.isNotEmpty() && !forceDiscard) error("存在未提交改动，请确认强制丢弃后再删除")
         lifecycle.removeAll(config, taskDirectory, manifest, forceDiscard)
         deleteRecursively(taskDirectory)
-    }
-
-    private fun aggregateStatus(workspaces: List<ServiceWorkspace>): WorkspaceStatus = when {
-        workspaces.any { it.status == WorkspaceStatus.FAILED } -> WorkspaceStatus.FAILED
-        workspaces.any { it.status == WorkspaceStatus.READY_WITH_WARNINGS } -> WorkspaceStatus.READY_WITH_WARNINGS
-        else -> WorkspaceStatus.READY
     }
 
     private fun compensationFailure(message: String, primary: Throwable, compensation: Throwable): Throwable =

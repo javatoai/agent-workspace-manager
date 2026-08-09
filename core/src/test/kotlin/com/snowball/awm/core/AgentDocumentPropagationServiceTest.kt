@@ -20,7 +20,7 @@ class AgentDocumentPropagationServiceTest {
                     featureBranch = "feature/$name",
                     createdAt = "2026-08-08T00:00:00Z",
                     updatedAt = "2026-08-08T00:00:00Z",
-                    status = WorkspaceStatus.READY,
+                    lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                     services = emptyList(),
                     groupId = group,
                 ),
@@ -51,7 +51,7 @@ class AgentDocumentPropagationServiceTest {
                 featureBranch = "feature/task",
                 createdAt = "2026-08-08T00:00:00Z",
                 updatedAt = "2026-08-08T00:00:00Z",
-                status = WorkspaceStatus.READY,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = emptyList(),
             ),
         )

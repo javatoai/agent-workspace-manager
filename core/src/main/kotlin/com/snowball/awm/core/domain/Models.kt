@@ -4,8 +4,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.4.2"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.4.2"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.5.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.5.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -201,7 +201,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.4.2 is intentionally strict and contains no compatibility-only fields. */
+/** Version 0.5.0 is intentionally strict and contains no compatibility-only fields. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -285,12 +285,17 @@ fun RepositoryConfig.toInfo(): RepositoryInfo = RepositoryInfo(
 )
 
 @Serializable
-enum class WorkspaceStatus {
+enum class TaskLifecycleStatus {
+    ACTIVE,
+    ARCHIVED,
+}
+
+@Serializable
+enum class WorkspaceHealth {
     CREATING,
     READY,
     READY_WITH_WARNINGS,
     FAILED,
-    ARCHIVED,
 }
 
 @Serializable
@@ -301,7 +306,7 @@ data class ServiceWorkspace(
     val worktreePath: String,
     val ideType: IdeType,
     val branch: String,
-    val status: WorkspaceStatus = WorkspaceStatus.CREATING,
+    val health: WorkspaceHealth = WorkspaceHealth.CREATING,
     val warnings: List<String> = emptyList(),
     val groupServiceId: String = repositoryId,
     val moduleId: String = "default",
@@ -322,11 +327,22 @@ data class TaskManifest(
     val requirementLink: String = "",
     val createdAt: String,
     val updatedAt: String,
-    val status: WorkspaceStatus,
+    val lifecycleStatus: TaskLifecycleStatus = TaskLifecycleStatus.ACTIVE,
     val services: List<ServiceWorkspace>,
     val groupId: String = DEFAULT_GROUP_ID,
     val workspaceToolLaunches: List<WorkspaceToolLaunch> = emptyList(),
 )
+
+/** Task health is derived from its workspaces and is never persisted independently. */
+val TaskManifest.health: WorkspaceHealth
+    get() = aggregateWorkspaceHealth(services)
+
+fun aggregateWorkspaceHealth(workspaces: List<ServiceWorkspace>): WorkspaceHealth = when {
+    workspaces.any { it.health == WorkspaceHealth.FAILED } -> WorkspaceHealth.FAILED
+    workspaces.any { it.health == WorkspaceHealth.CREATING } -> WorkspaceHealth.CREATING
+    workspaces.any { it.health == WorkspaceHealth.READY_WITH_WARNINGS } -> WorkspaceHealth.READY_WITH_WARNINGS
+    else -> WorkspaceHealth.READY
+}
 
 @Serializable
 enum class WorkspaceToolLaunchStatus {

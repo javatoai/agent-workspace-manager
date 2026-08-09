@@ -12,7 +12,7 @@ class ManifestStoreTest {
     lateinit var temporary: Path
 
     @Test
-    fun `schema five round trip preserves workspace tool launch results`() {
+    fun `schema 0 5 0 round trip preserves workspace tool launch results`() {
         val directory = temporary.resolve("tool-launch")
         val store = ManifestStore()
         val expected = TaskManifest(
@@ -21,7 +21,7 @@ class ManifestStoreTest {
             featureBranch = "feature/tool-launch",
             createdAt = "2026-08-08 12:00:00",
             updatedAt = "2026-08-08 12:00:01",
-            status = WorkspaceStatus.READY,
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = emptyList(),
             workspaceToolLaunches = listOf(
                 WorkspaceToolLaunch(
@@ -40,7 +40,7 @@ class ManifestStoreTest {
 
         store.save(directory, expected)
 
-        assertEquals("0.4.2", store.load(directory).schemaVersion)
+        assertEquals("0.5.0", store.load(directory).schemaVersion)
         assertEquals(expected, store.load(directory))
     }
 
@@ -62,17 +62,31 @@ class ManifestStoreTest {
     }
 
     @Test
+    fun `0 4 manifest is rejected byte for byte without migration`() {
+        val taskDirectory = temporary.resolve("legacy-0-4")
+        Files.createDirectories(taskDirectory)
+        val legacy = """{"schemaVersion":"0.4.2","folderName":"legacy","status":"READY"}"""
+        val target = taskDirectory.resolve(ManifestStore.FILE_NAME)
+        Files.writeString(target, legacy)
+
+        val store = ManifestStore()
+        assertThrows(IllegalArgumentException::class.java) { store.load(taskDirectory) }
+        assertEquals(legacy, Files.readString(target))
+        assertEquals(listOf(taskDirectory), store.scan(temporary).unsupportedDirectories)
+    }
+
+    @Test
     fun `manifest from another patch release is compatible`() {
         val taskDirectory = temporary.resolve("compatible-patch")
         Files.createDirectories(taskDirectory)
         Files.writeString(
             taskDirectory.resolve(ManifestStore.FILE_NAME),
-            """{"schemaVersion":"0.4.0","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","status":"READY","services":[]}""",
+            """{"schemaVersion":"0.5.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
         )
 
         val store = ManifestStore()
         val manifest = store.load(taskDirectory)
-        assertEquals("0.4.0", manifest.schemaVersion)
+        assertEquals("0.5.7", manifest.schemaVersion)
         store.save(taskDirectory, manifest)
         assertEquals(CURRENT_TASK_MANIFEST_SCHEMA_VERSION, store.load(taskDirectory).schemaVersion)
     }
@@ -98,7 +112,7 @@ class ManifestStoreTest {
                 featureBranch = "feature/valid",
                 createdAt = "2026-08-08T00:00:00Z",
                 updatedAt = "2026-08-08T00:00:00Z",
-                status = WorkspaceStatus.READY,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = emptyList(),
             ),
         )

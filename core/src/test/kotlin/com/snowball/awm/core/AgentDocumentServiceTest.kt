@@ -93,7 +93,7 @@ class AgentDocumentServiceTest {
             worktreePath = "C:/tasks/table/orders",
             ideType = IdeType.IDEA,
             branch = "feature/orders",
-            status = WorkspaceStatus.READY,
+            health = WorkspaceHealth.READY,
             baseRef = "origin/master",
         )
         val rendered = AgentsMdWriter.render(
@@ -121,7 +121,7 @@ class AgentDocumentServiceTest {
         requirementLink = "https://project.feishu.cn/obt/userstory/detail/123",
         createdAt = Instant.EPOCH.toString(),
         updatedAt = Instant.EPOCH.toString(),
-        status = WorkspaceStatus.READY,
+        lifecycleStatus = TaskLifecycleStatus.ACTIVE,
         services = emptyList(),
         groupId = groupId,
     )

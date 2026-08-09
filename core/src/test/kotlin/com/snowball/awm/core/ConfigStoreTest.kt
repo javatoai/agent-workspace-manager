@@ -74,7 +74,7 @@ class ConfigStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
-        assertEquals("0.4.2", store.load().schemaVersion)
+        assertEquals("0.5.0", store.load().schemaVersion)
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
@@ -100,12 +100,12 @@ class ConfigStoreTest {
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.4.0","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"0.5.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.4.0", compatible.schemaVersion)
+        assertEquals("0.5.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)
@@ -115,7 +115,7 @@ class ConfigStoreTest {
     fun `config from another minor release remains rejected`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         Files.createDirectories(paths.home)
-        val incompatible = """{"schemaVersion":"0.5.0","groups":[]}"""
+        val incompatible = """{"schemaVersion":"0.4.2","groups":[]}"""
         Files.writeString(paths.config, incompatible)
 
         assertThrows(UnsupportedConfigVersionException::class.java) { ConfigStore(paths).load() }

@@ -8,10 +8,12 @@ package com.snowball.awm.core
  * deliberate schema boundary and must be rejected rather than guessed at.
  */
 object SchemaVersionCompatibility {
+    private val semanticVersion = Regex("""^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$""")
+
     fun isCompatible(actual: String?, expected: String): Boolean {
-        val actualParts = actual?.split('.')?.mapNotNull(String::toIntOrNull) ?: return false
-        val expectedParts = expected.split('.').mapNotNull(String::toIntOrNull)
-        if (actualParts.size != 3 || expectedParts.size != 3) return false
-        return actualParts[0] == expectedParts[0] && actualParts[1] == expectedParts[1]
+        val actualMatch = actual?.let(semanticVersion::matchEntire) ?: return false
+        val expectedMatch = semanticVersion.matchEntire(expected) ?: return false
+        return actualMatch.groupValues[1] == expectedMatch.groupValues[1] &&
+            actualMatch.groupValues[2] == expectedMatch.groupValues[2]
     }
 }

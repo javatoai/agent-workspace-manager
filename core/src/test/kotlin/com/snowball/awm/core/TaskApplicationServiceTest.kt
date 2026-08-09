@@ -94,7 +94,7 @@ class TaskApplicationServiceTest {
             featureBranch = "feature/task-20",
             createdAt = "2026-08-08 08:00:00",
             updatedAt = "2026-08-08 08:00:00",
-            status = WorkspaceStatus.READY,
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = emptyList(),
             groupId = "alpha",
         )
@@ -135,7 +135,7 @@ class TaskApplicationServiceTest {
             featureBranch = "feature/task-20",
             createdAt = "2026-08-08 08:00:00",
             updatedAt = "2026-08-08 08:00:00",
-            status = WorkspaceStatus.READY,
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = emptyList(),
             groupId = "alpha",
         )
@@ -172,7 +172,7 @@ class TaskApplicationServiceTest {
             featureBranch = "feature/task-20",
             createdAt = "2026-08-08 08:00:00",
             updatedAt = "2026-08-08 08:00:00",
-            status = WorkspaceStatus.READY,
+            lifecycleStatus = TaskLifecycleStatus.ACTIVE,
             services = emptyList(),
             groupId = "alpha",
         )
@@ -243,7 +243,7 @@ class TaskApplicationServiceTest {
                 featureBranch = "feature/x",
                 createdAt = "2026-08-08T00:00:00Z",
                 updatedAt = "2026-08-08T00:00:00Z",
-                status = WorkspaceStatus.READY,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = listOf(
                     ServiceWorkspace(
                         repositoryId = "repo-a",
@@ -271,7 +271,7 @@ class TaskApplicationServiceTest {
         val root = Files.createTempDirectory("task-commit-compensation-")
         val taskDirectory = root.resolve("task")
         Files.createDirectories(taskDirectory)
-        val ready = emptyManifest(WorkspaceStatus.READY)
+        val ready = emptyManifest(TaskLifecycleStatus.ACTIVE)
         val archiveLifecycle = RecordingLifecycle()
         val archiveApp = TaskApplicationService(
             manifests = FailingSaveManifests(ready),
@@ -287,7 +287,7 @@ class TaskApplicationServiceTest {
 
         val restoreLifecycle = RecordingLifecycle()
         val restoreApp = TaskApplicationService(
-            manifests = FailingSaveManifests(emptyManifest(WorkspaceStatus.ARCHIVED)),
+            manifests = FailingSaveManifests(emptyManifest(TaskLifecycleStatus.ARCHIVED)),
             agentDocuments = RecordingAgentDocuments(),
             lifecycle = restoreLifecycle,
             operationLock = NoOpTaskOperationLock,
@@ -298,13 +298,13 @@ class TaskApplicationServiceTest {
     }
 }
 
-private fun emptyManifest(status: WorkspaceStatus) = TaskManifest(
+private fun emptyManifest(status: TaskLifecycleStatus) = TaskManifest(
     folderName = "task",
     taskDirectoryName = "task",
     featureBranch = "feature/task",
     createdAt = "2026-08-08T00:00:00Z",
     updatedAt = "2026-08-08T00:00:00Z",
-    status = status,
+    lifecycleStatus = status,
     services = emptyList(),
 )
 
@@ -380,7 +380,7 @@ private class RecordingProvisioner(
                 worktreePath = request.taskDirectory.resolve(request.service.id).toString(),
                 ideType = request.service.ideType,
                 branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.cloneModules.first().branch.removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
-                status = WorkspaceStatus.READY,
+                health = WorkspaceHealth.READY,
                 groupServiceId = request.service.id,
                 strategy = strategy,
             ),
