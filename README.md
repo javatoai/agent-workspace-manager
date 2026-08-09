@@ -75,7 +75,7 @@ Compose Desktop 原生安装包不能跨平台生成：EXE/MSI 必须在 Windows
 
 ## CI / GitHub Release
 
-推送到 `main`、推送 `v*` 标签，或手动运行 **Release packages** 工作流后，会分别构建 Windows 桌面三件套与 macOS DMG，再上传到 GitHub Release。`main` 使用可覆盖的 `continuous` 预发布，`v*` 标签生成正式 Release。
+推送到 `master`、推送 `v*` 标签，或手动运行 **Release packages** 工作流后，会分别构建 Windows 桌面三件套与 macOS DMG，再上传到 GitHub Release。`master` 使用可覆盖的 `continuous` 预发布，`v*` 标签生成正式 Release。
 
 ## 模块
 
@@ -89,8 +89,14 @@ scripts/   桌面打包脚本
 ## 文档
 
 - [配置与使用](docs/CONFIGURATION.md)
+- [日常使用指南](docs/USER-GUIDE.md)
 - [架构与测试](docs/ARCHITECTURE.md)
 - [安全与 UAT Tag 流程](docs/SAFETY-AND-TAG-FLOW.md)
+- [本地开发指南](docs/DEVELOPMENT.md)
+- [发布指南](docs/RELEASE.md)
+- [版本变更记录](docs/CHANGELOG.md)
+- [产品定位与验证](docs/PRODUCT-FIRST-PRINCIPLES-REVIEW.md)
+- [Worktrunk 功能适配调研](docs/WORKTRUNK-FEATURE-ADAPTATION.md)
 
 ## License
 
