@@ -1090,6 +1090,15 @@ private fun SettingsScreen(controller: DesktopApplication) {
                 }
             }
             }
+            item {
+            SettingsCard("高级设置", "用于放置不影响日常任务管理的扩展配置。") {
+                Text(
+                    "当前没有需要配置的高级选项。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            }
         }
     }
     if (newGroup) NameDialog("创建组", "", onDismiss = { newGroup = false }) {
