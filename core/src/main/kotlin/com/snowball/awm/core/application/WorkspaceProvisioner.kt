@@ -8,7 +8,28 @@ data class WorkspaceProvisionRequest(
     val repository: RepositoryConfig,
     val service: GroupServiceConfig,
     val requestedFeatureBranch: String? = null,
+    /** Explicit acknowledgement for pre-existing local or remote feature branches. */
+    val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
 )
+
+/** Identifies one local Git branch in a configured repository. */
+data class BranchReuseKey(
+    val repositoryId: String,
+    val branch: String,
+)
+
+/** Read-only conflict information shown before a task creates any directories. */
+data class BranchReuseConflict(
+    val key: BranchReuseKey,
+    val serviceId: String,
+    val serviceName: String,
+    val moduleName: String,
+    val localExists: Boolean,
+    val remoteRefs: List<String>,
+    val occupiedWorktreePaths: List<String>,
+) {
+    val requiresForceAttach: Boolean get() = occupiedWorktreePaths.isNotEmpty()
+}
 
 interface WorkspaceProvisioner {
     val strategy: WorkspaceStrategy
@@ -44,6 +65,74 @@ object WorkspaceLayout {
         "${serviceDirectoryBase(service)}-${TaskNaming.directoryName(module.name.ifBlank { RemoteBranchRef.parse(module.branch).branch.substringAfterLast('/') })}"
 }
 
+/**
+ * Refreshes and reports only feature-branch conflicts. It deliberately does
+ * not create task or worktree directories, so the UI can ask for consent
+ * before entering a mutating task operation.
+ */
+class WorkspaceBranchReuseInspector(
+    private val git: GitClient = GitClient(),
+) {
+    fun inspect(
+        repository: RepositoryConfig,
+        service: GroupServiceConfig,
+        requestedFeatureBranch: String,
+    ): List<BranchReuseConflict> {
+        if (service.strategy != WorkspaceStrategy.STANDARD_WORKTREE) return emptyList()
+        val repositoryPath = Path.of(repository.rootPath).toAbsolutePath().normalize()
+        require(git.topLevel(repositoryPath).toAbsolutePath().normalize() == repositoryPath) {
+            "配置的仓库路径已不再是 Git 顶层目录：$repositoryPath"
+        }
+        require(
+            git.commonDirectory(repositoryPath).toAbsolutePath().normalize() ==
+                Path.of(repository.gitCommonDirectory).toAbsolutePath().normalize(),
+        ) { "配置的仓库 Git 身份已变化：$repositoryPath" }
+
+        val branches = TaskBranchNaming.derive(requestedFeatureBranch.trim(), service.modules)
+        return service.modules.groupBy(TaskBranchNaming::baseIdentity).values.mapNotNull { modules ->
+            val representative = modules.first()
+            val branch = branches.getValue(representative.id)
+            git.fetch(repositoryPath, representative.baseRemote)
+            val featureRemotes = modules.map { RemoteBranchRef.parse(it.uatRef).remote }.distinct()
+            featureRemotes.filter { it != representative.baseRemote }.forEach { git.fetch(repositoryPath, it) }
+
+            val localExists = git.refExists(repositoryPath, "refs/heads/$branch")
+            val remoteRefs = featureRemotes
+                .filter { git.refExists(repositoryPath, "refs/remotes/$it/$branch") }
+                .map { "$it/$branch" }
+            if (!localExists && remoteRefs.isEmpty()) return@mapNotNull null
+
+            val occupied = if (localExists) {
+                git.worktrees(repositoryPath)
+                    .filter { it.branch == branch }
+                    .map { it.path.toString() }
+            } else {
+                emptyList()
+            }
+            BranchReuseConflict(
+                key = BranchReuseKey(repository.id, branch),
+                serviceId = service.id,
+                serviceName = service.displayName,
+                moduleName = ModuleDisplayNaming.resolve(
+                    representative.name,
+                    service.displayName,
+                    representative.baseRef,
+                    service.modules.size,
+                ),
+                localExists = localExists,
+                remoteRefs = remoteRefs,
+                occupiedWorktreePaths = occupied,
+            )
+        }
+    }
+}
+
+private data class CreatedStandardWorktree(
+    val target: Path,
+    val branch: String,
+    val branchCreatedByTask: Boolean,
+)
+
 class StandardWorktreeProvisioner(
     private val git: GitClient = GitClient(),
     private val bootstrap: BootstrapService = BootstrapService(),
@@ -65,7 +154,7 @@ class StandardWorktreeProvisioner(
         request.taskDirectory.toFile().mkdirs()
 
         val moduleGroups = request.service.modules.groupBy(TaskBranchNaming::baseIdentity).values
-        val created = mutableListOf<Pair<Path, String>>()
+        val created = mutableListOf<CreatedStandardWorktree>()
         try {
             return moduleGroups.flatMap { modules ->
                 val representative = modules.first()
@@ -84,15 +173,35 @@ class StandardWorktreeProvisioner(
                 require(git.run(repositoryPath, "check-ref-format", "--branch", branch, check = false).succeeded) {
                     "分支名不合法：$branch"
                 }
-                require(!git.refExists(repositoryPath, "refs/heads/$branch")) { "本地分支已存在：$branch" }
-                modules.map { RemoteBranchRef.parse(it.uatRef).remote }.distinct().forEach { featureRemote ->
+                val featureRemotes = modules.map { RemoteBranchRef.parse(it.uatRef).remote }.distinct()
+                featureRemotes.forEach { featureRemote ->
                     if (featureRemote != representative.baseRemote) git.fetch(repositoryPath, featureRemote)
-                    require(!git.refExists(repositoryPath, "refs/remotes/$featureRemote/$branch")) {
-                        "远程分支已存在：$featureRemote/$branch"
-                    }
                 }
-                git.addWorktree(repositoryPath, target, branch, remoteBaseRef, representative.baseRemote)
-                created += target to branch
+                val key = BranchReuseKey(request.repository.id, branch)
+                val localExists = git.refExists(repositoryPath, "refs/heads/$branch")
+                val remoteBranches = featureRemotes.filter {
+                    git.refExists(repositoryPath, "refs/remotes/$it/$branch")
+                }
+                require(!localExists && remoteBranches.isEmpty() || key in request.confirmedBranchReuseKeys) {
+                    "分支已存在，需先确认复用：$branch"
+                }
+                val forceAttach = if (localExists) {
+                    git.worktrees(repositoryPath).any { it.branch == branch && it.path != target }
+                } else {
+                    false
+                }
+                when {
+                    localExists -> git.addExistingWorktree(repositoryPath, target, branch, force = forceAttach)
+                    remoteBranches.isNotEmpty() -> {
+                        val trackingRemote = RemoteBranchRef.parse(representative.uatRef).remote
+                            .takeIf { it in remoteBranches }
+                            ?: remoteBranches.first()
+                        git.addTrackedRemoteWorktree(repositoryPath, target, branch, trackingRemote)
+                    }
+                    else -> git.addWorktree(repositoryPath, target, branch, remoteBaseRef, representative.baseRemote)
+                }
+                val branchCreatedByTask = !localExists
+                created += CreatedStandardWorktree(target, branch, branchCreatedByTask)
                 val initialization = bootstrap.initialize(repositoryPath, target, request.service.bootstrap)
                 modules.map { module ->
                     ServiceWorkspace(
@@ -115,13 +224,17 @@ class StandardWorktreeProvisioner(
                         strategy = strategy,
                         originUrl = request.repository.originUrl,
                         baseRef = "${module.baseRemote}/${TaskBranchNaming.normalizeBaseRef(module)}",
+                        branchCreatedByTask = branchCreatedByTask,
+                        forceWorktreeAttach = forceAttach,
                     )
                 }
             }
         } catch (error: Throwable) {
-            created.asReversed().forEach { (target, branch) ->
-                runCatching { git.removeWorktree(repositoryPath, target, force = true) }
-                runCatching { git.run(repositoryPath, "branch", "-D", branch, check = false) }
+            created.asReversed().forEach { createdWorktree ->
+                runCatching { git.removeWorktree(repositoryPath, createdWorktree.target, force = true) }
+                if (createdWorktree.branchCreatedByTask) {
+                    runCatching { git.run(repositoryPath, "branch", "-D", createdWorktree.branch, check = false) }
+                }
             }
             runCatching { git.run(repositoryPath, "worktree", "prune", check = false) }
             throw error
@@ -141,7 +254,9 @@ class StandardWorktreeProvisioner(
                 }
                 runCatching {
                     git.removeWorktree(repository, target, force = true)
-                    git.run(repository, "branch", "-D", workspace.branch, check = false)
+                    if (workspace.branchCreatedByTask) {
+                        git.run(repository, "branch", "-D", workspace.branch, check = false)
+                    }
                 }.onFailure(failures::add)
             }
         runCatching { git.run(repository, "worktree", "prune", check = false) }.onFailure(failures::add)

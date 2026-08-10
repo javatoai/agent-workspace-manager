@@ -122,7 +122,12 @@ class GitWorkspaceLifecycle(
                 val restored = when (workspace.strategy) {
                     WorkspaceStrategy.STANDARD_WORKTREE -> {
                         val repository = validateConfiguredRepository(config, workspace)
-                        git.addExistingWorktree(repository, target, workspace.branch)
+                        git.addExistingWorktree(
+                            repository,
+                            target,
+                            workspace.branch,
+                            force = workspace.forceWorktreeAttach,
+                        )
                         restoredByPath[target.toString()] = workspace.copy(health = WorkspaceHealth.READY, warnings = emptyList())
                         val service = config.group(manifest.groupId).services.firstOrNull { it.id == workspace.groupServiceId }
                         val initialized = service?.let { bootstrap.initialize(repository, target, it.bootstrap) }

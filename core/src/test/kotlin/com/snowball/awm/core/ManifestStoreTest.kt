@@ -40,7 +40,7 @@ class ManifestStoreTest {
 
         store.save(directory, expected)
 
-        assertEquals("0.5.3", store.load(directory).schemaVersion)
+        assertEquals("0.6.0", store.load(directory).schemaVersion)
         assertEquals(expected, store.load(directory))
     }
 
@@ -81,12 +81,12 @@ class ManifestStoreTest {
         Files.createDirectories(taskDirectory)
         Files.writeString(
             taskDirectory.resolve(ManifestStore.FILE_NAME),
-            """{"schemaVersion":"0.5.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
+            """{"schemaVersion":"0.6.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
         )
 
         val store = ManifestStore()
         val manifest = store.load(taskDirectory)
-        assertEquals("0.5.7", manifest.schemaVersion)
+        assertEquals("0.6.7", manifest.schemaVersion)
         store.save(taskDirectory, manifest)
         assertEquals(CURRENT_TASK_MANIFEST_SCHEMA_VERSION, store.load(taskDirectory).schemaVersion)
     }

@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.5.3 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.6.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.5.3 的 `config.json` 使用严格字符串 schema `"0.5.3"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.6.0 的 `config.json` 使用严格字符串 schema `"0.6.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.5.3",
+  "schemaVersion": "0.6.0",
   "taskRoot": "Q:\\tasks",
   "repositories": [
     {
@@ -178,16 +178,18 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema `"0.5.3"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。
+`agent-workspace.json` 使用严格字符串 schema `"0.6.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.6.x 不读取或迁移 0.5.x 的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "0.5.3",
+  "schemaVersion": "0.6.0",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {
       "serviceName": "order-service",
-      "health": "READY"
+      "health": "READY",
+      "branchCreatedByTask": false,
+      "forceWorktreeAttach": true
     }
   ],
   "workspaceToolLaunches": [
@@ -201,7 +203,7 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 }
 ```
 
-`lifecycleStatus` 只表示任务属于活跃还是已归档；每个服务的 `health` 只表示工作区是否可用。任务整体健康度由服务动态聚合，不会作为第三个状态字段写入 JSON。
+`lifecycleStatus` 只表示任务属于活跃还是已归档；每个服务的 `health` 只表示工作区是否可用。任务整体健康度由服务动态聚合，不会作为第三个状态字段写入 JSON。`branchCreatedByTask` 标记本次任务是否创建了本地分支，失败回滚只会删除该类分支；`forceWorktreeAttach` 标记恢复时是否需要以 `git worktree add --force` 再次附加已被其他 Worktree 检出的分支。
 
 未注册的工具 ID 会原样保留在配置中并在界面显示为“当前不可用”。Core 只认识通用工具 ID 和执行结果，不依赖 Codex、Claude、Cursor 的 URI 或命令。
 

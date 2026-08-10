@@ -13,10 +13,12 @@ data class CreateGroupedTaskRequest(
     val serviceIds: List<String>,
     val requirementLink: String = "",
     val taskNotes: String = "",
+    val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
 )
 
 data class AddGroupedTaskServicesRequest(
     val serviceIds: List<String>,
+    val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
 )
 
 data class StartupSnapshot(
@@ -52,8 +54,49 @@ class TaskApplicationService(
     private val lifecycle: WorkspaceLifecycle = GitWorkspaceLifecycle(),
     private val operationLock: TaskOperationLock = FileTaskOperationLock(),
     private val branchValidator: BranchReferenceValidator = GitBranchReferenceValidator(),
+    private val branchReuseInspector: WorkspaceBranchReuseInspector = WorkspaceBranchReuseInspector(),
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    /** Finds branch reuse decisions needed before task-directory creation begins. */
+    fun inspectCreateBranchReuse(config: AppConfig, request: CreateGroupedTaskRequest): List<BranchReuseConflict> {
+        val group = config.group(request.groupId)
+        val services = request.serviceIds.map { id ->
+            group.services.firstOrNull { it.id == id && it.enabled }
+                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$id")
+        }
+        return inspectBranchReuse(config, services, request.featureBranch)
+    }
+
+    /** Finds branch reuse decisions for the same branch used by an existing task. */
+    fun inspectAddServicesBranchReuse(
+        config: AppConfig,
+        taskDirectory: Path,
+        request: AddGroupedTaskServicesRequest,
+    ): List<BranchReuseConflict> = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        val group = config.group(manifest.groupId)
+        val existingIds = manifest.services.map(ServiceWorkspace::groupServiceId).toSet()
+        val services = request.serviceIds.map { id ->
+            require(id !in existingIds) { "服务已在任务中：$id" }
+            group.services.firstOrNull { it.id == id && it.enabled }
+                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$id")
+        }
+        inspectBranchReuse(config, services, manifest.featureBranch)
+    }
+
+    private fun inspectBranchReuse(
+        config: AppConfig,
+        services: List<GroupServiceConfig>,
+        featureBranch: String,
+    ): List<BranchReuseConflict> {
+        val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        return services.flatMap { service ->
+            val repository = repositories[service.repositoryId]
+                ?: error("服务 ${service.displayName} 的仓库配置不存在")
+            branchReuseInspector.inspect(repository, service, featureBranch)
+        }.distinctBy(BranchReuseConflict::key)
+    }
+
     fun create(config: AppConfig, request: CreateGroupedTaskRequest): TaskManifest {
         val taskRoot = config.taskRoot?.let(Path::of)
             ?: error("尚未配置任务根目录")
@@ -107,6 +150,7 @@ class TaskApplicationService(
                         repository = repository,
                         service = service,
                         requestedFeatureBranch = featureBranch,
+                        confirmedBranchReuseKeys = request.confirmedBranchReuseKeys,
                     ),
                 )
             }
@@ -144,7 +188,9 @@ class TaskApplicationService(
                     services = workspaces,
                     groupId = group.id,
                 )
-                val cleanup = runCatching { lifecycle.removeAll(config, taskDirectory, rollbackManifest, force = true) }
+                val cleanup = runCatching {
+                    rollbackProvisionedWorkspaces(config, taskDirectory, rollbackManifest)
+                }
                 if (cleanup.isFailure) {
                     throw IllegalStateException(
                         "任务创建失败且自动回滚未完成；为避免 Git 元数据损坏，已保留目录供人工检查：$taskDirectory",
@@ -155,6 +201,37 @@ class TaskApplicationService(
             if (taskDirectory.exists()) deleteRecursively(taskDirectory)
             throw error
         }
+    }
+
+    /** Rolls back only paths and branches marked as created by this provisioning transaction. */
+    private fun rollbackProvisionedWorkspaces(
+        config: AppConfig,
+        taskDirectory: Path,
+        manifest: TaskManifest,
+    ) {
+        val group = config.group(manifest.groupId)
+        val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        manifest.services
+            .groupBy(ServiceWorkspace::groupServiceId)
+            .values
+            .toList()
+            .asReversed()
+            .forEach { workspaces ->
+                val workspace = workspaces.first()
+                val service = group.services.firstOrNull { it.id == workspace.groupServiceId }
+                    ?: error("回滚服务配置不存在：${workspace.groupServiceId}")
+                val repository = repositories[workspace.repositoryId]
+                    ?: error("回滚仓库配置不存在：${workspace.repositoryId}")
+                provisioning.rollback(
+                    WorkspaceProvisionRequest(
+                        taskDirectory = taskDirectory,
+                        repository = repository,
+                        service = service,
+                        requestedFeatureBranch = manifest.featureBranch,
+                    ),
+                    workspaces,
+                )
+            }
     }
 
     fun refreshAgents(config: AppConfig, taskDirectory: Path): Path = operationLock.withLock(taskDirectory) {
@@ -190,6 +267,7 @@ class TaskApplicationService(
                     repository = repository,
                     service = service,
                     requestedFeatureBranch = manifest.featureBranch,
+                    confirmedBranchReuseKeys = request.confirmedBranchReuseKeys,
                 )
                 created += provisionRequest to provisioning.provision(provisionRequest)
             }

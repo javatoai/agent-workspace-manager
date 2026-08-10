@@ -207,6 +207,34 @@ class GitClient(
         run(repository, *args.toTypedArray(), timeout = Duration.ofMinutes(5))
     }
 
+    /** Creates the missing local branch from an already fetched remote feature branch. */
+    fun addTrackedRemoteWorktree(repository: Path, target: Path, branch: String, remote: String) {
+        var createdByThisCall = false
+        try {
+            run(
+                repository,
+                "-c",
+                "core.symlinks=false",
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                "--track",
+                target.toString(),
+                "$remote/$branch",
+                timeout = Duration.ofMinutes(5),
+            )
+            createdByThisCall = true
+        } catch (error: Throwable) {
+            if (createdByThisCall) {
+                runCatching { removeWorktree(repository, target, force = true) }
+                run(repository, "branch", "-D", branch, check = false)
+                run(repository, "worktree", "prune", check = false)
+            }
+            throw error
+        }
+    }
+
     fun setBranchUpstream(repository: Path, branch: String, remote: String) {
         run(repository, "config", "branch.$branch.remote", remote)
         run(repository, "config", "branch.$branch.merge", "refs/heads/$branch")

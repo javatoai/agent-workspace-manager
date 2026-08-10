@@ -70,6 +70,28 @@ class TaskApplicationServiceTest {
     }
 
     @Test
+    fun `create rolls back completed services through their provisioning strategy`() {
+        val root = Files.createTempDirectory("task-create-rollback-")
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val failingClone = RecordingProvisioner(WorkspaceStrategy.INDEPENDENT_CLONE, fail = true)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(standard, failingClone)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        assertFailsWith<IllegalStateException> {
+            application.create(
+                taskConfig(root),
+                CreateGroupedTaskRequest("TASK-ROLLBACK", "feature/rollback", "alpha", listOf("standard", "clone")),
+            )
+        }
+
+        assertEquals(1, standard.rollbackCalls)
+        assertTrue(!Files.exists(root.resolve("TASK-ROLLBACK")))
+    }
+
+    @Test
     fun `startup snapshot loads current files without repository inspection`() {
         val root = Files.createTempDirectory("startup-")
         val paths = ApplicationPaths(root.resolve("home"))

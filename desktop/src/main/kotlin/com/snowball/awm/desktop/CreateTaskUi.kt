@@ -105,6 +105,8 @@ import com.mikepenz.markdown.m3.markdownTypography
 import com.snowball.awm.core.AgentConflictResolution
 import com.snowball.awm.core.BootstrapConfig
 import com.snowball.awm.core.BootstrapPresets
+import com.snowball.awm.core.BranchReuseConflict
+import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
 import com.snowball.awm.core.IdeType
@@ -148,7 +150,7 @@ import java.util.UUID
 internal fun CreateTaskDialog(
     controller: DesktopApplication,
     onDismiss: () -> Unit,
-    onCreate: (String, String, String, List<String>, String, String, List<String>) -> Unit,
+    onCreate: (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>) -> Unit,
 ) {
     val initialGroup = controller.config.groups.first()
     var draft by remember {
@@ -163,6 +165,8 @@ internal fun CreateTaskDialog(
     var requirementSearch by remember { mutableStateOf("") }
     var serviceSearch by remember(groupId) { mutableStateOf("") }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var checkingBranchReuse by remember { mutableStateOf(false) }
+    var branchConflicts by remember { mutableStateOf<List<BranchReuseConflict>?>(null) }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
     val taskNameMissing = draft.taskName.isBlank()
@@ -428,11 +432,35 @@ internal fun CreateTaskDialog(
                         Button(
                             onClick = {
                                 val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
-                                onCreate(draft.taskName, draft.branch, groupId, selected.toList(), draft.requirementLink, notes, availableTools)
+                                checkingBranchReuse = controller.taskController.inspectCreateBranchReuse(
+                                    name = draft.taskName,
+                                    branch = draft.branch,
+                                    groupId = groupId,
+                                    serviceIds = selected.toList(),
+                                    link = draft.requirementLink,
+                                    notes = notes,
+                                    onResolved = { conflicts ->
+                                        if (conflicts.isEmpty()) {
+                                            onCreate(
+                                                draft.taskName,
+                                                draft.branch,
+                                                groupId,
+                                                selected.toList(),
+                                                draft.requirementLink,
+                                                notes,
+                                                availableTools,
+                                                emptySet(),
+                                            )
+                                        } else {
+                                            branchConflicts = conflicts
+                                        }
+                                    },
+                                    onFinished = { checkingBranchReuse = false },
+                                )
                             },
                             enabled = !taskNameMissing && taskNameError == null && draft.branch.isNotBlank() &&
                                 !unresolvedBranch &&
-                                selected.isNotEmpty() && !controller.busy,
+                                selected.isNotEmpty() && !controller.busy && !checkingBranchReuse,
                         ) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("创建任务") }
                     }
                 }
@@ -447,6 +475,96 @@ internal fun CreateTaskDialog(
             onDiscard = onDismiss,
         )
     }
+    branchConflicts?.let { conflicts ->
+        BranchReuseConfirmationDialog(
+            conflicts = conflicts,
+            onDismiss = { branchConflicts = null },
+            onConfirm = { keys ->
+                branchConflicts = null
+                val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
+                onCreate(
+                    draft.taskName,
+                    draft.branch,
+                    groupId,
+                    selected.toList(),
+                    draft.requirementLink,
+                    notes,
+                    availableTools,
+                    keys,
+                )
+            },
+        )
+    }
+}
+
+/** Explicitly acknowledges reuse before any task directory or worktree is created. */
+@Composable
+internal fun BranchReuseConfirmationDialog(
+    conflicts: List<BranchReuseConflict>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<BranchReuseKey>) -> Unit,
+) {
+    var sharedBranchAcknowledged by remember(conflicts) { mutableStateOf(false) }
+    val hasOccupiedWorktree = conflicts.any(BranchReuseConflict::requiresForceAttach)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("确认复用已有分支") },
+        text = {
+            Column(
+                Modifier.widthIn(min = 620.dp).heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "以下分支已存在。确认后会在新任务目录中复用它们，不会创建同名新分支。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                conflicts.forEach { conflict ->
+                    OutlinedCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("${conflict.serviceName} · ${conflict.moduleName}", fontWeight = FontWeight.SemiBold)
+                            Text(conflict.key.branch, style = MaterialTheme.typography.bodySmall)
+                            if (conflict.localExists) {
+                                Text("本地分支已存在", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            if (conflict.remoteRefs.isNotEmpty()) {
+                                Text(
+                                    "远程分支：${conflict.remoteRefs.joinToString()}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            conflict.occupiedWorktreePaths.forEach { path ->
+                                Text(
+                                    "已被 Worktree 检出：$path",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (hasOccupiedWorktree) {
+                    HorizontalDivider()
+                    Text(
+                        "已检出的分支将使用 Git 强制附加到新目录。两个目录共享同一分支和提交历史，请不要并行修改。",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(sharedBranchAcknowledged, { sharedBranchAcknowledged = it })
+                        Text("我了解该分支会被两个 Worktree 共享")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(conflicts.map(BranchReuseConflict::key).toSet()) },
+                enabled = !hasOccupiedWorktree || sharedBranchAcknowledged,
+            ) { Text("确认复用") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("返回修改") } },
+    )
 }
 
 /** Read-only Material 3 rendering used exclusively for generated AGENTS.md previews. */
@@ -487,10 +605,12 @@ internal fun AddTaskServicesDialog(
     controller: DesktopApplication,
     task: TaskManifest,
     onDismiss: () -> Unit,
-    onAdd: (List<String>) -> Unit,
+    onAdd: (List<String>, Set<BranchReuseKey>) -> Unit,
 ) {
     val services = controller.addableServices(task)
     var selected by remember(task.folderName) { mutableStateOf<Set<String>>(emptySet()) }
+    var checkingBranchReuse by remember(task.folderName) { mutableStateOf(false) }
+    var branchConflicts by remember(task.folderName) { mutableStateOf<List<BranchReuseConflict>?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("添加服务") },
@@ -517,8 +637,34 @@ internal fun AddTaskServicesDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onAdd(selected.toList()) }, enabled = selected.isNotEmpty() && !controller.busy) { Text("添加") }
+            Button(
+                onClick = {
+                    checkingBranchReuse = controller.taskController.inspectAddServicesBranchReuse(
+                        task = task,
+                        serviceIds = selected.toList(),
+                        onResolved = { conflicts ->
+                            if (conflicts.isEmpty()) {
+                                onAdd(selected.toList(), emptySet())
+                            } else {
+                                branchConflicts = conflicts
+                            }
+                        },
+                        onFinished = { checkingBranchReuse = false },
+                    )
+                },
+                enabled = selected.isNotEmpty() && !controller.busy && !checkingBranchReuse,
+            ) { Text("添加") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+    branchConflicts?.let { conflicts ->
+        BranchReuseConfirmationDialog(
+            conflicts = conflicts,
+            onDismiss = { branchConflicts = null },
+            onConfirm = { keys ->
+                branchConflicts = null
+                onAdd(selected.toList(), keys)
+            },
+        )
+    }
 }

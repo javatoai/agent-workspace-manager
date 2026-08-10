@@ -418,8 +418,8 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
         controller.clearDeleteRisk(task)
         confirmDelete = false
     }
-    if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids ->
-        controller.addServices(task, ids) { showAddServices = false }
+    if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids, reuseKeys ->
+        controller.addServices(task, ids, reuseKeys) { showAddServices = false }
     }
     if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
         controller.deliveryController.buildBatch(task, selected) { showBatchTag = false }

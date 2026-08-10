@@ -5,6 +5,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.awm.core.AddGroupedTaskServicesRequest
 import com.snowball.awm.core.AppConfig
+import com.snowball.awm.core.BranchReuseConflict
+import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.CreateGroupedTaskRequest
 import com.snowball.awm.core.DeleteRisk
@@ -116,11 +118,12 @@ class TaskController internal constructor(
         link: String,
         notes: String,
         toolIds: List<String>,
+        confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
         onCompleted: () -> Unit = {},
     ): Boolean = operations.run("正在创建任务…", "任务已创建", block = {
         val created = tasks.create(
             session.config,
-            CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes),
+            CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, confirmedBranchReuseKeys),
         )
         workspaceTools.launch(taskDirectory(session.config, created), created, toolIds)
     }, onSuccess = { created ->
@@ -172,10 +175,67 @@ class TaskController internal constructor(
             tasks.delete(session.config, taskDirectory(task), discardChanges)
         }, onSuccess = { reloadTasks(); onCompleted() })
 
-    fun addServices(task: TaskManifest, serviceIds: List<String>, onCompleted: () -> Unit = {}): Boolean =
+    fun addServices(
+        task: TaskManifest,
+        serviceIds: List<String>,
+        confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+        onCompleted: () -> Unit = {},
+    ): Boolean =
         operations.run("正在追加服务…", "服务已追加", block = {
-            tasks.addServices(session.config, taskDirectory(task), AddGroupedTaskServicesRequest(serviceIds))
+            tasks.addServices(
+                session.config,
+                taskDirectory(task),
+                AddGroupedTaskServicesRequest(serviceIds, confirmedBranchReuseKeys),
+            )
         }, onSuccess = { reloadTasks(it.folderName); onCompleted() })
+
+    fun inspectCreateBranchReuse(
+        name: String,
+        branch: String,
+        groupId: String,
+        serviceIds: List<String>,
+        link: String,
+        notes: String,
+        onResolved: (List<BranchReuseConflict>) -> Unit,
+        onFinished: () -> Unit,
+    ): Boolean {
+        if (isBusy()) return false
+        val config = session.config
+        scope.launch {
+            val result = withContext(ioDispatcher) {
+                runCatching {
+                    tasks.inspectCreateBranchReuse(
+                        config,
+                        CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes),
+                    )
+                }
+            }
+            result.onSuccess(onResolved).onFailure(onError)
+            onFinished()
+        }
+        return true
+    }
+
+    fun inspectAddServicesBranchReuse(
+        task: TaskManifest,
+        serviceIds: List<String>,
+        onResolved: (List<BranchReuseConflict>) -> Unit,
+        onFinished: () -> Unit,
+    ): Boolean {
+        if (isBusy()) return false
+        val config = session.config
+        val directory = taskDirectory(task)
+        scope.launch {
+            val result = withContext(ioDispatcher) {
+                runCatching {
+                    tasks.inspectAddServicesBranchReuse(config, directory, AddGroupedTaskServicesRequest(serviceIds))
+                }
+            }
+            result.onSuccess(onResolved).onFailure(onError)
+            onFinished()
+        }
+        return true
+    }
 
     fun retry(task: TaskManifest, serviceIds: List<String>? = null): Boolean =
         operations.run("正在重试失败服务…", "失败服务已重试", block = {

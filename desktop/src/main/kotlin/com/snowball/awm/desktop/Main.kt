@@ -166,7 +166,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.5.3",
+            title = "Agent Workspace Manager 0.6.0",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {
@@ -248,8 +248,8 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     }
 
     if (showCreate) {
-        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools ->
-            controller.taskController.create(name, branch, group, services, link, notes, tools) {
+        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools, reuseKeys ->
+            controller.taskController.create(name, branch, group, services, link, notes, tools, reuseKeys) {
                 showCreate = false
             }
         }
@@ -344,7 +344,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("AWM", style = MaterialTheme.typography.titleLarge)
-                    Text("Workspace studio · 0.5.3", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Workspace studio · 0.6.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.height(24.dp))

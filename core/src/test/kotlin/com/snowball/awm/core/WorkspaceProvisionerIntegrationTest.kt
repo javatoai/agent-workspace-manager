@@ -156,4 +156,123 @@ class WorkspaceProvisionerIntegrationTest {
 
         assertTrue(GitClient().refExists(repository, "refs/heads/feature/existing"))
     }
+
+    @Test
+    fun `existing local branch needs confirmation then attaches without changing ownership`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-local"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-local").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val branch = "feature/reuse-local"
+        GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
+        val service = GroupServiceConfig.standard("reuse-local", repository.id, "reuse-local", baseRef = "master")
+        val provisioner = StandardWorktreeProvisioner()
+
+        assertThrows(Throwable::class.java) {
+            provisioner.provision(
+                WorkspaceProvisionRequest(temporary.resolve("reuse-local").resolve("unconfirmed"), repository, service, branch),
+            )
+        }
+        assertTrue(GitClient().refExists(repositoryPath, "refs/heads/$branch"))
+
+        val workspace = provisioner.provision(
+            WorkspaceProvisionRequest(
+                temporary.resolve("reuse-local").resolve("confirmed"),
+                repository,
+                service,
+                branch,
+                setOf(BranchReuseKey(repository.id, branch)),
+            ),
+        ).single()
+
+        assertEquals(false, workspace.branchCreatedByTask)
+        assertEquals(false, workspace.forceWorktreeAttach)
+        assertEquals(branch, GitClient().currentBranch(Path.of(workspace.worktreePath)))
+    }
+
+    @Test
+    fun `occupied branch requires force attach and can be attached again after removal`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-occupied"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-occupied").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val branch = "feature/reuse-occupied"
+        GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
+        val git = GitClient()
+        git.addExistingWorktree(repositoryPath, temporary.resolve("reuse-occupied").resolve("existing"), branch)
+        val service = GroupServiceConfig.standard("reuse-occupied", repository.id, "reuse-occupied", baseRef = "master")
+
+        val workspace = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(
+                temporary.resolve("reuse-occupied").resolve("task"),
+                repository,
+                service,
+                branch,
+                setOf(BranchReuseKey(repository.id, branch)),
+            ),
+        ).single()
+
+        assertTrue(workspace.forceWorktreeAttach)
+        val target = Path.of(workspace.worktreePath)
+        git.removeWorktree(repositoryPath, target, force = true)
+        git.addExistingWorktree(repositoryPath, target, branch, force = workspace.forceWorktreeAttach)
+        assertEquals(branch, git.currentBranch(target))
+    }
+
+    @Test
+    fun `remote-only branch needs confirmation and becomes a tracked local worktree`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-remote"))
+        val branch = "feature/reuse-remote"
+        GitTestSupport.run(seed, "switch", "-c", branch)
+        GitTestSupport.run(seed, "push", "-u", "origin", branch)
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-remote").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig.standard("reuse-remote", repository.id, "reuse-remote", baseRef = "master")
+
+        val workspace = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(
+                temporary.resolve("reuse-remote").resolve("task"),
+                repository,
+                service,
+                branch,
+                setOf(BranchReuseKey(repository.id, branch)),
+            ),
+        ).single()
+
+        assertTrue(workspace.branchCreatedByTask)
+        assertEquals("origin", GitTestSupport.run(repositoryPath, "config", "branch.$branch.remote"))
+        assertEquals("refs/heads/$branch", GitTestSupport.run(repositoryPath, "config", "branch.$branch.merge"))
+    }
+
+    @Test
+    fun `failed provisioning never deletes a reused local branch`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-rollback"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-rollback").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val requestedBranch = "feature/reuse-rollback"
+        val reusedBranch = "$requestedBranch-master"
+        GitTestSupport.run(repositoryPath, "branch", reusedBranch, "origin/master")
+        val service = GroupServiceConfig(
+            id = "reuse-rollback",
+            repositoryId = repository.id,
+            displayName = "reuse-rollback",
+            modules = listOf(
+                ServiceModuleConfig("master", "master", "origin/master"),
+                ServiceModuleConfig("missing", "missing", "origin/does-not-exist"),
+            ),
+        )
+
+        assertThrows(Throwable::class.java) {
+            StandardWorktreeProvisioner().provision(
+                WorkspaceProvisionRequest(
+                    temporary.resolve("reuse-rollback").resolve("task"),
+                    repository,
+                    service,
+                    requestedBranch,
+                    setOf(BranchReuseKey(repository.id, reusedBranch)),
+                ),
+            )
+        }
+
+        assertTrue(GitClient().refExists(repositoryPath, "refs/heads/$reusedBranch"))
+        assertEquals(1, GitClient().worktrees(repositoryPath).size)
+    }
 }

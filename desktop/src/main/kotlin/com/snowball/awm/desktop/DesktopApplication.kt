@@ -11,6 +11,7 @@ import com.snowball.awm.core.AgentDocumentPropagationService
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.BatchRepositoryAddResult
+import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
@@ -388,8 +389,19 @@ class DesktopApplication(
         requirementLink: String,
         notes: String,
         workspaceToolIds: List<String> = emptyList(),
+        confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
         onCompleted: () -> Unit = {},
-    ) = taskController.create(folderName, branch, groupId, serviceIds, requirementLink, notes, workspaceToolIds, onCompleted)
+    ) = taskController.create(
+        folderName,
+        branch,
+        groupId,
+        serviceIds,
+        requirementLink,
+        notes,
+        workspaceToolIds,
+        confirmedBranchReuseKeys,
+        onCompleted,
+    )
 
     fun retryWorkspaceTool(task: TaskManifest, toolId: String) = taskController.retryWorkspaceTool(task, toolId)
 
@@ -413,8 +425,12 @@ class DesktopApplication(
         deliveryController.buildBatch(task, workspaces, onCompleted)
     fun clearBatchTagResults() = deliveryController.clearBatchResults()
 
-    fun addServices(task: TaskManifest, serviceIds: List<String>, onCompleted: () -> Unit = {}) =
-        taskController.addServices(task, serviceIds, onCompleted)
+    fun addServices(
+        task: TaskManifest,
+        serviceIds: List<String>,
+        confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+        onCompleted: () -> Unit = {},
+    ) = taskController.addServices(task, serviceIds, confirmedBranchReuseKeys, onCompleted)
 
     fun retryFailedServices(task: TaskManifest, serviceIds: List<String>? = null) = taskController.retry(task, serviceIds)
 
