@@ -15,7 +15,7 @@ class TagOutputFormatterTest {
 android-transit-service · 3.11.69.beta-1
 api-service · 2.4.34.beta-6
 
-Tag已构建完毕，辛苦UAT环境发布以上版本""",
+Tag 已构建完毕，请发布以上版本""",
             TagOutputFormatter.format(
                 "https://project.feishu.cn/obt/userstory/detail/7035269559",
                 listOf(first, second),
@@ -48,8 +48,8 @@ Tag未全部构建成功，请处理失败项后重试""",
         folderName = "TASK-1",
         serviceName = serviceName,
         repositoryId = serviceName,
-        featureBranch = "feature/TASK-1",
-        testBranch = "release/test",
+        sourceBranch = "feature/TASK-1",
+        targetBranch = "release/test",
         remote = "origin",
         state = TagOperationState.SUCCESS,
         createdAt = "2026-01-01T00:00:00Z",

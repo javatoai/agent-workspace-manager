@@ -43,7 +43,7 @@ class WorkspaceHealthAggregationTest {
         serviceName = "service-$health",
         repositoryPath = "C:/repo-$health",
         worktreePath = "C:/task/repo-$health",
-        ideType = IdeType.IDEA,
+        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
         branch = "feature/$health",
         health = health,
     )

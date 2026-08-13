@@ -7,57 +7,159 @@ import java.nio.file.Path
 class GitWorkspaceGitStatusReader(
     private val git: GitClient = GitClient(),
 ) : WorkspaceGitStatusReader {
-    override fun read(worktreePath: Path): WorkspaceGitHealth {
-        if (!Files.isDirectory(worktreePath)) return WorkspaceGitHealth(WorkspaceGitHealthState.MISSING)
+    override fun read(workspace: ServiceWorkspace): WorkspaceGitHealth {
+        val worktreePath = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+        if (!Files.isDirectory(worktreePath)) return WorkspaceGitHealth(
+            state = WorkspaceGitHealthState.MISSING,
+            issue = WorkspaceGitIssue.MISSING,
+            expectedBranch = workspace.branch,
+            message = "工作区不存在：$worktreePath",
+        )
         return runCatching {
-            val status = git.run(worktreePath, "status", "--porcelain=v2", "-z", "--untracked-files=all")
-            val dirty = PorcelainV2Parser.changedPaths(status.stdout).size
-            val branchResult = git.run(worktreePath, "symbolic-ref", "--quiet", "--short", "HEAD", check = false)
-            val branch = branchResult.stdout.trim()
-            val remote = branch.takeIf(String::isNotBlank)?.let {
-                git.run(worktreePath, "config", "--get", "branch.$it.remote", check = false)
+            val repositoryProbe = runCatching {
+                git.readOnly(
+                    worktreePath,
+                    "rev-parse",
+                    "--show-toplevel",
+                    "--absolute-git-dir",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                )
+            }.getOrElse { error ->
+                return WorkspaceGitHealth(
+                    state = WorkspaceGitHealthState.FAILED,
+                    issue = WorkspaceGitIssue.NOT_GIT,
+                    expectedBranch = workspace.branch,
+                    message = "不是有效的 Git 工作区：${error.message ?: worktreePath}",
+                )
             }
-            val merge = branch.takeIf(String::isNotBlank)?.let {
-                git.run(worktreePath, "config", "--get", "branch.$it.merge", check = false)
+            val repositoryLines = repositoryProbe.stdout.lineSequence().filter(String::isNotBlank).toList()
+            require(repositoryLines.size >= 3) { "Git repository probe returned incomplete output: $worktreePath" }
+            val topLevel = Path.of(repositoryLines[0]).toAbsolutePath().normalize()
+            val gitDirectory = Path.of(repositoryLines[1]).toAbsolutePath().normalize()
+            val commonDirectory = Path.of(repositoryLines[2]).toAbsolutePath().normalize()
+            if (topLevel != worktreePath) return WorkspaceGitHealth(
+                state = WorkspaceGitHealthState.FAILED,
+                issue = WorkspaceGitIssue.NOT_GIT,
+                expectedBranch = workspace.branch,
+                message = "目标目录不是 Git 顶层目录：$worktreePath",
+            )
+            val identityMatches = when (workspace.strategy) {
+                WorkspaceStrategy.STANDARD_WORKTREE -> runCatching {
+                    val repository = Path.of(workspace.repositoryPath).toAbsolutePath().normalize()
+                    val expectedCommonDirectory = git.readOnly(
+                        repository,
+                        "rev-parse",
+                        "--path-format=absolute",
+                        "--git-common-dir",
+                    ).stdout.trim().let(Path::of).toAbsolutePath().normalize()
+                    commonDirectory == expectedCommonDirectory
+                }.getOrDefault(false)
+                WorkspaceStrategy.INDEPENDENT_CLONE ->
+                    git.readOnly(
+                        worktreePath,
+                        "config",
+                        "--get",
+                        "remote.${workspace.pushRemote}.url",
+                        check = false,
+                    ).takeIf { it.succeeded }?.stdout?.trim() == workspace.originUrl?.trim()
             }
-            if (remote?.succeeded != true || merge?.succeeded != true) {
-                WorkspaceGitHealth(WorkspaceGitHealthState.READY, dirty, LocalPushState.NO_UPSTREAM)
+            if (!identityMatches) return WorkspaceGitHealth(
+                state = WorkspaceGitHealthState.FAILED,
+                issue = WorkspaceGitIssue.IDENTITY_MISMATCH,
+                expectedBranch = workspace.branch,
+                message = "Git 仓库身份与任务记录不匹配：$worktreePath",
+            )
+            val operationInProgress = operationInProgress(gitDirectory)
+            if (operationInProgress != null) return WorkspaceGitHealth(
+                state = WorkspaceGitHealthState.FAILED,
+                issue = WorkspaceGitIssue.OPERATION_IN_PROGRESS,
+                expectedBranch = workspace.branch,
+                message = "存在进行中的 Git 操作：$operationInProgress",
+            )
+            val status = git.readOnly(worktreePath, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
+            val parsedStatus = PorcelainV2Parser.parse(status.stdout)
+            val actualBranch = parsedStatus.branch
+            if (actualBranch == null || actualBranch == "(detached)") return WorkspaceGitHealth(
+                state = WorkspaceGitHealthState.FAILED,
+                issue = WorkspaceGitIssue.DETACHED_HEAD,
+                expectedBranch = workspace.branch,
+                message = "工作区处于 Detached HEAD，期望分支 ${workspace.branch}",
+            )
+            if (actualBranch != workspace.branch) return WorkspaceGitHealth(
+                state = WorkspaceGitHealthState.FAILED,
+                issue = WorkspaceGitIssue.BRANCH_MISMATCH,
+                actualBranch = actualBranch,
+                expectedBranch = workspace.branch,
+                message = "分支不一致：当前 $actualBranch，期望 ${workspace.branch}",
+            )
+            val dirty = parsedStatus.changedPaths.size
+            if (parsedStatus.upstream == null) {
+                WorkspaceGitHealth(WorkspaceGitHealthState.READY, dirty, LocalPushState.NO_UPSTREAM, actualBranch = actualBranch, expectedBranch = workspace.branch)
+            } else if (parsedStatus.ahead == null) {
+                WorkspaceGitHealth(WorkspaceGitHealthState.READY, dirty, LocalPushState.REMOTE_BRANCH_MISSING, actualBranch = actualBranch, expectedBranch = workspace.branch)
             } else {
-                val remoteName = remote.stdout.trim()
-                val mergeBranch = merge.stdout.trim().removePrefix("refs/heads/")
-                val upstream = if (remoteName == ".") merge.stdout.trim() else "refs/remotes/$remoteName/$mergeBranch"
-                val known = git.run(worktreePath, "rev-parse", "--verify", "$upstream^{commit}", check = false)
-                if (!known.succeeded) {
-                    WorkspaceGitHealth(WorkspaceGitHealthState.READY, dirty, LocalPushState.REMOTE_BRANCH_MISSING)
-                } else {
-                    val ahead = git.run(worktreePath, "rev-list", "--count", "$upstream..HEAD").stdout.trim().toInt()
-                    WorkspaceGitHealth(
-                        WorkspaceGitHealthState.READY,
-                        dirty,
-                        if (ahead == 0) LocalPushState.PUSHED else LocalPushState.AHEAD,
-                        ahead,
-                    )
-                }
+                val ahead = parsedStatus.ahead
+                WorkspaceGitHealth(
+                    WorkspaceGitHealthState.READY,
+                    dirty,
+                    if (ahead == 0) LocalPushState.PUSHED else LocalPushState.AHEAD,
+                    ahead,
+                    actualBranch = actualBranch,
+                    expectedBranch = workspace.branch,
+                )
             }
         }.getOrElse { error ->
             WorkspaceGitHealth(
                 WorkspaceGitHealthState.FAILED,
                 pushState = LocalPushState.FAILED,
                 message = error.message ?: "Git 状态检查失败",
+                issue = WorkspaceGitIssue.INSPECTION_FAILED,
+                expectedBranch = workspace.branch,
             )
         }
+    }
+
+    private fun operationInProgress(gitDirectory: Path): String? = when {
+        Files.exists(gitDirectory.resolve("MERGE_HEAD")) -> "merge"
+        Files.exists(gitDirectory.resolve("rebase-merge")) -> "rebase"
+        Files.exists(gitDirectory.resolve("rebase-apply")) -> "rebase"
+        Files.exists(gitDirectory.resolve("CHERRY_PICK_HEAD")) -> "cherry-pick"
+        Files.exists(gitDirectory.resolve("REVERT_HEAD")) -> "revert"
+        else -> null
     }
 }
 
 /** Parses NUL-delimited porcelain-v2 output and counts a rename as one destination path. */
 object PorcelainV2Parser {
-    fun changedPaths(output: String): Set<String> {
+    data class Status(
+        val branch: String?,
+        val upstream: String?,
+        val ahead: Int?,
+        val behind: Int?,
+        val changedPaths: Set<String>,
+    )
+
+    fun changedPaths(output: String): Set<String> = parse(output).changedPaths
+
+    fun parse(output: String): Status {
         val fields = output.split('\u0000')
         val paths = linkedSetOf<String>()
+        var branch: String? = null
+        var upstream: String? = null
+        var ahead: Int? = null
+        var behind: Int? = null
         var index = 0
         while (index < fields.size) {
             val record = fields[index]
             when {
+                record.startsWith("# branch.head ") -> branch = record.removePrefix("# branch.head ").ifBlank { null }
+                record.startsWith("# branch.upstream ") -> upstream = record.removePrefix("# branch.upstream ").ifBlank { null }
+                record.startsWith("# branch.ab ") -> {
+                    val match = Regex("\\+(\\d+) -(\\d+)").matchEntire(record.removePrefix("# branch.ab "))
+                    ahead = match?.groupValues?.get(1)?.toIntOrNull()
+                    behind = match?.groupValues?.get(2)?.toIntOrNull()
+                }
                 record.startsWith("1 ") -> pathAfterFields(record, 8)?.let(paths::add)
                 record.startsWith("2 ") -> {
                     pathAfterFields(record, 9)?.let(paths::add)
@@ -68,7 +170,7 @@ object PorcelainV2Parser {
             }
             index++
         }
-        return paths
+        return Status(branch, upstream, ahead, behind, paths)
     }
 
     private fun pathAfterFields(record: String, fieldCount: Int): String? =

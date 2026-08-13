@@ -55,7 +55,7 @@ class TagConflictIntegrationTest {
                         serviceName = "conflict-service",
                         repositoryPath = repository.toString(),
                         worktreePath = featureWorktree.toString(),
-                        ideType = IdeType.IDEA,
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
                         branch = "feature/CONFLICT-1",
                         health = WorkspaceHealth.READY,
                         groupServiceId = "conflict-service",
@@ -72,7 +72,7 @@ class TagConflictIntegrationTest {
                         id = "conflict-service",
                         repositoryId = repositoryInfo.id,
                         displayName = "conflict-service",
-                    ).copy(modules = listOf(ServiceModuleConfig("default", initialUatTag = "1.0.0.beta-1"))),
+                    ).copy(modules = listOf(ServiceModuleConfig("default"))),
                 )),
             ),
         )

@@ -56,12 +56,19 @@ class TaskApplicationServiceTest {
                 serviceIds = listOf("standard", "clone"),
                 requirementLink = "https://example.test/task/20",
                 taskNotes = "only edit the API module",
+                baseOverrides = listOf(
+                    ModuleBaseOverride("standard", "default", "upstream/develop", "feature/custom-standard"),
+                    ModuleBaseOverride("clone", "clone", "origin/release/test"),
+                ),
             ),
         )
 
         assertEquals("alpha", manifest.groupId)
         assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.strategy })
-        assertEquals("origin/master", clone.requests.single().service.cloneModules.single().branch)
+        assertEquals("upstream/develop", standard.requests.single().service.modules.single().baseRef)
+        assertEquals("upstream", standard.requests.single().service.modules.single().baseRemote)
+        assertEquals(mapOf("default" to "feature/custom-standard"), standard.requests.single().moduleBranches)
+        assertEquals("origin/release/test", clone.requests.single().service.cloneModules.single().branch)
         assertEquals(2, manifest.services.size)
         assertEquals("2026-08-08 08:00:00", manifest.createdAt)
         assertEquals("2026-08-08 08:00:00", manifest.updatedAt)
@@ -272,7 +279,7 @@ class TaskApplicationServiceTest {
                         serviceName = "clone",
                         repositoryPath = outside.toString(),
                         worktreePath = outside.toString(),
-                        ideType = IdeType.IDEA,
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
                         branch = "master",
                         strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
                         originUrl = "https://example.test/a.git",
@@ -400,7 +407,7 @@ private class RecordingProvisioner(
                 serviceName = request.service.displayName,
                 repositoryPath = request.repository.rootPath,
                 worktreePath = request.taskDirectory.resolve(request.service.id).toString(),
-                ideType = request.service.ideType,
+                developmentTool = request.service.developmentTool,
                 branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.cloneModules.first().branch.removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
                 health = WorkspaceHealth.READY,
                 groupServiceId = request.service.id,

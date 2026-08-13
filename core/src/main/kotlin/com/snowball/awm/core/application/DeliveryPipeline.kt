@@ -51,15 +51,15 @@ class DeliveryPipelineRegistry(adapters: List<DeliveryPipelineAdapter>) {
     fun adapter(id: String): DeliveryPipelineAdapter? = byId[id]
 }
 
-/** Strongly typed UAT Tag implementation of the generic delivery boundary. */
-class UatTagDeliveryAdapter(
+/** Strongly typed Git Tag implementation of the generic delivery boundary. */
+class GitTagDeliveryAdapter(
     private val tags: TagBuildService = TagBuildService(),
     private val historyQuery: TagHistoryQueryService = TagHistoryQueryService(),
 ) : DeliveryPipelineAdapter {
     override val descriptor = DeliveryPipelineDescriptor(
         id = ID,
-        displayName = "UAT Tag",
-        historyDisplayName = "UAT 构建历史",
+        displayName = "Tag",
+        historyDisplayName = "Tag 构建历史",
     )
 
     override fun execute(target: DeliveryTarget): DeliveryExecution {
@@ -98,6 +98,6 @@ class UatTagDeliveryAdapter(
     )
 
     companion object {
-        const val ID = "uat-tag"
+        const val ID = "git-tag"
     }
 }

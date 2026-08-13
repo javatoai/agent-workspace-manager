@@ -23,7 +23,7 @@ class GroupConfigurationService(
     private val configurations: ConfigurationRepository = ConfigStore(),
     private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(),
     private val taskUsage: TaskGroupUsage = ManifestTaskGroupUsage(),
-    private val ideRecommendation: IdeRecommendationService = RootMarkerIdeRecommendationService(),
+    private val developmentToolRecommendation: DevelopmentToolRecommendationService = RootMarkerDevelopmentToolRecommendationService(),
 ) {
     fun load(): AppConfig = configurations.load()
 
@@ -64,7 +64,7 @@ class GroupConfigurationService(
     }
 
     fun setGroupTagEnabled(groupId: String, enabled: Boolean): AppConfig = update { config ->
-        config.copy(groups = config.groups.replaceGroup(groupId) { it.copy(uatTagEnabled = enabled) })
+        config.copy(groups = config.groups.replaceGroup(groupId) { it.copy(tagEnabled = enabled) })
     }
 
     fun updateGroupDefaults(
@@ -100,14 +100,14 @@ class GroupConfigurationService(
                     id = "service-${repository.id.removePrefix("repo-")}",
                     repositoryId = repository.id,
                     displayName = repository.name,
-                    ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
+                    developmentTool = config.defaultDevelopmentTool,
                     baseRef = "origin/${repository.defaultRemoteBranch ?: "master"}",
                 )
                 WorkspaceStrategy.INDEPENDENT_CLONE -> GroupServiceConfig(
                     id = "service-${repository.id.removePrefix("repo-")}",
                     repositoryId = repository.id,
                     displayName = repository.name,
-                    ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
+                    developmentTool = config.defaultDevelopmentTool,
                     strategy = strategy,
                     modules = emptyList(),
                     cloneModules = listOf(IndependentCloneModuleConfig(
@@ -134,43 +134,45 @@ class GroupConfigurationService(
      * the rest of the user's selection.
      */
     fun addRepositories(groupId: String, selectedDirectories: List<Path>): BatchRepositoryAddResult {
-        val original = configurations.load()
-        val group = original.group(groupId)
-        val knownRepositories = original.repositories.associateBy { it.gitCommonDirectory.lowercase() }.toMutableMap()
-        val services = group.services.toMutableList()
-        val addedRepositories = original.repositories.toMutableList()
-        val seenCommonDirectories = mutableSetOf<String>()
+        val inspected = selectedDirectories.map { selected ->
+            selected to runCatching { repositoryInspector.inspect(selected) }
+        }
         val added = mutableListOf<Path>()
         val skipped = mutableListOf<RepositoryAddSkip>()
+        val updated = configurations.update { original ->
+            val group = original.group(groupId)
+            val knownRepositories = original.repositories.associateBy { it.gitCommonDirectory.lowercase() }.toMutableMap()
+            val services = group.services.toMutableList()
+            val addedRepositories = original.repositories.toMutableList()
+            val seenCommonDirectories = mutableSetOf<String>()
 
-        selectedDirectories.forEach { selected ->
-            val inspected = runCatching { repositoryInspector.inspect(selected) }.getOrElse { error ->
-                skipped += RepositoryAddSkip(selected, error.message ?: "不是可用的 Git 主仓库")
-                return@forEach
+            inspected.forEach { (selected, result) ->
+                val repositoryInspection = result.getOrElse { error ->
+                    skipped += RepositoryAddSkip(selected, error.message ?: "不是可用的 Git 主仓库")
+                    return@forEach
+                }
+                val commonKey = repositoryInspection.gitCommonDirectory.lowercase()
+                if (!seenCommonDirectories.add(commonKey)) {
+                    skipped += RepositoryAddSkip(selected, "所选目录指向重复的 Git 仓库")
+                    return@forEach
+                }
+                val repository = knownRepositories[commonKey] ?: repositoryInspection.also {
+                    knownRepositories[commonKey] = it
+                    addedRepositories += it
+                }
+                if (services.any { it.repositoryId == repository.id }) {
+                    skipped += RepositoryAddSkip(selected, "该仓库已存在于组 ${group.name} 中")
+                    return@forEach
+                }
+                services += standardService(repository, original.defaultDevelopmentTool)
+                added.add(selected)
             }
-            val commonKey = inspected.gitCommonDirectory.lowercase()
-            if (!seenCommonDirectories.add(commonKey)) {
-                skipped += RepositoryAddSkip(selected, "所选目录指向重复的 Git 仓库")
-                return@forEach
-            }
-            val repository = knownRepositories[commonKey] ?: inspected.also {
-                knownRepositories[commonKey] = it
-                addedRepositories += it
-            }
-            if (services.any { it.repositoryId == repository.id }) {
-                skipped += RepositoryAddSkip(selected, "该仓库已存在于组 ${group.name} 中")
-                return@forEach
-            }
-            services += standardService(repository)
-            added.add(selected)
+
+            if (added.isEmpty()) original else original.copy(
+                repositories = addedRepositories,
+                groups = original.groups.replaceGroup(groupId) { it.copy(services = services) },
+            )
         }
-
-        if (added.isEmpty()) return BatchRepositoryAddResult(original, emptyList(), skipped)
-        val updated = original.copy(
-            repositories = addedRepositories,
-            groups = original.groups.replaceGroup(groupId) { it.copy(services = services) },
-        )
-        configurations.save(updated)
         return BatchRepositoryAddResult(updated, added, skipped)
     }
 
@@ -208,16 +210,14 @@ class GroupConfigurationService(
     }
 
     private fun update(transform: (AppConfig) -> AppConfig): AppConfig {
-        val updated = transform(configurations.load())
-        configurations.save(updated)
-        return updated
+        return configurations.update(transform)
     }
 
-    private fun standardService(repository: RepositoryConfig): GroupServiceConfig = GroupServiceConfig.standard(
+    private fun standardService(repository: RepositoryConfig, developmentTool: DevelopmentToolType): GroupServiceConfig = GroupServiceConfig.standard(
         id = "service-${repository.id.removePrefix("repo-")}",
         repositoryId = repository.id,
         displayName = repository.name,
-        ideType = ideRecommendation.recommend(Path.of(repository.rootPath)),
+        developmentTool = developmentTool,
         baseRef = "origin/${repository.defaultRemoteBranch ?: "master"}",
     )
 }

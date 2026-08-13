@@ -17,6 +17,17 @@ import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
 import com.snowball.awm.core.MeegleRequirementMetadataProvider
 import com.snowball.awm.core.MeegleProjectConfig
+import com.snowball.awm.core.MeegleProjectCatalog
+import com.snowball.awm.core.CliMeegleProjectCatalog
+import com.snowball.awm.core.MeegleCliService
+import com.snowball.awm.core.ProcessMeegleCliService
+import com.snowball.awm.core.LocalGitEnvironmentInspector
+import com.snowball.awm.core.DiagnosticsExporter
+import com.snowball.awm.core.ApplicationEvent
+import com.snowball.awm.core.ApplicationErrorLogReader
+import com.snowball.awm.core.EventSink
+import com.snowball.awm.core.JsonlEventSink
+import com.snowball.awm.core.error
 import com.snowball.awm.core.MeegleRequirementLinkSource
 import com.snowball.awm.core.RequirementLinkFailureLog
 import com.snowball.awm.core.GitRepositoryInspector
@@ -24,14 +35,16 @@ import com.snowball.awm.core.GroupConfigurationService
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.GitRemoteBranchCatalog
 import com.snowball.awm.core.ManifestStore
+import com.snowball.awm.core.ModuleBaseOverride
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RepositoryInspector
+import com.snowball.awm.core.RepositoryOperationLock
 import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
-import com.snowball.awm.core.UatTagDeliveryAdapter
+import com.snowball.awm.core.GitTagDeliveryAdapter
 import com.snowball.awm.core.DeliveryPipelineRegistry
 import com.snowball.awm.core.TagOperation
 import com.snowball.awm.core.TaskApplicationService
@@ -48,7 +61,20 @@ import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.WorkspaceToolLaunchService
 import com.snowball.awm.core.WorkspaceGitHealth
 import com.snowball.awm.core.WorkspaceGitStatusService
+import com.snowball.awm.core.WorkspaceGitOperationService
+import com.snowball.awm.core.WorkspaceGitBatchMode
+import com.snowball.awm.core.WorkspaceGitBatchResult
 import com.snowball.awm.core.GitWorkspaceGitStatusReader
+import com.snowball.awm.core.GitTaskBranchCatalog
+import com.snowball.awm.core.TaskBranchCatalog
+import com.snowball.awm.core.WorkspaceRepairConfirmation
+import com.snowball.awm.core.WorkspaceRepairPreview
+import com.snowball.awm.core.WorkspaceRepairResult
+import com.snowball.awm.core.WorkspaceRepairService
+import com.snowball.awm.core.WorkspaceProvisioningService
+import com.snowball.awm.core.WorkspaceBranchReuseInspector
+import com.snowball.awm.core.StandardWorktreeProvisioner
+import com.snowball.awm.core.IndependentCloneProvisioner
 import com.snowball.awm.core.toInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
@@ -62,7 +88,7 @@ enum class NavigationItem(val title: String, val subtitle: String) {
     TASKS("研发任务", "Tasks"),
     ARCHIVED("已归档", "Archived"),
     SERVICES("服务仓库", "Services"),
-    UAT("UAT 构建", "UAT Builds"),
+    TAG("Tag 构建", "Tag Builds"),
     SETTINGS("设置", "Settings"),
 }
 
@@ -74,9 +100,15 @@ data class DeleteRiskInspection(
 
 sealed interface RemoteBranchesState {
     data object Idle : RemoteBranchesState
-    data object Loading : RemoteBranchesState
-    data class Loaded(val branches: List<String>) : RemoteBranchesState
-    data class Failed(val message: String) : RemoteBranchesState
+    data class Loading(val staleBranches: List<String> = emptyList()) : RemoteBranchesState
+    data class Loaded(
+        val branches: List<String>,
+        val loadedAtNanos: Long = System.nanoTime(),
+    ) : RemoteBranchesState
+    data class Failed(
+        val message: String,
+        val staleBranches: List<String> = emptyList(),
+    ) : RemoteBranchesState
 }
 
 data class WorkspaceToolOption(
@@ -95,29 +127,57 @@ private data class LoadedTasks(
 /** Desktop dependency container; feature controllers expose its application use cases to Compose. */
 class DesktopApplication(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
+    private val events: EventSink = JsonlEventSink(paths),
+    private val errorLogReader: ApplicationErrorLogReader = ApplicationErrorLogReader(paths),
+    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths),
     private val configStore: ConfigStore = ConfigStore(paths),
     private val manifests: ManifestStore = ManifestStore(),
     private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(),
     private val groupConfigurations: GroupConfigurationService =
         GroupConfigurationService(configStore, repositoryInspector),
     private val operationLock: TaskOperationLock = FileTaskOperationLock(paths),
+    private val repositoryLock: RepositoryOperationLock = RepositoryOperationLock(paths),
+    private val agentDocuments: AgentDocumentService = AgentDocumentService(paths),
+    private val provisioning: WorkspaceProvisioningService = WorkspaceProvisioningService(
+        listOf(
+            StandardWorktreeProvisioner(repositoryLock = repositoryLock),
+            IndependentCloneProvisioner(),
+        ),
+    ),
+    private val branchReuseInspector: WorkspaceBranchReuseInspector =
+        WorkspaceBranchReuseInspector(repositoryLock = repositoryLock),
+    private val workspaceRepairs: WorkspaceRepairService = WorkspaceRepairService(
+        manifests = manifests,
+        agentDocuments = agentDocuments,
+        taskLock = operationLock,
+        repositoryLock = repositoryLock,
+    ),
     private val tasksApplication: TaskApplicationService = TaskApplicationService(
         manifests = manifests,
-        agentDocuments = AgentDocumentService(paths),
+        provisioning = provisioning,
+        agentDocuments = agentDocuments,
         operationLock = operationLock,
+        branchReuseInspector = branchReuseInspector,
+        repairs = workspaceRepairs,
     ),
-    private val agentDocuments: AgentDocumentService = AgentDocumentService(paths),
     private val agentPropagation: AgentDocumentPropagationService =
         AgentDocumentPropagationService(manifests, agentDocuments, operationLock),
-    private val uatDelivery: UatTagDeliveryAdapter = UatTagDeliveryAdapter(TagBuildService(paths = paths)),
-    val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(uatDelivery)),
+    private val tagDelivery: GitTagDeliveryAdapter = GitTagDeliveryAdapter(
+        TagBuildService(paths = paths, repositoryLock = repositoryLock),
+    ),
+    val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(tagDelivery)),
     private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(),
     private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader()),
+    private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(repositoryLock = repositoryLock),
+    private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
     private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(),
+    private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(),
+    private val meegleCliService: MeegleCliService = ProcessMeegleCliService(),
+    private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(),
     private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
         listOf(CodexWorkspaceToolLauncher(), CursorWorkspaceToolLauncher()),
     ),
@@ -145,11 +205,19 @@ class DesktopApplication(
 
     private val initialConfig = initial.getOrDefault(AppConfig())
     private val initialTasks = scanTasks(initialConfig)
+    private var taskScanWarning: String? = initialTasks.warning
     val sessionStore = AppSessionStore(initialConfig, initialTasks.manifests)
     val operationCoordinator = OperationCoordinator(
-        initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: initialTasks.warning,
+        initialError = initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: initialTasks.warning,
+        onError = ::recordError,
     )
+    var recentErrors by mutableStateOf(errorLogReader.latest())
+        private set
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
+    private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
+    private val settingsOperationRunner = OperationRunner(settingsOperationCoordinator, scope, ioDispatcher)
+    private val meegleOperationCoordinator = OperationCoordinator(onError = ::recordError)
+    private val meegleOperationRunner = OperationRunner(meegleOperationCoordinator, scope, ioDispatcher)
     private val requirementMetadataCoordinator = RequirementMetadataCoordinator(
         provider = requirementMetadataProvider,
         scope = scope,
@@ -179,6 +247,8 @@ class DesktopApplication(
             tasks = tasksApplication,
             gitStatus = gitStatusService,
             workspaceTools = workspaceToolLaunchService,
+            gitOperations = gitOperationService,
+            taskBranchCatalog = taskBranchCatalog,
             operations = operationRunner,
             scope = scope,
             ioDispatcher = ioDispatcher,
@@ -192,6 +262,7 @@ class DesktopApplication(
             onRequirementSelected = requirementController::refresh,
             onError = ::showError,
             isBusy = { busy },
+            events = events,
         )
     }
     val settingsController by lazy {
@@ -201,9 +272,14 @@ class DesktopApplication(
             groups = groupConfigurations,
             pathPicker = nativePathPicker,
             branchCatalog = remoteBranchCatalog,
+            meegleProjectCatalog = meegleProjectCatalog,
+            meegleCliService = meegleCliService,
+            localGitInspector = localGitInspector,
             scope = scope,
             ioDispatcher = ioDispatcher,
             operations = operationRunner,
+            settingsOperations = settingsOperationRunner,
+            meegleOperations = meegleOperationRunner,
             applyConfig = ::applyConfig,
             reloadTasks = { reloadTasks() },
             showError = ::showError,
@@ -231,7 +307,7 @@ class DesktopApplication(
     val deliveryController by lazy {
         DeliveryController(
             session = sessionStore,
-            adapter = uatDelivery,
+            adapter = tagDelivery,
             operations = operationRunner,
             taskDirectory = ::taskDirectory,
             refreshGitStatus = ::refreshCurrentTaskGitStatus,
@@ -260,6 +336,15 @@ class DesktopApplication(
         private set(value) { sessionStore.selectedTask = value }
     val busy: Boolean get() = operationCoordinator.busy
     val activeOperation: String? get() = operationCoordinator.activeMessage
+    val activeOperationCancellable: Boolean get() = operationCoordinator.cancellable
+    val activeOperationCancelling: Boolean get() = operationCoordinator.cancelling
+    fun cancelActiveOperation(): Boolean = operationRunner.cancel()
+    val meegleBusy: Boolean get() = meegleOperationCoordinator.busy
+    val settingsBusy: Boolean get() = settingsOperationCoordinator.busy
+    val hasActiveOperations: Boolean get() = busy || settingsBusy || meegleBusy
+    val meegleOperationCancellable: Boolean get() = meegleOperationCoordinator.cancellable
+    val meegleOperationError: String? get() = meegleOperationCoordinator.errorMessage
+    fun cancelMeegleOperation(): Boolean = meegleOperationRunner.cancel()
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
     val tagResult: TagOperation? get() = deliveryController.state.result
@@ -272,9 +357,13 @@ class DesktopApplication(
     val remoteBranches: Map<String, RemoteBranchesState> get() = settingsController.state.remoteBranches
     val repositoryAddResult: BatchRepositoryAddResult? get() = settingsController.state.repositoryAddResult
     val workspaceGitHealth: Map<String, WorkspaceGitHealth> get() = taskController.state.gitHealth
+    val workspaceRepairPreview: WorkspaceRepairPreview? get() = taskController.repairPreview
+    val workspaceRepairResult: WorkspaceRepairResult? get() = taskController.repairResult
+    val taskBranchCandidates: TaskBranchCandidatesState get() = taskController.branchCandidates
+    val batchGitPreviewState: BatchGitPreviewState get() = taskController.batchGitPreviews
 
     val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
-    val showsUatNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
+    val showsTagNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
     val globalAgentsPath: String get() = paths.globalAgents.toAbsolutePath().normalize().toString()
     fun groupAgentsPath(groupId: String): String = paths.groupAgents(groupId).toAbsolutePath().normalize().toString()
 
@@ -306,13 +395,22 @@ class DesktopApplication(
     fun gitHealth(workspace: ServiceWorkspace): WorkspaceGitHealth? =
         taskController.gitHealth(workspace)
 
+    fun inspectWorkspaceRepair(task: TaskManifest, workspace: ServiceWorkspace) = taskController.inspectRepair(task, workspace)
+    fun repairWorkspace(task: TaskManifest, preview: WorkspaceRepairPreview, confirmation: WorkspaceRepairConfirmation) =
+        taskController.repairWorkspace(task, preview, confirmation)
+    fun clearWorkspaceRepairPreview() = taskController.clearRepairPreview()
+    fun clearWorkspaceRepairResult() = taskController.clearRepairResult()
+    fun loadTaskBranchCandidates(groupId: String, serviceIds: Set<String>) = taskController.loadTaskBranchCandidates(groupId, serviceIds)
+    fun cancelTaskBranchCandidates() = taskController.cancelTaskBranchCandidates()
+    fun cancelRemoteBranchLoads() = settingsController.cancelRemoteBranchLoads()
+
     fun requestRequirementMetadata(link: String, onResult: (RequirementMetadata?) -> Unit) {
         requirementController.requestDraftMetadata(link, onResult)
     }
 
     /** Saves the configured Feishu project identities without enabling any automatic query. */
-    fun updateMeegleProjects(projects: List<MeegleProjectConfig>): Boolean =
-        settingsController.updateMeegleProjects(projects)
+    fun updateMeegleProjects(projects: List<MeegleProjectConfig>, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateMeegleProjects(projects, onFailure)
 
 
     fun refreshCurrentTaskGitStatus() = taskController.refreshGitStatus()
@@ -348,21 +446,40 @@ class DesktopApplication(
     fun selectTask(task: TaskManifest) = taskController.select(task)
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
-    fun updateTaskRoot(value: String) = settingsController.updateTaskRoot(value)
-    fun updateExecutables(idea: String, webStorm: String, terminal: String) = settingsController.updateExecutables(idea, webStorm, terminal)
+    fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
+    fun updateDevelopmentTools(
+        tools: List<com.snowball.awm.core.DevelopmentToolConfig>,
+        defaultTool: com.snowball.awm.core.DevelopmentToolType,
+        terminal: String,
+        allowTemporaryDevelopmentToolSelection: Boolean,
+        onFailure: (Throwable) -> Unit = {},
+    ) = settingsController.updateDevelopmentTools(tools, defaultTool, terminal, allowTemporaryDevelopmentToolSelection, onFailure)
+    fun updateHiddenTaskDetailBranches(branches: List<String>, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateHiddenTaskDetailBranches(branches, onFailure)
     fun addGroup(name: String, onCompleted: () -> Unit = {}) = settingsController.addGroup(name, onCompleted)
     fun renameGroup(groupId: String, name: String, onCompleted: () -> Unit = {}) = settingsController.renameGroup(groupId, name, onCompleted)
     fun moveGroup(groupId: String, offset: Int) = settingsController.moveGroup(groupId, offset)
     fun deleteGroup(groupId: String, onCompleted: () -> Unit = {}) = settingsController.deleteGroup(groupId, onCompleted)
     fun setGroupTagEnabled(groupId: String, enabled: Boolean) = settingsController.setGroupTagEnabled(groupId, enabled)
-    fun updateGroupDefaults(groupId: String, branchPrefix: String, workspaceToolIds: List<String>) =
-        settingsController.updateGroupDefaults(groupId, branchPrefix, workspaceToolIds)
+    fun updateGroupDefaults(groupId: String, branchPrefix: String, workspaceToolIds: List<String>, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateGroupDefaults(groupId, branchPrefix, workspaceToolIds, onFailure)
     fun chooseDirectory(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseDirectory(initialPath, onSelected)
     fun chooseFile(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseFile(initialPath, onSelected)
+    fun chooseApplication(initialPath: String? = null, onSelected: (String) -> Unit) =
+        settingsController.chooseApplication(initialPath, onSelected)
     fun chooseDirectories(initialPath: String? = null, onSelected: (List<String>) -> Unit) = settingsController.chooseDirectories(initialPath, onSelected)
     fun loadRemoteBranches(repositoryId: String, remote: String = "origin", force: Boolean = false) =
         settingsController.loadRemoteBranches(repositoryId, remote, force)
     fun remoteBranchState(repositoryId: String, remote: String) = settingsController.remoteBranchState(repositoryId, remote)
+    val meegleProjectCatalogState: MeegleProjectCatalogState get() = settingsController.state.meegleProjects
+    val meegleCliState: MeegleCliState get() = settingsController.state.meegleCli
+    val localGitSettingsState: LocalGitSettingsState get() = settingsController.state.localGit
+    fun settingsSaveState(key: String): SettingsSaveState = settingsController.saveState(key)
+    fun refreshLocalGit(force: Boolean = false) = settingsController.refreshLocalGit(force)
+    fun loadMeegleProjects(force: Boolean = false) = settingsController.loadMeegleProjects(force)
+    fun cancelMeegleProjectLoad() = settingsController.cancelMeegleProjectLoad()
+    fun refreshMeegleStatus(force: Boolean = false) = settingsController.refreshMeegleStatus(force)
+    fun loginMeegle() = settingsController.loginMeegle()
     fun addRepository(groupId: String, selectedDirectory: String, strategy: WorkspaceStrategy) =
         settingsController.addRepository(groupId, selectedDirectory, strategy)
     fun addRepositories(groupId: String, selectedDirectories: List<String>, onCompleted: () -> Unit = {}) =
@@ -379,8 +496,23 @@ class DesktopApplication(
     fun readGroupAgents(groupId: String): String = agentInstructionsController.readGroup(groupId)
     fun saveGroupAgents(groupId: String, content: String) = agentInstructionsController.saveGroup(groupId, content)
     fun markGroupAgentsEdited(groupId: String, content: String) = agentInstructionsController.markGroupEdited(groupId, content)
-    fun previewAgents(folderName: String, branch: String, groupId: String, serviceIds: Set<String>, requirementLink: String, notes: String): String =
-        agentInstructionsController.preview(folderName, branch, groupId, serviceIds, requirementLink, notes)
+    fun previewAgents(
+        folderName: String,
+        branch: String,
+        groupId: String,
+        serviceIds: Set<String>,
+        requirementLink: String,
+        notes: String,
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+    ): String = agentInstructionsController.preview(
+        folderName,
+        branch,
+        groupId,
+        serviceIds,
+        requirementLink,
+        notes,
+        baseOverrides,
+    )
     fun createTask(
         folderName: String,
         branch: String,
@@ -390,6 +522,7 @@ class DesktopApplication(
         notes: String,
         workspaceToolIds: List<String> = emptyList(),
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
         onCompleted: () -> Unit = {},
     ) = taskController.create(
         folderName,
@@ -400,6 +533,7 @@ class DesktopApplication(
         notes,
         workspaceToolIds,
         confirmedBranchReuseKeys,
+        baseOverrides,
         onCompleted,
     )
 
@@ -429,18 +563,91 @@ class DesktopApplication(
         task: TaskManifest,
         serviceIds: List<String>,
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
         onCompleted: () -> Unit = {},
-    ) = taskController.addServices(task, serviceIds, confirmedBranchReuseKeys, onCompleted)
+    ) = taskController.addServices(task, serviceIds, confirmedBranchReuseKeys, baseOverrides, onCompleted)
 
     fun retryFailedServices(task: TaskManifest, serviceIds: List<String>? = null) = taskController.retry(task, serviceIds)
 
     fun branchInfo(task: TaskManifest): String = TaskBranchInfoFormatter.format(task)
 
-    fun openWorkData(task: TaskManifest) = taskController.openWorkData(task)
+    fun openWorkData(task: TaskManifest, type: com.snowball.awm.core.DevelopmentToolType = config.defaultDevelopmentTool) =
+        desktopActions.openWorkData(taskDirectory(task), type)
+
+    fun configuredDevelopmentTools(): List<com.snowball.awm.core.DevelopmentToolType> = config.developmentTools.map { it.type }
+
+    fun defaultCommitMessage(task: TaskManifest, workspace: ServiceWorkspace) = taskController.defaultCommitMessage(task, workspace)
+    fun commitWorkspace(task: TaskManifest, workspace: ServiceWorkspace, message: String, pushAfter: Boolean = false, expectedFingerprint: String? = null) =
+        taskController.commit(task, workspace, message, pushAfter, expectedFingerprint)
+    fun pushWorkspace(task: TaskManifest, workspace: ServiceWorkspace) = taskController.push(task, workspace)
+    fun physicalWorkspaces(task: TaskManifest) = taskController.physicalWorkspaces(task)
+    fun workspaceKey(workspace: ServiceWorkspace) = taskController.workspaceKey(workspace)
+    fun batchGit(
+        task: TaskManifest,
+        mode: WorkspaceGitBatchMode,
+        selectedWorkspaceKeys: Set<String>,
+        commitMessages: Map<String, String> = emptyMap(),
+        expectedFingerprints: Map<String, String> = emptyMap(),
+        onCompleted: (WorkspaceGitBatchResult) -> Unit,
+    ) = taskController.batchGit(task, mode, selectedWorkspaceKeys, commitMessages, expectedFingerprints, onCompleted)
+    fun loadBatchGitPreviews(task: TaskManifest) = taskController.loadBatchGitPreviews(task)
 
     fun clearTagResult() = deliveryController.clearResult()
 
-    fun openWorkspace(workspace: ServiceWorkspace) = desktopActions.openWorkspace(workspace)
+    fun openWorkspace(workspace: ServiceWorkspace, type: com.snowball.awm.core.DevelopmentToolType = workspace.developmentTool) =
+        desktopActions.openWorkspace(workspace, type)
+
+    fun testDevelopmentTool(type: com.snowball.awm.core.DevelopmentToolType, path: String) {
+        val target = config.taskRoot?.let(Path::of)?.takeIf(java.nio.file.Files::isDirectory)
+        if (target == null) {
+            showError(IllegalStateException("请先配置有效的任务根目录，再测试打开开发工具"))
+            return
+        }
+        runCatching { desktopIntegration.openDevelopmentTool(target, type, path) }.onFailure(::showError)
+    }
+
+    fun refreshErrorLog() {
+        recentErrors = errorLogReader.latest()
+    }
+
+    fun openLogDirectory() {
+        runCatching {
+            java.nio.file.Files.createDirectories(paths.logs)
+            desktopIntegration.openDirectory(paths.logs)
+        }.onFailure(::showError)
+    }
+
+    fun configBackups(): List<ConfigStore.Backup> = runCatching { configStore.backups() }.getOrDefault(emptyList())
+    fun previewConfigImport(path: String): ConfigStore.ImportPreview = configStore.previewImport(Path.of(path))
+
+    fun restoreConfigBackup(path: String): Boolean = operationRunner.run(
+        "正在恢复配置备份…",
+        "配置备份已恢复",
+        block = { configStore.restore(Path.of(path)) },
+        onSuccess = { applyConfig(it); reloadTasks() },
+    )
+
+    fun importConfig(path: String): Boolean = operationRunner.run(
+        "正在导入配置…",
+        "配置已导入",
+        block = { configStore.importFrom(Path.of(path)) },
+        onSuccess = { applyConfig(it); reloadTasks() },
+    )
+
+    fun exportConfig(): Boolean = operationRunner.run(
+        "正在导出配置…",
+        "配置已导出",
+        block = { configStore.exportTo(paths.backups.resolve("config-export-${System.currentTimeMillis()}.json")) },
+        onSuccess = { desktopIntegration.reveal(it) },
+    )
+
+    fun exportDiagnostics(): Boolean = operationRunner.run(
+        "正在生成诊断包…",
+        "诊断包已生成",
+        cancellable = true,
+        block = { diagnosticsExporter.export(config, configurationLoadError ?: taskScanWarning) },
+        onSuccess = { desktopIntegration.reveal(it) },
+    )
 
     fun reveal(path: String) = desktopActions.reveal(Path.of(path))
     fun openDirectory(path: String) = desktopActions.openDirectory(Path.of(path))
@@ -459,7 +666,17 @@ class DesktopApplication(
     }
 
     fun showError(error: Throwable) {
-        operationCoordinator.errorMessage = error.message ?: error::class.simpleName ?: "操作失败"
+        operationCoordinator.errorMessage = OperationFailureDetails.format(error)
+        recordError(error)
+    }
+
+    private fun recordError(error: Throwable) {
+        events.error(
+            event = "application.error",
+            message = OperationFailureDetails.format(error),
+            metadata = mapOf("exception" to (error::class.qualifiedName ?: error::class.simpleName.orEmpty())),
+        )
+        recentErrors = errorLogReader.latest()
     }
 
     override fun close() {
@@ -480,7 +697,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM v5 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.7.x 任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(
@@ -497,6 +714,7 @@ class DesktopApplication(
 
     private fun reloadTasks(preferredFolder: String? = selectedTask?.folderName) {
         val loaded = scanTasks(config)
+        taskScanWarning = loaded.warning
         sessionStore.replaceTasks(loaded.manifests, preferredFolder)
         deliveryController.reloadHistory()
         requirementController.reconcileTasks()
@@ -508,7 +726,7 @@ class DesktopApplication(
         val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects
         config = updated
         configurationLoadError = null
-        if (navigation == NavigationItem.UAT && !TagNavigationPolicy.isVisible(updated)) {
+        if (navigation == NavigationItem.TAG && !TagNavigationPolicy.isVisible(updated)) {
             navigation = NavigationItem.TASKS
         }
         repositories = updated.repositories.map(RepositoryConfig::toInfo)

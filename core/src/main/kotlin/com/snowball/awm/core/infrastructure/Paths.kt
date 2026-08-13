@@ -8,6 +8,8 @@ data class ApplicationPaths(
 ) {
     val config: Path = home.resolve("config.json")
     val logs: Path = home.resolve("logs")
+    val backups: Path = home.resolve("backups")
+    val diagnostics: Path = home.resolve("diagnostics")
     val locks: Path = home.resolve("locks")
     val temp: Path = home.resolve("temp")
     val agents: Path = home.resolve("agents")

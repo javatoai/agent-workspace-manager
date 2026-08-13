@@ -91,7 +91,7 @@ class AgentDocumentServiceTest {
             serviceName = "订单服务",
             repositoryPath = "C:/source/orders",
             worktreePath = "C:/tasks/table/orders",
-            ideType = IdeType.IDEA,
+            developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
             branch = "feature/orders",
             health = WorkspaceHealth.READY,
             baseRef = "origin/master",

@@ -197,9 +197,14 @@ class DesktopApplicationTest {
             assertEquals(listOf("origin/main", "origin/release/test"), assertIs<RemoteBranchesState.Loaded>(controller.remoteBranchState("repo", "origin")).branches)
             shouldFail = true
             controller.loadRemoteBranches("repo", force = true)
-            assertIs<RemoteBranchesState.Loading>(controller.remoteBranchState("repo", "origin"))
+            assertEquals(
+                listOf("origin/main", "origin/release/test"),
+                assertIs<RemoteBranchesState.Loading>(controller.remoteBranchState("repo", "origin")).staleBranches,
+            )
             advanceUntilIdle()
-            assertEquals("offline", assertIs<RemoteBranchesState.Failed>(controller.remoteBranchState("repo", "origin")).message)
+            val failed = assertIs<RemoteBranchesState.Failed>(controller.remoteBranchState("repo", "origin"))
+            assertEquals("offline", failed.message)
+            assertEquals(listOf("origin/main", "origin/release/test"), failed.staleBranches)
         } finally {
             controller.close()
             Dispatchers.resetMain()
@@ -208,10 +213,10 @@ class DesktopApplicationTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `closing the last effective Tag gate returns UAT page to tasks`() = runTest {
+    fun `closing the last effective Tag gate returns Tag page to tasks`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
-        val root = Files.createTempDirectory("awm-uat-navigation")
+        val root = Files.createTempDirectory("awm-tag-navigation")
         val paths = ApplicationPaths(root.resolve("home"))
         val store = ConfigStore(paths)
         val repository = RepositoryConfig("repo", "repo", root.resolve("repo").toString(), root.resolve("repo/.git").toString())
@@ -220,11 +225,11 @@ class DesktopApplicationTest {
         )))
         val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
         try {
-            controller.navigation = NavigationItem.UAT
+            controller.navigation = NavigationItem.TAG
             controller.setGroupTagEnabled("g", false)
             advanceUntilIdle()
 
-            assertEquals(false, controller.showsUatNavigation)
+            assertEquals(false, controller.showsTagNavigation)
             assertEquals(NavigationItem.TASKS, controller.navigation)
         } finally {
             controller.close()

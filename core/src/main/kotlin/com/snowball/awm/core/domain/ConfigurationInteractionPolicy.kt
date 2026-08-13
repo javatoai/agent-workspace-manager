@@ -39,7 +39,7 @@ data class RemoteBranchRef(val remote: String, val branch: String) {
 
 /** Pure policy shared by the sidebar and controller navigation fallback. */
 object TagNavigationPolicy {
-    fun isVisible(config: AppConfig): Boolean = config.groups.any(GroupConfig::uatTagEnabled)
+    fun isVisible(config: AppConfig): Boolean = config.groups.any(GroupConfig::tagEnabled)
 }
 
 /** Keeps a user's branch edit while allowing untouched drafts to follow the selected group. */
@@ -54,8 +54,13 @@ object GroupBranchPrefixPolicy {
 
 /** Resolves an optional label without coupling display text to branch naming. */
 object ModuleDisplayNaming {
-    fun resolve(configuredName: String, serviceName: String, baseRef: String, moduleCount: Int): String =
-        configuredName.trim().ifBlank {
-            if (moduleCount == 1) serviceName else baseRef.trimEnd('/').substringAfterLast('/')
+    fun resolve(configuredName: String, serviceName: String, baseRef: String, moduleCount: Int): String {
+        val configured = configuredName.trim()
+        if (configured.isBlank() || moduleCount == 1 && configured == "default") return if (moduleCount == 1) {
+            serviceName
+        } else {
+            baseRef.trimEnd('/').substringAfterLast('/')
         }
+        return configured
+    }
 }

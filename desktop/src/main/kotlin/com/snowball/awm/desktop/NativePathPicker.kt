@@ -15,6 +15,7 @@ interface NativePathPicker {
     suspend fun pickDirectory(initialPath: String? = null): String?
     suspend fun pickDirectories(initialPath: String? = null): List<String>?
     suspend fun pickFile(initialPath: String? = null, extensions: List<String> = emptyList()): String?
+    suspend fun pickApplication(initialPath: String? = null): String?
 }
 
 class FileKitNativePathPicker : NativePathPicker {
@@ -38,6 +39,13 @@ class FileKitNativePathPicker : NativePathPicker {
         ?.file
         ?.absolutePath
 
+    override suspend fun pickApplication(initialPath: String?): String? =
+        if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
+            pickDirectory(initialPath)
+        } else {
+            pickFile(initialPath)
+        }
+
     private fun String?.asInitialPlatformFile(): PlatformFile? =
         this?.trim()?.takeIf(String::isNotEmpty)?.let(::File)?.let(::PlatformFile)
 
@@ -58,6 +66,9 @@ class PathSelectionCoordinator(
 
     suspend fun file(currentValue: String, initialPath: String? = currentValue): String =
         picker.pickFile(initialPath) ?: currentValue
+
+    suspend fun application(currentValue: String, initialPath: String? = currentValue): String =
+        picker.pickApplication(initialPath) ?: currentValue
 
     suspend fun directories(initialPath: String? = null): List<String> =
         picker.pickDirectories(initialPath).orEmpty()

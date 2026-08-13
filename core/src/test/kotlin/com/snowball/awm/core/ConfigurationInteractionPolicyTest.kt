@@ -55,17 +55,17 @@ class ConfigurationInteractionPolicyTest {
             id = "service",
             repositoryId = repository.id,
             displayName = "Repo",
-            modules = listOf(ServiceModuleConfig("main", uatRef = "upstream/release/test")),
+            modules = listOf(ServiceModuleConfig("main", tagTargetRef = "upstream/release/test")),
         )
         val expected = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("g", "G", services = listOf(service))))
 
         store.save(expected)
 
-        assertEquals("0.6.0", expected.schemaVersion)
+        assertEquals("0.7.0", expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
-        assertTrue("\"uatRef\"" in json)
-        assertTrue("\"schemaVersion\": \"0.6.0\"" in json)
+        assertTrue("\"tagTargetRef\"" in json)
+        assertTrue("\"schemaVersion\": \"0.7.0\"" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
     }
@@ -88,20 +88,21 @@ class ConfigurationInteractionPolicyTest {
         val base = AppConfig(repositories = repositories, groups = listOf(GroupConfig("g", "G", services = listOf(standard, clone))))
 
         assertTrue(TagNavigationPolicy.isVisible(base))
-        assertFalse(TagNavigationPolicy.isVisible(base.copy(groups = listOf(base.groups.single().copy(uatTagEnabled = false)))))
+        assertFalse(TagNavigationPolicy.isVisible(base.copy(groups = listOf(base.groups.single().copy(tagEnabled = false)))))
         val childrenOff = base.copy(groups = listOf(base.groups.single().copy(services = listOf(
-            standard.copy(modules = standard.modules.map { it.copy(uatTagEnabled = false) }),
-            clone.copy(cloneModules = clone.cloneModules.map { it.copy(uatTagEnabled = false) }),
+            standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }),
+            clone.copy(cloneModules = clone.cloneModules.map { it.copy(tagEnabled = false) }),
         ))))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff.copy(groups = listOf(childrenOff.groups.single().copy(
-            services = listOf(standard.copy(modules = standard.modules.map { it.copy(uatTagEnabled = false) }), clone.copy(cloneModules = clone.cloneModules.map { it.copy(uatTagEnabled = true) })),
+            services = listOf(standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }), clone.copy(cloneModules = clone.cloneModules.map { it.copy(tagEnabled = true) })),
         )))))
     }
 
     @Test
     fun `module display name falls back by module count`() {
         assertEquals("Orders", ModuleDisplayNaming.resolve("", "Orders", "origin/master", 1))
+        assertEquals("Orders", ModuleDisplayNaming.resolve("default", "Orders", "origin/master", 1))
         assertEquals("test", ModuleDisplayNaming.resolve("", "Orders", "origin/release/test", 2))
         assertEquals("用户覆盖", ModuleDisplayNaming.resolve(" 用户覆盖 ", "Orders", "origin/master", 2))
     }

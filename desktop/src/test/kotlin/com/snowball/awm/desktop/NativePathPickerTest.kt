@@ -10,6 +10,7 @@ class NativePathPickerTest {
         val cancelled = PathSelectionCoordinator(FakeNativePathPicker())
         assertEquals("C:/tasks", cancelled.directory("C:/tasks"))
         assertEquals("C:/idea.exe", cancelled.file("C:/idea.exe"))
+        assertEquals("C:/idea.exe", cancelled.application("C:/idea.exe"))
         assertEquals(emptyList(), cancelled.directories("C:/tasks"))
 
         val selected = PathSelectionCoordinator(
@@ -29,4 +30,5 @@ private class FakeNativePathPicker(
     override suspend fun pickDirectory(initialPath: String?): String? = directory
     override suspend fun pickDirectories(initialPath: String?): List<String>? = directories
     override suspend fun pickFile(initialPath: String?, extensions: List<String>): String? = file
+    override suspend fun pickApplication(initialPath: String?): String? = file
 }

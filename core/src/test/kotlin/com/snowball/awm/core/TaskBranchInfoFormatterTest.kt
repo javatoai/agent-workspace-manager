@@ -49,7 +49,7 @@ job-manager：feature/job""",
         serviceName = name,
         repositoryPath = "D:/$name",
         worktreePath = "D:/task/$name",
-        ideType = IdeType.IDEA,
+        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
         branch = branch,
         health = WorkspaceHealth.READY,
     )

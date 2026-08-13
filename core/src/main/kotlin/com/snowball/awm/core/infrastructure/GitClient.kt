@@ -16,6 +16,7 @@ data class WorktreeRecord(
     val branch: String?,
     val bare: Boolean = false,
     val detached: Boolean = false,
+    val locked: Boolean = false,
 )
 
 data class RepositoryStatus(
@@ -48,6 +49,23 @@ class GitClient(
         )
         if (check && !result.succeeded) {
             throw GitException("Git 命令失败：git ${arguments.joinToString(" ")}", result)
+        }
+        return result
+    }
+
+    /** Runs a local, read-only Git probe without taking optional repository locks. */
+    fun readOnly(
+        repository: Path,
+        vararg arguments: String,
+        timeout: Duration = Duration.ofMinutes(2),
+        check: Boolean = true,
+    ): CommandResult {
+        val result = runner.run(
+            listOf("git", "--no-optional-locks", "-c", "core.longpaths=true", "-C", repository.toString()) + arguments,
+            timeout = timeout,
+        )
+        if (check && !result.succeeded) {
+            throw GitException("Git read-only command failed: git ${arguments.joinToString(" ")}", result)
         }
         return result
     }
@@ -114,15 +132,17 @@ class GitClient(
         var branch: String? = null
         var bare = false
         var detached = false
+        var locked = false
 
         fun flush() {
             val value = path ?: return
-            records += WorktreeRecord(value, head, branch, bare, detached)
+            records += WorktreeRecord(value, head, branch, bare, detached, locked)
             path = null
             head = null
             branch = null
             bare = false
             detached = false
+            locked = false
         }
 
         run(repository, "worktree", "list", "--porcelain").stdout.lineSequence().forEach { line ->
@@ -136,10 +156,16 @@ class GitClient(
                 line.startsWith("branch ") -> branch = line.removePrefix("branch ").removePrefix("refs/heads/")
                 line == "bare" -> bare = true
                 line == "detached" -> detached = true
+                line == "locked" || line.startsWith("locked ") -> locked = true
             }
         }
         flush()
         return records
+    }
+
+    /** Removes only Git's stale linked-worktree administrative entries. */
+    fun pruneWorktrees(repository: Path) {
+        run(repository, "worktree", "prune")
     }
 
     fun refExists(repository: Path, ref: String): Boolean =
@@ -152,9 +178,14 @@ class GitClient(
         run(repository, "merge-base", "--is-ancestor", ancestor, descendant, check = false).succeeded
 
     fun fetch(repository: Path, remote: String = "origin") {
-        // Do not force-update local tags: refreshing a remote base must not
-        // silently rewrite an existing local tag with the same name.
-        run(repository, "fetch", "--prune", "--tags", remote, timeout = Duration.ofMinutes(5))
+        // Branch refresh must not fetch tags. A conflicting local tag is unrelated
+        // to task provisioning and must never make ordinary workspace creation fail.
+        run(repository, "fetch", "--prune", "--no-tags", remote, timeout = Duration.ofMinutes(5))
+    }
+
+    /** Tag synchronization is explicit and deliberately non-forcing. */
+    fun fetchTags(repository: Path, remote: String = "origin") {
+        run(repository, "fetch", "--tags", "--no-force", remote, timeout = Duration.ofMinutes(5))
     }
 
     fun addWorktree(

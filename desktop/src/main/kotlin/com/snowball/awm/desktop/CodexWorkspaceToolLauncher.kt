@@ -18,10 +18,12 @@ class SystemExternalUriOpener : ExternalUriOpener {
     override fun open(uri: URI) {
         require(uri.scheme.equals("codex", ignoreCase = true)) { "不允许打开非 Codex URI：${uri.scheme}" }
         when {
-            Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) ->
-                Desktop.getDesktop().browse(uri)
+            // Desktop.browse is browser-first. On Windows, hand the URI to the
+            // shell so it resolves the registered codex:// protocol handler.
             System.getProperty("os.name").startsWith("Windows", ignoreCase = true) ->
                 ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", uri.toASCIIString()).start()
+            Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) ->
+                Desktop.getDesktop().browse(uri)
             System.getProperty("os.name").startsWith("Mac", ignoreCase = true) ->
                 ProcessBuilder("open", uri.toASCIIString()).start()
             else -> error("当前系统不支持打开 Codex 桌面深链")

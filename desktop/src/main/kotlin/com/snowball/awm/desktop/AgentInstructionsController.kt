@@ -12,6 +12,7 @@ import com.snowball.awm.core.AgentInstructionScope
 import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.AwmTime
 import com.snowball.awm.core.ModuleDisplayNaming
+import com.snowball.awm.core.ModuleBaseOverride
 import com.snowball.awm.core.RemoteBranchRef
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.ServiceWorkspace
@@ -128,7 +129,15 @@ class AgentInstructionsController internal constructor(
         }
     }
 
-    fun preview(folderName: String, branch: String, groupId: String, serviceIds: Set<String>, requirementLink: String, notes: String): String {
+    fun preview(
+        folderName: String,
+        branch: String,
+        groupId: String,
+        serviceIds: Set<String>,
+        requirementLink: String,
+        notes: String,
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+    ): String {
         val config = session.config
         val root = config.taskRoot?.let(Path::of) ?: paths.temp
         val normalizedName = folderName.ifBlank { "任务名称" }
@@ -137,28 +146,39 @@ class AgentInstructionsController internal constructor(
         val now = AwmTime.format(Instant.now())
         val directory = root.resolve(directoryName)
         val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        val overridesByModule = baseOverrides.associateBy { "${it.serviceId}::${it.moduleId}" }
         val workspaces = config.group(groupId).services.filter { it.id in serviceIds }.flatMap { service ->
             val repository = repositories[service.repositoryId] ?: return@flatMap emptyList()
             when (service.strategy) {
                 WorkspaceStrategy.STANDARD_WORKTREE -> {
-                    val branches = runCatching { TaskBranchNaming.derive(normalizedBranch, service.modules) }
+                    val modules = service.modules.map { module ->
+                        overridesByModule["${service.id}::${module.id}"]?.let { override ->
+                            module.copy(baseRef = override.baseRef)
+                        } ?: module
+                    }
+                    val explicitBranches = modules.mapNotNull { module ->
+                        overridesByModule["${service.id}::${module.id}"]?.targetBranch?.let { module.id to it }
+                    }.toMap()
+                    val branches = runCatching { TaskBranchNaming.resolve(normalizedBranch, modules, explicitBranches) }
                         .getOrElse { service.modules.associate { it.id to normalizedBranch } }
-                    val distinctBaseCount = service.modules.map(TaskBranchNaming::baseIdentity).distinct().size
-                    service.modules.map { module ->
+                    modules.map { module ->
                         ServiceWorkspace(
                             repository.id, service.displayName, repository.rootPath,
-                            directory.resolve(WorkspaceLayout.standardDirectoryName(service, module, distinctBaseCount)).toString(),
-                            service.ideType, branches.getValue(module.id), groupServiceId = service.id, moduleId = module.id,
-                            moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, service.modules.size),
+                            directory.resolve(WorkspaceLayout.standardDirectoryName(service, module, modules.size)).toString(),
+                            service.developmentTool, branches.getValue(module.id), groupServiceId = service.id, moduleId = module.id,
+                            moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, modules.size),
                             strategy = service.strategy, baseRef = module.baseRef,
                         )
                     }
                 }
-                WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.map { module ->
+                WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.map { configuredModule ->
+                    val module = overridesByModule["${service.id}::${configuredModule.id}"]?.let { override ->
+                        configuredModule.copy(branch = override.baseRef)
+                    } ?: configuredModule
                     ServiceWorkspace(
                         repository.id, service.displayName, repository.rootPath,
                         directory.resolve(WorkspaceLayout.cloneDirectoryName(service, module)).toString(),
-                        service.ideType, RemoteBranchRef.parse(module.branch).branch, groupServiceId = service.id, moduleId = module.id,
+                        service.developmentTool, RemoteBranchRef.parse(module.branch).branch, groupServiceId = service.id, moduleId = module.id,
                         moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.branch, service.cloneModules.size),
                         strategy = service.strategy, originUrl = repository.originUrl, baseRef = module.branch,
                     )

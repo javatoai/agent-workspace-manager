@@ -40,7 +40,7 @@ class ManifestStoreTest {
 
         store.save(directory, expected)
 
-        assertEquals("0.6.0", store.load(directory).schemaVersion)
+        assertEquals("0.7.0", store.load(directory).schemaVersion)
         assertEquals(expected, store.load(directory))
     }
 
@@ -81,12 +81,12 @@ class ManifestStoreTest {
         Files.createDirectories(taskDirectory)
         Files.writeString(
             taskDirectory.resolve(ManifestStore.FILE_NAME),
-            """{"schemaVersion":"0.6.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
+            """{"schemaVersion":"0.7.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
         )
 
         val store = ManifestStore()
         val manifest = store.load(taskDirectory)
-        assertEquals("0.6.7", manifest.schemaVersion)
+        assertEquals("0.7.7", manifest.schemaVersion)
         store.save(taskDirectory, manifest)
         assertEquals(CURRENT_TASK_MANIFEST_SCHEMA_VERSION, store.load(taskDirectory).schemaVersion)
     }
@@ -124,5 +124,40 @@ class ManifestStoreTest {
 
         kotlin.test.assertEquals(listOf("valid"), scan.current.map { it.second.folderName })
         kotlin.test.assertEquals(setOf(brokenDirectory), scan.failures.keys)
+    }
+
+    @Test
+    fun `removed source repository task is preserved and reported as a read failure`() {
+        val taskDirectory = temporary.resolve("source-task")
+        Files.createDirectories(taskDirectory)
+        val original = """{"schemaVersion":"0.7.0","folderName":"source","taskDirectoryName":"source","featureBranch":"feature/source","createdAt":"2026-08-12 00:00:00","updatedAt":"2026-08-12 00:00:00","services":[{"repositoryId":"repo","serviceName":"source","repositoryPath":"D:/repo","worktreePath":"D:/repo","developmentTool":"INTELLIJ_IDEA","branch":"feature/source","strategy":"SOURCE_REPOSITORY"}]}"""
+        val target = taskDirectory.resolve(ManifestStore.FILE_NAME)
+        Files.writeString(target, original)
+
+        val store = ManifestStore()
+        val error = assertThrows(IllegalStateException::class.java) { store.load(taskDirectory) }
+        val scan = store.scan(temporary)
+
+        kotlin.test.assertTrue(error.message.orEmpty().contains("不再支持原仓库分支"))
+        assertEquals(setOf(taskDirectory), scan.failures.keys)
+        kotlin.test.assertTrue(scan.current.isEmpty())
+        assertEquals(original, Files.readString(target))
+    }
+
+    @Test
+    fun `ordinary early 0_7 task ignores removed nullable source metadata`() {
+        val taskDirectory = temporary.resolve("ordinary-with-source-metadata")
+        Files.createDirectories(taskDirectory)
+        Files.writeString(
+            taskDirectory.resolve(ManifestStore.FILE_NAME),
+            """{"schemaVersion":"0.7.0","folderName":"ordinary","taskDirectoryName":"ordinary","featureBranch":"feature/ordinary","createdAt":"2026-08-12 00:00:00","updatedAt":"2026-08-12 00:00:00","services":[{"repositoryId":"repo","serviceName":"ordinary","repositoryPath":"D:/repo","worktreePath":"D:/task/ordinary","developmentTool":"INTELLIJ_IDEA","branch":"feature/ordinary","strategy":"STANDARD_WORKTREE","sourcePreviousBranch":null}]}""",
+        )
+
+        val store = ManifestStore()
+        val manifest = store.load(taskDirectory)
+        store.save(taskDirectory, manifest)
+
+        assertEquals("ordinary", manifest.folderName)
+        kotlin.test.assertFalse(Files.readString(taskDirectory.resolve(ManifestStore.FILE_NAME)).contains("sourcePreviousBranch"))
     }
 }

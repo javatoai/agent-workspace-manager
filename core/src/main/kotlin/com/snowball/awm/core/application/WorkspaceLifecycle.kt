@@ -148,7 +148,16 @@ class GitWorkspaceLifecycle(
                             if (target.exists()) deleteRecursively(target)
                             throw error
                         }
-                        workspace.copy(health = WorkspaceHealth.READY, warnings = emptyList())
+                        val service = config.group(manifest.groupId).services.firstOrNull { it.id == workspace.groupServiceId }
+                        val source = config.repositories.firstOrNull { it.id == workspace.repositoryId }
+                            ?.rootPath?.let(Path::of)
+                        val initialized = if (service != null && source != null) {
+                            bootstrap.initialize(source, target, service.bootstrap)
+                        } else null
+                        workspace.copy(
+                            health = if (initialized == null || initialized.succeeded) WorkspaceHealth.READY else WorkspaceHealth.READY_WITH_WARNINGS,
+                            warnings = initialized?.warnings.orEmpty(),
+                        )
                     }
                 }
                 restoredByPath[target.toString()] = restored

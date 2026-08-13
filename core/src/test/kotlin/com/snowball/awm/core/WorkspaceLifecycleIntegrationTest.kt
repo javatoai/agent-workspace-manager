@@ -14,7 +14,7 @@ class WorkspaceLifecycleIntegrationTest {
     lateinit var temporary: Path
 
     @Test
-    fun `same-base modules keep one physical worktree through archive restore and delete`() {
+    fun `same-base modules keep independent physical worktrees through archive restore and delete`() {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("shared"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("shared").resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
@@ -23,8 +23,8 @@ class WorkspaceLifecycleIntegrationTest {
             repositoryId = repository.id,
             displayName = "shared",
             modules = listOf(
-                ServiceModuleConfig("api", "API", "origin/master"),
-                ServiceModuleConfig("web", "Web", "refs/remotes/origin/master"),
+                ServiceModuleConfig("api", "api", "origin/master"),
+                ServiceModuleConfig("web", "web", "refs/remotes/origin/master"),
             ),
         )
         val taskRoot = temporary.resolve("tasks")
@@ -43,19 +43,19 @@ class WorkspaceLifecycleIntegrationTest {
             CreateGroupedTaskRequest("T-1", "feature/T-1", "shared", listOf("shared-service")),
         )
         assertEquals(2, created.services.size)
-        assertEquals(1, created.services.map { it.worktreePath }.distinct().size)
-        assertEquals(2, GitClient().worktrees(repositoryPath).size)
+        assertEquals(2, created.services.map { it.worktreePath }.distinct().size)
+        assertEquals(3, GitClient().worktrees(repositoryPath).size)
 
         val taskDirectory = taskRoot.resolve(created.taskDirectoryName)
         val archived = application.archive(config, taskDirectory)
         assertEquals(TaskLifecycleStatus.ARCHIVED, archived.lifecycleStatus)
-        assertTrue(Files.exists(Path.of(created.services.first().worktreePath)))
-        assertEquals(2, GitClient().worktrees(repositoryPath).size)
+        assertTrue(created.services.all { Files.exists(Path.of(it.worktreePath)) })
+        assertEquals(3, GitClient().worktrees(repositoryPath).size)
 
         val restored = application.restore(config, taskDirectory)
         assertEquals(TaskLifecycleStatus.ACTIVE, restored.lifecycleStatus)
         assertTrue(restored.services.all { it.health == WorkspaceHealth.READY })
-        assertEquals(2, GitClient().worktrees(repositoryPath).size)
+        assertEquals(3, GitClient().worktrees(repositoryPath).size)
 
         application.delete(config, taskDirectory)
         assertFalse(Files.exists(taskDirectory))

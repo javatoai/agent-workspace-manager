@@ -48,26 +48,37 @@ class AppSessionStore(
 }
 
 /** Centralizes operation progress and one-shot user feedback. */
-class OperationCoordinator(initialError: String? = null) {
+class OperationCoordinator(
+    initialError: String? = null,
+    private val onError: (Throwable) -> Unit = {},
+) {
     var busy by mutableStateOf(false)
         internal set
     var activeMessage by mutableStateOf<String?>(null)
+        internal set
+    var cancellable by mutableStateOf(false)
+        internal set
+    var cancelling by mutableStateOf(false)
         internal set
     var statusMessage by mutableStateOf<String?>(null)
         internal set
     var errorMessage by mutableStateOf(initialError)
         internal set
 
-    fun begin(message: String): Boolean {
+    fun begin(message: String, canCancel: Boolean): Boolean {
         if (busy) return false
         busy = true
         activeMessage = message
+        cancellable = canCancel
+        cancelling = false
         return true
     }
 
     fun succeed(message: String) {
         busy = false
         activeMessage = null
+        cancellable = false
+        cancelling = false
         statusMessage = message
         errorMessage = null
     }
@@ -75,11 +86,46 @@ class OperationCoordinator(initialError: String? = null) {
     fun fail(error: Throwable) {
         busy = false
         activeMessage = null
-        errorMessage = error.message ?: error::class.simpleName ?: "操作失败"
+        cancellable = false
+        cancelling = false
+        errorMessage = OperationFailureDetails.format(error)
+        onError(error)
     }
 
     fun dismiss() {
         statusMessage = null
         errorMessage = null
+    }
+
+    fun markCancelling() {
+        if (!busy || !cancellable) return
+        cancelling = true
+        cancellable = false
+        activeMessage = "正在取消并等待当前步骤安全停止…"
+    }
+
+    fun cancelled() {
+        busy = false
+        activeMessage = null
+        cancellable = false
+        cancelling = false
+        statusMessage = "操作已取消"
+        errorMessage = null
+    }
+}
+
+internal object OperationFailureDetails {
+    fun format(error: Throwable): String = buildString {
+        append(error.message ?: error::class.simpleName ?: "操作失败")
+        var cause = error.cause
+        while (cause != null) {
+            append("\n\n原因：")
+            append(cause.message ?: cause::class.simpleName ?: "未知错误")
+            cause = cause.cause
+        }
+        error.suppressed.forEach { suppressed ->
+            append("\n\n附加失败：")
+            append(suppressed.message ?: suppressed::class.simpleName ?: "未知错误")
+        }
     }
 }

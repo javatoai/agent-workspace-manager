@@ -102,6 +102,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
+import com.snowball.awm.core.error
 import androidx.compose.ui.window.rememberWindowState
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.m3.markdownColor
@@ -111,7 +112,6 @@ import com.snowball.awm.core.BootstrapConfig
 import com.snowball.awm.core.BootstrapPresets
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
-import com.snowball.awm.core.IdeType
 import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
@@ -142,12 +142,21 @@ import org.jetbrains.compose.resources.painterResource
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.awt.Dimension
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.util.UUID
 
 fun main() {
+    val fatalEvents = com.snowball.awm.core.JsonlEventSink()
+    val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+        fatalEvents.error(
+            event = "application.uncaught",
+            message = error.stackTraceToString(),
+            metadata = mapOf("thread" to thread.name),
+        )
+        previousHandler?.uncaughtException(thread, error) ?: error.printStackTrace()
+    }
     FileKit.init(appId = "com.snowball.awm")
     application {
         val controller = remember { DesktopApplication() }
@@ -159,29 +168,27 @@ fun main() {
         )
         Window(
             onCloseRequest = {
-                if (controller.busy) {
+                if (controller.hasActiveOperations) {
                     controller.showError(IllegalStateException("操作正在执行，完成前不能关闭应用"))
                 } else {
                     controller.close()
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.6.0",
+            title = "Agent Workspace Manager 0.7.0",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {
             DisposableEffect(window) {
-                // This is a desktop-first, two-pane workspace.  Keeping a minimum width
-                // preserves readable service metadata and one-line operation bars instead
-                // of letting controls collapse into an unusable mobile-like layout.
-                window.minimumSize = Dimension(1580, 800)
+                fun nativeScale(): Pair<Double, Double> = window.graphicsConfiguration.defaultTransform.let { it.scaleX to it.scaleY }
                 val listener = object : WindowAdapter() {
                     override fun windowGainedFocus(event: WindowEvent?) = controller.agentInstructionsController.onWindowFocused()
                 }
                 window.addWindowFocusListener(listener)
                 onDispose {
                     val maximized = window.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0
-                    WindowPreferences.saveWindow(window.width, window.height, maximized)
+                    val (scaleX, scaleY) = nativeScale()
+                    WindowPreferences.savePhysicalWindow(window.width, window.height, maximized, scaleX, scaleY)
                     window.removeWindowFocusListener(listener)
                 }
             }
@@ -195,14 +202,13 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     val snackbar = remember { SnackbarHostState() }
     var showCreate by remember { mutableStateOf(false) }
 
-    LaunchedEffect(controller.statusMessage, controller.errorMessage) {
-        val error = controller.errorMessage
-        val message = error ?: controller.statusMessage
+    LaunchedEffect(controller.statusMessage) {
+        val message = controller.statusMessage
         if (message != null) {
             snackbar.showSnackbar(
                 message,
                 withDismissAction = true,
-                duration = if (error == null) SnackbarDuration.Short else SnackbarDuration.Long,
+                duration = SnackbarDuration.Short,
             )
             controller.dismissMessages()
         }
@@ -222,7 +228,7 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                             NavigationItem.TASKS -> TasksScreen(controller, archived = false) { showCreate = true }
                             NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true) { showCreate = true }
                             NavigationItem.SERVICES -> ServicesScreen(controller)
-                            NavigationItem.UAT -> UatScreen(controller)
+                            NavigationItem.TAG -> TagScreen(controller)
                             NavigationItem.SETTINGS -> SettingsScreen(controller)
                         }
                     }
@@ -235,11 +241,19 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                     shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
                 ) {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            controller.activeOperation ?: "正在处理",
-                            color = MaterialTheme.colorScheme.inverseOnSurface,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                controller.activeOperation ?: "正在处理",
+                                Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.inverseOnSurface,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            if (controller.activeOperationCancellable) {
+                                TextButton(onClick = controller::cancelActiveOperation) {
+                                    Text("取消", color = MaterialTheme.colorScheme.inversePrimary)
+                                }
+                            }
+                        }
                         LinearProgressIndicator(Modifier.fillMaxWidth())
                     }
                 }
@@ -248,16 +262,24 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     }
 
     if (showCreate) {
-        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools, reuseKeys ->
-            controller.taskController.create(name, branch, group, services, link, notes, tools, reuseKeys) {
+        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools, reuseKeys, baseOverrides ->
+            controller.taskController.create(name, branch, group, services, link, notes, tools, reuseKeys, baseOverrides) {
                 showCreate = false
             }
         }
     }
+    controller.errorMessage?.let { error ->
+        TagResultDialog(
+            title = "操作失败",
+            content = error,
+            onDismiss = controller::dismissMessages,
+            onCopy = { controller.copyText(error, "错误详情已复制") },
+        )
+    }
     controller.tagResult?.let { result ->
         val output = TagOutputFormatter.format(controller.selectedTask?.requirementLink.orEmpty(), listOf(result), includeFailures = true)
-        UatResultDialog(
-            title = "UAT 构建结果",
+        TagResultDialog(
+            title = "Tag 构建结果",
             content = output,
             onDismiss = controller::clearTagResult,
             onCopy = { controller.copyText(output, "构建结果已复制") },
@@ -268,7 +290,7 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
         val successOutput = TagOutputFormatter.format(controller.selectedTask?.requirementLink.orEmpty(), successful, includeFailures = false)
         AlertDialog(
             onDismissRequest = controller::clearBatchTagResults,
-            title = { Text("批量 UAT 构建结果") },
+            title = { Text("批量 Tag 构建结果") },
             text = {
                 SelectionContainer {
                     Column(Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -344,7 +366,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("AWM", style = MaterialTheme.typography.titleLarge)
-                    Text("Workspace studio · 0.6.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Workspace studio · 0.7.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -354,13 +376,13 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            NavigationItem.entries.filter { it != NavigationItem.UAT || controller.showsUatNavigation }.forEach { item ->
+            NavigationItem.entries.filter { it != NavigationItem.TAG || controller.showsTagNavigation }.forEach { item ->
                 val selectedItem = item == controller.navigation
                 val icon = when (item) {
                     NavigationItem.TASKS -> Icons.Outlined.Workspaces
                     NavigationItem.ARCHIVED -> Icons.Outlined.Archive
                     NavigationItem.SERVICES -> Icons.Outlined.Dns
-                    NavigationItem.UAT -> Icons.Outlined.Sell
+                    NavigationItem.TAG -> Icons.Outlined.Sell
                     NavigationItem.SETTINGS -> Icons.Outlined.Settings
                 }
                 Surface(
@@ -434,7 +456,7 @@ private fun navigationCount(controller: DesktopApplication, item: NavigationItem
     NavigationItem.TASKS -> controller.tasks.count { it.lifecycleStatus != TaskLifecycleStatus.ARCHIVED }
     NavigationItem.ARCHIVED -> controller.tasks.count { it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED }
     NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
-    NavigationItem.UAT, NavigationItem.SETTINGS -> null
+    NavigationItem.TAG, NavigationItem.SETTINGS -> null
 }
 
 private val NavigationItem.pageDescription: String
@@ -442,6 +464,6 @@ private val NavigationItem.pageDescription: String
         NavigationItem.TASKS -> "集中查看任务状态、工作区与任务说明"
         NavigationItem.ARCHIVED -> "查看已归档任务并按需恢复"
         NavigationItem.SERVICES -> "按组管理仓库、模块和工作区策略"
-        NavigationItem.UAT -> "从已启用的工作区安全构建测试标签"
+        NavigationItem.TAG -> "从已启用的工作区安全构建测试标签"
         NavigationItem.SETTINGS -> "管理本地目录、组、Agent 说明与开发工具"
     }

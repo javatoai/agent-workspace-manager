@@ -26,6 +26,24 @@ data class BootstrapResult(
     val succeeded: Boolean get() = steps.all { it.succeeded }
 }
 
+fun BootstrapConfig.validated(): BootstrapConfig = apply {
+    copyRules.forEach { rule ->
+        require(rule.source.isNotBlank() && rule.target.isNotBlank()) { "Bootstrap 复制源和目标不能为空" }
+        listOf(rule.source to "复制源", rule.target to "复制目标").forEach { (value, label) ->
+            val path = Path.of(value)
+            require(!path.isAbsolute) { "$label 必须使用仓库内相对路径：$value" }
+            require(path.none { it.toString() == ".." }) { "$label 不能包含 ..：$value" }
+            require(path.none { it.toString().equals(".git", ignoreCase = true) }) { "$label 不能访问 .git：$value" }
+        }
+    }
+    commands.forEach { command ->
+        require(command.name.isNotBlank()) { "Bootstrap 命令名称不能为空" }
+        require(command.executable.isNotBlank()) { "Bootstrap 可执行程序不能为空" }
+        require(command.timeoutSeconds > 0) { "Bootstrap 命令超时必须大于 0" }
+        require(command.workingDirectory.isNotBlank()) { "Bootstrap 命令工作目录不能为空" }
+    }
+}
+
 class BootstrapService(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val git: GitClient = GitClient(runner),
@@ -35,11 +53,12 @@ class BootstrapService(
         worktree: Path,
         config: BootstrapConfig,
     ): BootstrapResult {
+        config.validated()
         val steps = mutableListOf<BootstrapStepResult>()
         val warnings = mutableListOf<String>()
 
         config.commands
-            .filter { it.enabled && supportsCurrentPlatform(it.platforms) }
+            .filter { it.enabled }
             .forEach { command ->
                 require(command.executable.isNotBlank()) { "command executable must not be blank" }
                 require(command.timeoutSeconds > 0) { "command timeoutSeconds must be greater than zero" }
@@ -58,7 +77,7 @@ class BootstrapService(
         }
 
         config.commands
-            .filter { it.enabled && supportsCurrentPlatform(it.platforms) }
+            .filter { it.enabled }
             .forEach { command ->
                 val stepName = "执行 ${command.name}"
                 runCatching {
@@ -192,13 +211,4 @@ class BootstrapService(
         return resolved
     }
 
-    private fun supportsCurrentPlatform(platforms: Set<String>): Boolean {
-        if (platforms.isEmpty()) return true
-        val current = when {
-            System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "windows"
-            System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "macos"
-            else -> "linux"
-        }
-        return platforms.any { it.equals(current, ignoreCase = true) }
-    }
 }

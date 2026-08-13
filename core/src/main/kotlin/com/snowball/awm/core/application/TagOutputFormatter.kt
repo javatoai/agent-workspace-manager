@@ -43,7 +43,7 @@ object TagOutputFormatter {
             if (includeFailures && failures.isNotEmpty()) {
                 append("Tag未全部构建成功，请处理失败项后重试")
             } else {
-                append("Tag已构建完毕，辛苦UAT环境发布以上版本")
+                append("Tag 已构建完毕，请发布以上版本")
             }
         }
     }

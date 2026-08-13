@@ -1,6 +1,7 @@
 package com.snowball.awm.desktop
 
 import java.util.prefs.Preferences
+import kotlin.math.roundToInt
 
 /**
  * Stores presentation-only desktop preferences outside config.json so changing
@@ -17,21 +18,44 @@ internal object WindowPreferences {
     )
 
     fun load(): Snapshot = Snapshot(
-        width = preferences.getInt("width", 1600).coerceAtLeast(1200),
-        height = preferences.getInt("height", 980).coerceAtLeast(720),
+        width = preferences.getInt("width", 1600),
+        height = preferences.getInt("height", 980),
         maximized = preferences.getBoolean("maximized", false),
         settingsSection = preferences.get("settingsSection", "basic"),
     )
 
     fun saveWindow(width: Int, height: Int, maximized: Boolean) {
         if (!maximized) {
-            preferences.putInt("width", width.coerceAtLeast(1200))
-            preferences.putInt("height", height.coerceAtLeast(720))
+            preferences.putInt("width", width)
+            preferences.putInt("height", height)
         }
         preferences.putBoolean("maximized", maximized)
+    }
+
+    fun savePhysicalWindow(
+        width: Int,
+        height: Int,
+        maximized: Boolean,
+        scaleX: Double,
+        scaleY: Double,
+    ) {
+        val logical = physicalToLogical(width, height, scaleX, scaleY)
+        saveWindow(logical.widthDp.roundToInt(), logical.heightDp.roundToInt(), maximized)
     }
 
     fun saveSettingsSection(section: String) {
         preferences.put("settingsSection", section)
     }
+
+    internal fun physicalToLogical(
+        width: Int,
+        height: Int,
+        scaleX: Double,
+        scaleY: Double,
+    ): LogicalWindowSize = LogicalWindowSize(
+        (width / scaleX.coerceAtLeast(1.0)).roundToInt().toFloat(),
+        (height / scaleY.coerceAtLeast(1.0)).roundToInt().toFloat(),
+    )
 }
+
+internal data class LogicalWindowSize(val widthDp: Float, val heightDp: Float)

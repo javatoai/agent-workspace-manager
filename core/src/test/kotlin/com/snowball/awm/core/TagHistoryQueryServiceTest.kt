@@ -22,6 +22,27 @@ class TagHistoryQueryServiceTest {
         assertEquals(listOf("newer-op", "older-op"), result.map(TagOperation::operationId))
     }
 
+    @Test
+    fun `loads early 0_7 operation fields and normalizes state`() {
+        val taskDirectory = Files.createTempDirectory("tag-operation-legacy-")
+        val directory = taskDirectory.resolve("tag-operations")
+        Files.createDirectories(directory)
+        Files.writeString(
+            directory.resolve("legacy.json"),
+            """{
+              "operationId":"legacy","folderName":"TASK","serviceName":"service","repositoryId":"repo",
+              "featureBranch":"feature/task","testBranch":"release/test","remote":"origin",
+              "state":"TEST_BRANCH_PUSHED","createdAt":"2026-01-01","updatedAt":"2026-01-01"
+            }""".trimIndent(),
+        )
+
+        val operation = TagOperationStore().load(taskDirectory, "legacy")
+
+        assertEquals("feature/task", operation.sourceBranch)
+        assertEquals("release/test", operation.targetBranch)
+        assertEquals(TagOperationState.TARGET_BRANCH_PUSHED, operation.state)
+    }
+
     private fun task(name: String) = TaskManifest(
         folderName = name,
         taskDirectoryName = name,
@@ -37,8 +58,8 @@ class TagHistoryQueryServiceTest {
         folderName = id,
         serviceName = "service",
         repositoryId = "repo",
-        featureBranch = "feature/$id",
-        testBranch = "release/test",
+        sourceBranch = "feature/$id",
+        targetBranch = "release/test",
         remote = "origin",
         state = TagOperationState.SUCCESS,
         createdAt = updatedAt,

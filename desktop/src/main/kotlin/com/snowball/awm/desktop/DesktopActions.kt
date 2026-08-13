@@ -2,7 +2,7 @@ package com.snowball.awm.desktop
 
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.DesktopIntegration
-import com.snowball.awm.core.IdeType
+import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.ServiceWorkspace
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -20,31 +20,28 @@ class DesktopActions internal constructor(
     private val onStatus: (String) -> Unit,
     private val onError: (Throwable) -> Unit,
 ) {
-    fun openWorkspace(workspace: ServiceWorkspace) {
-        val executable = when (workspace.ideType) {
-            IdeType.IDEA -> config().ideaExecutable
-            IdeType.WEBSTORM -> config().webStormExecutable
-        }
-        if (executable.isNullOrBlank()) {
+    fun openWorkspace(workspace: ServiceWorkspace, type: DevelopmentToolType = workspace.developmentTool) {
+        val path = config().developmentTools.firstOrNull { it.type == type }?.path
+        if (path.isNullOrBlank()) {
             onSettingsRequired()
-            onError(IllegalStateException("请先在设置中配置 IDE 可执行文件"))
+            onError(IllegalStateException("请先在设置中配置 ${type.displayName} 路径"))
             return
         }
-        attempt { integration.openIde(Path.of(workspace.worktreePath), executable) }
+        attempt { integration.openDevelopmentTool(Path.of(workspace.worktreePath), type, path) }
     }
 
     /** Creates and opens AWM's task-local work-data directory in IDEA. */
-    fun openWorkData(taskDirectory: Path) {
-        val executable = config().ideaExecutable
-        if (executable.isNullOrBlank()) {
+    fun openWorkData(taskDirectory: Path, type: DevelopmentToolType = config().defaultDevelopmentTool) {
+        val path = config().developmentTools.firstOrNull { it.type == type }?.path
+        if (path.isNullOrBlank()) {
             onSettingsRequired()
-            onError(IllegalStateException("请先在设置中配置 IDEA 可执行文件"))
+            onError(IllegalStateException("请先在设置中配置 ${type.displayName} 路径"))
             return
         }
         attempt {
             val directory = taskDirectory.resolve("ai-data")
             Files.createDirectories(directory)
-            integration.openIde(directory, executable)
+            integration.openDevelopmentTool(directory, type, path)
         }
     }
 
@@ -59,3 +56,16 @@ class DesktopActions internal constructor(
 
     private fun attempt(block: () -> Unit): Result<Unit> = runCatching(block).onFailure(onError)
 }
+
+internal fun temporaryDevelopmentToolSelectionEnabled(config: AppConfig): Boolean =
+    config.allowTemporaryDevelopmentToolSelection
+
+internal val DevelopmentToolType.displayName: String
+    get() = when (this) {
+        DevelopmentToolType.INTELLIJ_IDEA -> "IntelliJ IDEA"
+        DevelopmentToolType.WEBSTORM -> "WebStorm"
+        DevelopmentToolType.PYCHARM -> "PyCharm"
+        DevelopmentToolType.VISUAL_STUDIO_CODE -> "Visual Studio Code"
+        DevelopmentToolType.ANDROID_STUDIO -> "Android Studio"
+        DevelopmentToolType.DEVECO_STUDIO -> "DevEco Studio"
+    }

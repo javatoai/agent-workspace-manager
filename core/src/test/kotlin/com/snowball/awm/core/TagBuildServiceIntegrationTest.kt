@@ -9,6 +9,7 @@ import java.nio.file.Path
 import java.time.Instant
 import java.time.Clock
 import java.time.ZoneOffset
+import kotlin.test.assertFailsWith
 
 class TagBuildServiceIntegrationTest {
     @TempDir
@@ -51,7 +52,7 @@ class TagBuildServiceIntegrationTest {
                         serviceName = "operation-center",
                         repositoryPath = repository.toString(),
                         worktreePath = featureWorktree.toString(),
-                        ideType = IdeType.IDEA,
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
                         branch = "feature/TAG-1",
                         health = WorkspaceHealth.READY,
                         groupServiceId = "operation-center",
@@ -63,16 +64,23 @@ class TagBuildServiceIntegrationTest {
             id = "operation-center",
             repositoryId = repositoryInfo.id,
             displayName = "operation-center",
-        ).copy(modules = listOf(ServiceModuleConfig("default", initialUatTag = "1.0.0.beta-1")))
+        ).copy(modules = listOf(ServiceModuleConfig("default")))
         val config = AppConfig(
             taskRoot = temporary.resolve("tasks").toString(),
             repositories = listOf(repositoryInfo),
             groups = listOf(GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, services = listOf(service))),
         )
+        val applicationPaths = ApplicationPaths(temporary.resolve("app-home"))
         val builder = TagBuildService(
-            paths = ApplicationPaths(temporary.resolve("app-home")),
+            paths = applicationPaths,
             clock = Clock.fixed(Instant.parse("2026-08-07T03:26:08Z"), ZoneOffset.UTC),
         )
+
+        RepositoryOperationLock(applicationPaths).withLock(GitClient().commonDirectory(repository)) {
+            assertFailsWith<IllegalStateException> {
+                builder.preflight(config, taskDirectory, repositoryInfo.id)
+            }
+        }
 
         val preview = builder.preflight(config, taskDirectory, repositoryInfo.id)
         assertEquals("1.6.89.beta-11", preview.estimatedTag)
@@ -95,7 +103,7 @@ class TagBuildServiceIntegrationTest {
         val annotation = GitTestSupport.run(repository, "cat-file", "tag", "1.6.89.beta-11")
         assertTrue(
             annotation.contains(
-                """UAT build
+                """Tag build
 Task: TAG-1
 需求链接：https://example.com/req
 Builder: ${System.getProperty("user.name")}
@@ -112,6 +120,8 @@ Builder: ${System.getProperty("user.name")}
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("partial-source"))
         GitTestSupport.run(seed, "branch", "release/test")
         GitTestSupport.run(seed, "push", "origin", "release/test")
+        createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
         val repository = GitTestSupport.clone(
             remote,
             temporary.resolve("partial-services").resolve("operation-center"),
@@ -147,7 +157,7 @@ Builder: ${System.getProperty("user.name")}
                         serviceName = "operation-center",
                         repositoryPath = repository.toString(),
                         worktreePath = featureWorktree.toString(),
-                        ideType = IdeType.IDEA,
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
                         branch = "feature/TAG-PARTIAL",
                         health = WorkspaceHealth.READY,
                         groupServiceId = "operation-center",
@@ -164,7 +174,7 @@ Builder: ${System.getProperty("user.name")}
                         id = "operation-center",
                         repositoryId = repositoryInfo.id,
                         displayName = "operation-center",
-                    ).copy(modules = listOf(ServiceModuleConfig("default", initialUatTag = "1.0.0.beta-1"))),
+                    ).copy(modules = listOf(ServiceModuleConfig("default"))),
                 )),
             ),
         )
@@ -216,6 +226,85 @@ Builder: ${System.getProperty("user.name")}
             GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1")
                 .isNotBlank(),
         )
+    }
+
+    @Test
+    fun `current branch mode pushes source branch and tags its head without target branch`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("direct-source"))
+        val repository = GitTestSupport.clone(remote, temporary.resolve("direct-services").resolve("api"))
+        val repositoryInfo = GitRepositoryInspector().inspect(repository)
+        val taskDirectory = temporary.resolve("direct-tasks").resolve("TAG-DIRECT")
+        val worktree = taskDirectory.resolve("api")
+        Files.createDirectories(worktree.parent)
+        GitClient().addWorktree(repository, worktree, "feature/TAG-DIRECT", "origin/master")
+        GitTestSupport.configureIdentity(worktree)
+        Files.writeString(worktree.resolve("direct.txt"), "direct\n")
+        GitTestSupport.run(worktree, "add", "direct.txt")
+        GitTestSupport.run(worktree, "commit", "-m", "direct tag")
+        val sourceSha = GitTestSupport.run(worktree, "rev-parse", "HEAD")
+        val now = Instant.now().toString()
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TAG-DIRECT",
+                taskDirectoryName = "TAG-DIRECT",
+                featureBranch = "feature/TAG-DIRECT",
+                createdAt = now,
+                updatedAt = now,
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = repositoryInfo.id,
+                        serviceName = "api",
+                        repositoryPath = repository.toString(),
+                        worktreePath = worktree.toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/TAG-DIRECT",
+                        health = WorkspaceHealth.READY,
+                        groupServiceId = "api",
+                        pushRemote = "origin",
+                    ),
+                ),
+            ),
+        )
+        val module = ServiceModuleConfig(
+            id = "default",
+            tagMode = TagBuildMode.CURRENT_BRANCH,
+            tagTargetRef = null,
+        )
+        val config = AppConfig(
+            taskRoot = temporary.resolve("direct-tasks").toString(),
+            repositories = listOf(repositoryInfo),
+            groups = listOf(
+                GroupConfig(
+                    DEFAULT_GROUP_ID,
+                    DEFAULT_GROUP_NAME,
+                    services = listOf(
+                        GroupServiceConfig.standard("api", repositoryInfo.id, "api")
+                            .copy(modules = listOf(module)),
+                    ),
+                ),
+            ),
+        )
+        val builder = TagBuildService(paths = ApplicationPaths(temporary.resolve("direct-app-home")))
+
+        val noTagError = assertFailsWith<IllegalStateException> {
+            builder.preflight(config, taskDirectory, repositoryInfo.id)
+        }
+        assertTrue(noTagError.message.orEmpty().contains("仓库没有可用的历史 Tag"))
+
+        createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
+
+        val preview = builder.preflight(config, taskDirectory, repositoryInfo.id)
+        val result = builder.build(config, taskDirectory, repositoryInfo.id)
+
+        assertEquals(TagBuildMode.CURRENT_BRANCH, preview.tagMode)
+        assertEquals(null, preview.targetBranch)
+        assertEquals(TagOperationState.SUCCESS, result.state, result.message)
+        assertEquals(null, result.targetBranch)
+        assertEquals(sourceSha, GitTestSupport.run(repository, "ls-remote", "origin", "refs/heads/feature/TAG-DIRECT").substringBefore('\t'))
+        assertTrue(GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1").isNotBlank())
+        assertTrue(!Files.exists(temporary.resolve("direct-app-home").resolve("temp").resolve("tag-build")))
     }
 
     private fun createAnnotatedTag(repository: Path, tag: String, timestamp: String) {

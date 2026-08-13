@@ -7,7 +7,7 @@ import kotlin.test.assertFailsWith
 class TagPolicyTest {
     @Test
     fun `group and child switches both gate tag creation`() {
-        val module = ServiceModuleConfig("api", "API", uatTagEnabled = true)
+        val module = ServiceModuleConfig("api", "API", tagEnabled = true)
         val service = GroupServiceConfig(
             id = "service-a",
             repositoryId = "repo-a",
@@ -17,13 +17,13 @@ class TagPolicyTest {
         val workspace = workspace("repo-a", "service-a", "api")
         val manifest = manifest(workspace)
         val enabled = AppConfig(repositories = listOf(repository()), groups = listOf(GroupConfig("g", "G", true, listOf(service))))
-        val disabled = enabled.copy(groups = listOf(enabled.groups.single().copy(uatTagEnabled = false)))
+        val disabled = enabled.copy(groups = listOf(enabled.groups.single().copy(tagEnabled = false)))
 
-        assertEquals("release/test", TagPolicy.resolve(enabled, manifest, workspace.selectionKey).uatBranch)
+        assertEquals("release/test", TagPolicy.resolve(enabled, manifest, workspace.selectionKey).targetBranch)
         assertFailsWith<IllegalStateException> { TagPolicy.resolve(disabled, manifest, workspace.selectionKey) }
         assertFailsWith<IllegalStateException> {
             TagPolicy.resolve(
-                enabled.copy(groups = listOf(enabled.groups.single().copy(services = listOf(service.copy(modules = listOf(module.copy(uatTagEnabled = false))))))),
+                enabled.copy(groups = listOf(enabled.groups.single().copy(services = listOf(service.copy(modules = listOf(module.copy(tagEnabled = false))))))),
                 manifest,
                 workspace.selectionKey,
             )
@@ -38,7 +38,7 @@ class TagPolicyTest {
             displayName = "A clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", uatTagEnabled = true, uatRef = "origin/uat/test")),
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", tagEnabled = true, tagTargetRef = "origin/uat/test")),
         )
         val workspace = workspace("repo-a", "clone-a", "clone").copy(
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
@@ -49,8 +49,8 @@ class TagPolicyTest {
 
         val target = TagPolicy.resolve(config, manifest, workspace.selectionKey)
 
-        assertEquals("release/fixed", target.featureBranch)
-        assertEquals("uat/test", target.uatBranch)
+        assertEquals("release/fixed", target.sourceBranch)
+        assertEquals("uat/test", target.targetBranch)
     }
 }
 
@@ -59,7 +59,7 @@ private fun workspace(repositoryId: String, serviceId: String, moduleId: String)
     serviceName = serviceId,
     repositoryPath = "C:/repo",
     worktreePath = "C:/task/repo",
-    ideType = IdeType.IDEA,
+    developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
     branch = "feature/x",
     health = WorkspaceHealth.READY,
     groupServiceId = serviceId,

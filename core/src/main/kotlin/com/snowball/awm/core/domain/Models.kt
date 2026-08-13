@@ -1,18 +1,35 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.snowball.awm.core
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.6.0"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.6.0"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.7.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.7.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
 @Serializable
-enum class IdeType {
-    IDEA,
+enum class DevelopmentToolType {
+    INTELLIJ_IDEA,
     WEBSTORM,
+    PYCHARM,
+    VISUAL_STUDIO_CODE,
+    ANDROID_STUDIO,
+    DEVECO_STUDIO,
+}
+
+@Serializable
+data class DevelopmentToolConfig(
+    val type: DevelopmentToolType,
+    val path: String,
+) {
+    init {
+        require(path.isNotBlank()) { "开发工具路径不能为空" }
+    }
 }
 
 @Serializable
@@ -56,7 +73,6 @@ data class BootstrapCommand(
     val arguments: List<String> = emptyList(),
     val workingDirectory: String = ".",
     val timeoutSeconds: Long = 600,
-    val platforms: Set<String> = emptySet(),
     val enabled: Boolean = true,
 )
 
@@ -86,23 +102,34 @@ data class RepositoryConfig(
 }
 
 /**
- * A standard service module maps one base ref to one writable worktree.
- * Multiple code modules that share a base ref intentionally share this entry;
- * their finer-grained edit rules belong in the group's AGENTS.md.
+ * A standard service module maps one base ref to one independent writable worktree.
+ * Modules never share a newly provisioned physical worktree, even when base refs match.
  */
+@Serializable
+enum class TagBuildMode {
+    MERGE_TO_TARGET_BRANCH,
+    CURRENT_BRANCH,
+}
+
 @Serializable
 data class ServiceModuleConfig(
     val id: String,
-    val name: String = "",
+    val name: String = "default",
     val baseRef: String = "origin/master",
     val baseRemote: String = "origin",
-    val uatTagEnabled: Boolean = true,
-    val uatRef: String = "origin/release/test",
-    val initialUatTag: String? = null,
-    val tagMessagePrefix: String = "UAT",
+    @JsonNames("uatTagEnabled")
+    val tagEnabled: Boolean = true,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    @JsonNames("uatRef")
+    val tagTargetRef: String? = "origin/release/test",
+    val tagMessagePrefix: String = "Tag",
 ) {
     init {
         require(id.isNotBlank()) { "模块 ID 不能为空" }
+        if (tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+            require(!tagTargetRef.isNullOrBlank()) { "合并到目标分支模式必须配置 Tag 目标分支" }
+            RemoteBranchRef.parse(tagTargetRef)
+        }
     }
 }
 
@@ -112,15 +139,21 @@ data class IndependentCloneModuleConfig(
     val id: String,
     val name: String = "",
     val branch: String = "origin/master",
-    val uatTagEnabled: Boolean = false,
-    val uatRef: String = "origin/release/test",
-    val initialUatTag: String? = null,
-    val tagMessagePrefix: String = "UAT",
+    @JsonNames("uatTagEnabled")
+    val tagEnabled: Boolean = false,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    @JsonNames("uatRef")
+    val tagTargetRef: String? = "origin/release/test",
+    val tagMessagePrefix: String = "Tag",
 ) {
     init {
         require(id.isNotBlank()) { "独立克隆模块 ID 不能为空" }
         require(RemoteBranchRef.parse(branch).remote == "origin") {
             "独立克隆模块分支必须使用 origin/<branch> 格式"
+        }
+        if (tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+            require(!tagTargetRef.isNullOrBlank()) { "合并到目标分支模式必须配置 Tag 目标分支" }
+            RemoteBranchRef.parse(tagTargetRef)
         }
     }
 }
@@ -132,13 +165,14 @@ data class GroupServiceConfig(
     val repositoryId: String,
     val displayName: String,
     val enabled: Boolean = true,
-    val ideType: IdeType = IdeType.IDEA,
+    val developmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
     val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
     val modules: List<ServiceModuleConfig> = listOf(
         ServiceModuleConfig(id = "default"),
     ),
     val cloneModules: List<IndependentCloneModuleConfig> = emptyList(),
     val bootstrap: BootstrapConfig = BootstrapConfig(),
+    val commitMessageTemplate: String = "",
 ) {
     init {
         require(id.isNotBlank()) { "组内服务 ID 不能为空" }
@@ -149,11 +183,14 @@ data class GroupServiceConfig(
             WorkspaceStrategy.STANDARD_WORKTREE -> {
                 require(modules.isNotEmpty()) { "标准 Worktree 服务至少需要一个模块" }
                 require(modules.map { it.id }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复" }
+                StandardWorktreeModuleNaming.requireValid(modules)
             }
             WorkspaceStrategy.INDEPENDENT_CLONE -> {
                 require(cloneModules.isNotEmpty()) { "独立克隆服务至少需要一个克隆模块" }
                 require(cloneModules.map { it.id }.distinct().size == cloneModules.size) { "独立克隆模块 ID 不能重复" }
-                require(cloneModules.map { it.branch }.distinct().size == cloneModules.size) { "独立克隆模块分支不能重复" }
+                require(cloneModules.map { it.branch.lowercase() }.distinct().size == cloneModules.size) {
+                    "独立克隆模块分支不能重复（忽略大小写）"
+                }
             }
         }
     }
@@ -163,13 +200,13 @@ data class GroupServiceConfig(
             id: String,
             repositoryId: String,
             displayName: String,
-            ideType: IdeType = IdeType.IDEA,
+            developmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
             baseRef: String = "origin/master",
         ): GroupServiceConfig = GroupServiceConfig(
             id = id,
             repositoryId = repositoryId,
             displayName = displayName,
-            ideType = ideType,
+            developmentTool = developmentTool,
             modules = listOf(ServiceModuleConfig(id = "default", baseRef = baseRef)),
         )
     }
@@ -179,7 +216,8 @@ data class GroupServiceConfig(
 data class GroupConfig(
     val id: String,
     val name: String,
-    val uatTagEnabled: Boolean = true,
+    @JsonNames("uatTagEnabled")
+    val tagEnabled: Boolean = true,
     val services: List<GroupServiceConfig> = emptyList(),
     val defaultBranchPrefix: String = "",
     val defaultWorkspaceToolIds: List<String> = emptyList(),
@@ -201,7 +239,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.5.x is intentionally strict and contains no compatibility-only fields. */
+/** Version 0.7.x is intentionally strict and contains no compatibility-only fields. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -211,9 +249,13 @@ data class AppConfig(
         GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME),
     ),
     val theme: ThemePreference = ThemePreference.SYSTEM,
-    val ideaExecutable: String? = null,
-    val webStormExecutable: String? = null,
     val terminalExecutable: String? = null,
+    val developmentTools: List<DevelopmentToolConfig> = emptyList(),
+    val defaultDevelopmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
+    /** Shows temporary IDE selectors beside the normal default-tool open actions. */
+    val allowTemporaryDevelopmentToolSelection: Boolean = false,
+    /** Exact, case-sensitive branch names hidden only from the task-detail header summary. */
+    val hiddenTaskDetailBranches: List<String> = emptyList(),
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     /** Controls only opening the create-task dialog; it never runs at app startup. */
     val meegleAutoLoadRequirementLinks: Boolean = false,
@@ -228,19 +270,28 @@ data class AppConfig(
         require(meegleProjects.map(MeegleProjectConfig::projectKey).distinct().size == meegleProjects.size) {
             "Meegle 空间 Key 不能重复"
         }
+        require(developmentTools.map(DevelopmentToolConfig::type).distinct().size == developmentTools.size) {
+            "同一种开发工具只能配置一次"
+        }
+        require(hiddenTaskDetailBranches.all { it.isNotBlank() && it == it.trim() }) {
+            "任务详情分支白名单不能包含空值或首尾空格"
+        }
+        require(hiddenTaskDetailBranches.distinct().size == hiddenTaskDetailBranches.size) {
+            "任务详情分支白名单不能重复"
+        }
         val repositoryById = repositories.associateBy(RepositoryConfig::id)
         groups.flatMap(GroupConfig::services).forEach { service ->
             val repository = repositoryById[service.repositoryId]
                 ?: throw IllegalArgumentException("服务 ${service.displayName} 引用了不存在的仓库：${service.repositoryId}")
-            if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
+            if (service.strategy != WorkspaceStrategy.INDEPENDENT_CLONE) {
                 service.modules.forEach { module ->
                     require(module.baseRef.isNotBlank()) { "模块基础分支不能为空" }
                     require(module.baseRemote.isNotBlank()) { "模块基础远程不能为空" }
-                    RemoteBranchRef.parse(module.uatRef)
+                    module.tagTargetRef?.let(RemoteBranchRef::parse)
                 }
             } else {
                 require(!repository.originUrl.isNullOrBlank()) { "独立克隆服务 ${service.displayName} 的仓库没有 origin" }
-                service.cloneModules.forEach { module -> RemoteBranchRef.parse(module.uatRef) }
+                service.cloneModules.forEach { module -> module.tagTargetRef?.let(RemoteBranchRef::parse) }
             }
         }
     }
@@ -304,7 +355,7 @@ data class ServiceWorkspace(
     val serviceName: String,
     val repositoryPath: String,
     val worktreePath: String,
-    val ideType: IdeType,
+    val developmentTool: DevelopmentToolType,
     val branch: String,
     val health: WorkspaceHealth = WorkspaceHealth.CREATING,
     val warnings: List<String> = emptyList(),
@@ -320,6 +371,8 @@ data class ServiceWorkspace(
     val branchCreatedByTask: Boolean = false,
     /** Reuses a branch checked out by another worktree and therefore needs `worktree add --force` on restore. */
     val forceWorktreeAttach: Boolean = false,
+    /** Remote selected when the task was created and used when no upstream exists. */
+    val pushRemote: String = "origin",
 )
 
 @Serializable
@@ -372,14 +425,20 @@ data class WorkspaceToolLaunch(
 enum class TagOperationState {
     CREATED,
     PREFLIGHT_PASSED,
-    FEATURE_PUSHED,
-    TEST_BRANCH_PUSHED,
+    SOURCE_BRANCH_PUSHED,
+    TARGET_BRANCH_PUSHED,
     LOCAL_TAG_CREATED,
     TAG_PUSHED,
     SUCCESS,
     CONFLICT,
     FAILED,
     PARTIAL,
+    /** Read-only compatibility for early 0.7 operation files. */
+    @Deprecated("Use SOURCE_BRANCH_PUSHED")
+    FEATURE_PUSHED,
+    /** Read-only compatibility for early 0.7 operation files. */
+    @Deprecated("Use TARGET_BRANCH_PUSHED")
+    TEST_BRANCH_PUSHED,
 }
 
 @Serializable
@@ -388,14 +447,19 @@ data class TagOperation(
     val folderName: String,
     val serviceName: String,
     val repositoryId: String,
-    val featureBranch: String,
-    val testBranch: String,
+    @JsonNames("featureBranch")
+    val sourceBranch: String,
+    @JsonNames("testBranch")
+    val targetBranch: String? = null,
     val remote: String,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
     val state: TagOperationState,
     val createdAt: String,
     val updatedAt: String,
-    val featureSha: String? = null,
-    val testSha: String? = null,
+    @JsonNames("featureSha")
+    val sourceSha: String? = null,
+    @JsonNames("testSha")
+    val targetSha: String? = null,
     val tag: String? = null,
     val message: String? = null,
     val conflictFiles: List<String> = emptyList(),
@@ -409,8 +473,11 @@ data class TagBuildHistoryEntry(
     val timestamp: String,
     val folderName: String,
     val serviceName: String,
-    val featureBranch: String,
-    val testBranch: String,
+    @JsonNames("featureBranch")
+    val sourceBranch: String,
+    @JsonNames("testBranch")
+    val targetBranch: String? = null,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
     val tag: String? = null,
     val state: TagOperationState,
     val message: String? = null,

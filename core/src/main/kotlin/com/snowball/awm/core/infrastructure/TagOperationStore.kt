@@ -37,9 +37,9 @@ class TagOperationStore(
     }
 
     fun load(taskDirectory: Path, operationId: String): TagOperation =
-        json.decodeFromString(
+        json.decodeFromString<TagOperation>(
             Files.readString(taskDirectory.resolve("tag-operations").resolve("$operationId.json")),
-        )
+        ).normalizeLegacyState()
 
     fun list(taskDirectory: Path): List<TagOperation> {
         val directory = taskDirectory.resolve("tag-operations")
@@ -47,7 +47,7 @@ class TagOperationStore(
         return Files.list(directory).use { files ->
             files
                 .filter { it.fileName.toString().endsWith(".json") }
-                .map { json.decodeFromString<TagOperation>(Files.readString(it)) }
+                .map { json.decodeFromString<TagOperation>(Files.readString(it)).normalizeLegacyState() }
                 .sorted(compareByDescending { it.updatedAt })
                 .toList()
         }
@@ -71,3 +71,12 @@ class TagOperationStore(
         }
     }
 }
+
+@Suppress("DEPRECATION")
+private fun TagOperation.normalizeLegacyState(): TagOperation = copy(
+    state = when (state) {
+        TagOperationState.FEATURE_PUSHED -> TagOperationState.SOURCE_BRANCH_PUSHED
+        TagOperationState.TEST_BRANCH_PUSHED -> TagOperationState.TARGET_BRANCH_PUSHED
+        else -> state
+    },
+)

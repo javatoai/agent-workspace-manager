@@ -4,6 +4,7 @@ import java.awt.Desktop
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.net.URI
+import java.nio.file.Files
 import java.nio.file.Path
 
 class DesktopIntegration(
@@ -73,8 +74,11 @@ class DesktopIntegration(
         launchDetached(command)
     }
 
-    fun openIde(path: Path, executable: String) {
-        launchDetached(listOf(executable, path.toAbsolutePath().toString()))
+    fun openDevelopmentTool(path: Path, type: DevelopmentToolType, configuredPath: String) {
+        require(Files.isDirectory(path)) { "项目目录不存在：$path" }
+        val application = Path.of(configuredPath).toAbsolutePath().normalize()
+        require(Files.exists(application)) { "开发工具路径不存在：$application" }
+        launchDetached(DevelopmentToolLaunchCommand.build(type, application.toString(), path))
     }
 
     private fun commandExists(command: String): Boolean {
@@ -91,5 +95,35 @@ class DesktopIntegration(
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
+    }
+}
+
+object DevelopmentToolLaunchCommand {
+    fun build(
+        type: DevelopmentToolType,
+        configuredPath: String,
+        target: Path,
+        osName: String = System.getProperty("os.name"),
+    ): List<String> {
+        require(configuredPath.isNotBlank()) { "开发工具路径不能为空" }
+        val normalizedTarget = target.toAbsolutePath().normalize().toString()
+        val normalizedPath = configuredPath.trim()
+        if (osName.startsWith("Mac", ignoreCase = true) && normalizedPath.endsWith(".app", ignoreCase = true)) {
+            if (type == DevelopmentToolType.VISUAL_STUDIO_CODE) {
+                return listOf("open", "-n", "-a", normalizedPath, "--args", "--new-window", normalizedTarget)
+            }
+            return listOf("open", "-a", normalizedPath, normalizedTarget)
+        }
+        val arguments = buildList {
+            if (type == DevelopmentToolType.VISUAL_STUDIO_CODE) add("--new-window")
+            add(normalizedTarget)
+        }
+        return if (osName.startsWith("Windows", ignoreCase = true) &&
+            (normalizedPath.endsWith(".cmd", true) || normalizedPath.endsWith(".bat", true))
+        ) {
+            listOf("cmd.exe", "/d", "/c", normalizedPath) + arguments
+        } else {
+            listOf(normalizedPath) + arguments
+        }
     }
 }

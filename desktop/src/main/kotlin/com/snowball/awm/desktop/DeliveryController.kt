@@ -7,7 +7,7 @@ import com.snowball.awm.core.DeliveryTarget
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagOperation
 import com.snowball.awm.core.TaskManifest
-import com.snowball.awm.core.UatTagDeliveryAdapter
+import com.snowball.awm.core.GitTagDeliveryAdapter
 import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.selectionKey
@@ -19,10 +19,10 @@ data class DeliveryUiState(
     val history: List<TagOperation>,
 )
 
-/** UAT delivery use cases isolated from task lifecycle and desktop platform actions. */
+/** Tag delivery use cases isolated from task lifecycle and desktop platform actions. */
 class DeliveryController internal constructor(
     private val session: AppSessionStore,
-    private val adapter: UatTagDeliveryAdapter,
+    private val adapter: GitTagDeliveryAdapter,
     private val operations: OperationRunner,
     private val taskDirectory: (TaskManifest) -> Path,
     private val refreshGitStatus: () -> Unit,
@@ -35,24 +35,24 @@ class DeliveryController internal constructor(
 
     fun canBuild(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
         val group = session.config.groups.firstOrNull { it.id == task.groupId } ?: return false
-        if (!group.uatTagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
+        if (!group.tagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
         val service = group.services.firstOrNull { it.id == workspace.groupServiceId } ?: return false
         return when (service.strategy) {
-            WorkspaceStrategy.STANDARD_WORKTREE -> service.modules.firstOrNull { it.id == workspace.moduleId }?.uatTagEnabled == true
-            WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.firstOrNull { it.id == workspace.moduleId }?.uatTagEnabled == true
+            WorkspaceStrategy.STANDARD_WORKTREE -> service.modules.firstOrNull { it.id == workspace.moduleId }?.tagEnabled == true
+            WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.firstOrNull { it.id == workspace.moduleId }?.tagEnabled == true
         }
     }
 
     fun build(task: TaskManifest, workspace: ServiceWorkspace): Boolean = operations.run(
-        "正在构建 UAT Tag…",
-        "UAT Tag 操作已完成",
+        "正在构建 ${workspace.moduleName.ifBlank { workspace.serviceName }} Tag…",
+        "Tag 操作已完成",
         block = { adapter.executeTag(DeliveryTarget(session.config, taskDirectory(task), workspace.selectionKey)) },
         onSuccess = { result = it; reloadHistory(); refreshGitStatus() },
     )
 
     fun buildBatch(task: TaskManifest, workspaces: List<ServiceWorkspace>, onCompleted: () -> Unit = {}): Boolean = operations.run(
-        "正在批量构建 UAT Tag…",
-        "批量 UAT Tag 操作已完成",
+        "正在批量构建 Tag…",
+        "批量 Tag 操作已完成",
         block = { adapter.executeBatch(session.config, taskDirectory(task), workspaces.map(ServiceWorkspace::selectionKey)) },
         onSuccess = { batchResults = it; reloadHistory(); refreshGitStatus(); onCompleted() },
     )

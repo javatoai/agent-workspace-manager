@@ -62,6 +62,10 @@ class ProcessCommandRunner : CommandRunner {
                     stderr = stderrFuture.get(),
                 )
             }
+        } catch (error: InterruptedException) {
+            destroyProcessTree(process)
+            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            throw error
         } finally {
             executor.shutdownNow()
         }

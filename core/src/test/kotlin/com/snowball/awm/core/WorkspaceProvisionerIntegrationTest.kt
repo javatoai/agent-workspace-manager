@@ -13,6 +13,27 @@ class WorkspaceProvisionerIntegrationTest {
     lateinit var temporary: Path
 
     @Test
+    fun `ordinary workspace provisioning ignores conflicting local and remote tags`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("tag-conflict-create"))
+        GitTestSupport.run(seed, "tag", "same-tag")
+        GitTestSupport.run(seed, "push", "origin", "same-tag")
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("tag-conflict-create").resolve("service"))
+        Files.writeString(seed.resolve("tag-move.txt"), "new\n")
+        GitTestSupport.run(seed, "add", "tag-move.txt")
+        GitTestSupport.run(seed, "commit", "-m", "move tag")
+        GitTestSupport.run(seed, "tag", "-f", "same-tag")
+        GitTestSupport.run(seed, "push", "--force", "origin", "refs/tags/same-tag")
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig.standard("tag-service", repository.id, "tag", baseRef = "origin/master")
+
+        val workspace = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(temporary.resolve("tag-conflict-create").resolve("task"), repository, service, "feature/tag-safe"),
+        ).single()
+
+        assertEquals("feature/tag-safe", workspace.branch)
+    }
+
+    @Test
     fun `standard strategy creates one worktree for each base branch module`() {
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("standard"))
         GitTestSupport.run(seed, "switch", "-c", "development")
@@ -27,8 +48,8 @@ class WorkspaceProvisionerIntegrationTest {
             repositoryId = repository.id,
             displayName = "订单服务",
             modules = listOf(
-                ServiceModuleConfig("master", "主线", "origin/master"),
-                ServiceModuleConfig("development", "开发线", "origin/development"),
+                ServiceModuleConfig("master", "master", "origin/master"),
+                ServiceModuleConfig("development", "development", "origin/development"),
             ),
         )
 
@@ -49,6 +70,56 @@ class WorkspaceProvisionerIntegrationTest {
     }
 
     @Test
+    fun `standard strategy creates independent worktrees for modules on the same base branch`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("same-base"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("same-base/service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig(
+            id = "same-base-service",
+            repositoryId = repository.id,
+            displayName = "same-base",
+            modules = listOf(
+                ServiceModuleConfig("api", "api", "origin/master"),
+                ServiceModuleConfig("job", "job", "origin/master"),
+            ),
+        )
+
+        val workspaces = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(
+                taskDirectory = temporary.resolve("same-base/task"),
+                repository = repository,
+                service = service,
+                requestedFeatureBranch = "feature/OBT-123",
+                moduleBranches = mapOf("api" to "feature/custom-api"),
+            ),
+        )
+
+        assertEquals(listOf("feature/custom-api", "feature/OBT-123-job"), workspaces.map { it.branch })
+        assertEquals(2, workspaces.map { Path.of(it.worktreePath) }.distinct().size)
+        assertTrue(workspaces.all { Files.isDirectory(Path.of(it.worktreePath)) })
+    }
+
+    @Test
+    fun `standard provisioning uses the shared common directory repository lock`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("provision-lock"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("provision-lock/service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig.standard("service", repository.id, "Service", baseRef = "origin/master")
+        val taskDirectory = temporary.resolve("provision-lock/task")
+        val lock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("provision-lock-home")))
+        val provisioner = StandardWorktreeProvisioner(repositoryLock = lock)
+
+        lock.withLock(GitClient().commonDirectory(repositoryPath)) {
+            assertThrows(IllegalStateException::class.java) {
+                provisioner.provision(WorkspaceProvisionRequest(taskDirectory, repository, service, "feature/locked"))
+            }
+        }
+
+        assertTrue(Files.notExists(taskDirectory))
+        assertEquals(false, GitClient().refExists(repositoryPath, "refs/heads/feature/locked"))
+    }
+
+    @Test
     fun `clone strategy checks out the task branch override without creating a linked worktree`() {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("clone"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("clone").resolve("source"))
@@ -59,7 +130,7 @@ class WorkspaceProvisionerIntegrationTest {
             displayName = "复杂单仓",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             modules = emptyList(),
-            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", uatTagEnabled = true)),
+            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", tagEnabled = true)),
         )
 
         val workspace = IndependentCloneProvisioner().provision(
@@ -215,6 +286,76 @@ class WorkspaceProvisionerIntegrationTest {
         git.removeWorktree(repositoryPath, target, force = true)
         git.addExistingWorktree(repositoryPath, target, branch, force = workspace.forceWorktreeAttach)
         assertEquals(branch, git.currentBranch(target))
+    }
+
+    @Test
+    fun `stale worktree registration is pruned before branch reuse inspection`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-stale"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-stale").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val branch = "feature/reuse-stale"
+        GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
+        val stale = temporary.resolve("reuse-stale").resolve("deleted-worktree")
+        GitClient().addExistingWorktree(repositoryPath, stale, branch)
+        Files.walk(stale).use { it.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
+
+        val service = GroupServiceConfig.standard("reuse-stale", repository.id, "reuse-stale", baseRef = "master")
+        val conflicts = WorkspaceBranchReuseInspector().inspect(repository, service, branch)
+
+        assertEquals(listOf(branch), conflicts.map { it.key.branch })
+        assertTrue(conflicts.single().occupiedWorktreePaths.isEmpty())
+        assertTrue(GitClient().worktrees(repositoryPath).none { it.branch == branch })
+    }
+
+    @Test
+    fun `locked worktree is never force attached`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-locked"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-locked").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val branch = "feature/reuse-locked"
+        GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
+        val locked = temporary.resolve("reuse-locked").resolve("locked-worktree")
+        GitClient().addExistingWorktree(repositoryPath, locked, branch)
+        GitTestSupport.run(repositoryPath, "worktree", "lock", "--reason", "protected", locked.toString())
+        val service = GroupServiceConfig.standard("reuse-locked", repository.id, "reuse-locked", baseRef = "master")
+
+        val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single()
+        assertEquals(listOf(locked.toString()), conflict.lockedWorktreePaths)
+        assertThrows(IllegalArgumentException::class.java) {
+            StandardWorktreeProvisioner().provision(
+                WorkspaceProvisionRequest(
+                    temporary.resolve("reuse-locked").resolve("task"),
+                    repository,
+                    service,
+                    branch,
+                    setOf(BranchReuseKey(repository.id, branch)),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `branch reuse confirmation is rejected when worktree state changes`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("reuse-changed"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-changed").resolve("service"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val branch = "feature/reuse-changed"
+        GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
+        val service = GroupServiceConfig.standard("reuse-changed", repository.id, "reuse-changed", baseRef = "master")
+        val confirmation = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single().key
+        GitClient().addExistingWorktree(repositoryPath, temporary.resolve("reuse-changed").resolve("other"), branch)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            StandardWorktreeProvisioner().provision(
+                WorkspaceProvisionRequest(
+                    temporary.resolve("reuse-changed").resolve("task"),
+                    repository,
+                    service,
+                    branch,
+                    setOf(confirmation),
+                ),
+            )
+        }
     }
 
     @Test

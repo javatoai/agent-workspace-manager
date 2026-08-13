@@ -1,6 +1,10 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -54,6 +58,7 @@ class ManifestStore(
 
     override fun load(taskDirectory: Path): TaskManifest {
         val content = Files.readString(taskDirectory.resolve(FILE_NAME))
+        rejectRemovedSourceRepositoryStrategy(content, "不再支持原仓库分支；任务清单保持原样，请手工处理")
         val version = json.parseToJsonElement(content)
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
@@ -62,7 +67,7 @@ class ManifestStore(
             "任务 JSON 版本不受支持：${version ?: "缺少 schemaVersion"}，当前版本为 " +
                 CURRENT_TASK_MANIFEST_SCHEMA_VERSION
         }
-        return json.decodeFromString(content)
+        return json.decodeFromJsonElement(stripRemovedSourceMetadata(json.parseToJsonElement(content)))
     }
 
     fun list(taskRoot: Path): List<Pair<Path, TaskManifest>> = scan(taskRoot).current
@@ -80,12 +85,13 @@ class ManifestStore(
             directories.forEach { directory ->
                 runCatching {
                     val content = Files.readString(directory.resolve(FILE_NAME))
+                    rejectRemovedSourceRepositoryStrategy(content, "不再支持原仓库分支；任务清单保持原样，请手工处理")
                     val version = json.parseToJsonElement(content)
                         .jsonObject["schemaVersion"]
                         ?.jsonPrimitive
             ?.contentOrNull
                     if (SchemaVersionCompatibility.isCompatible(version, CURRENT_TASK_MANIFEST_SCHEMA_VERSION)) {
-                        current.add(directory to json.decodeFromString(content))
+                        current.add(directory to json.decodeFromJsonElement(stripRemovedSourceMetadata(json.parseToJsonElement(content))))
                     } else {
                         unsupported.add(directory)
                     }
@@ -100,4 +106,13 @@ class ManifestStore(
     companion object {
         const val FILE_NAME = "agent-workspace.json"
     }
+}
+
+/** Early 0.7 manifests emitted this null/default field for every strategy. */
+internal fun stripRemovedSourceMetadata(element: JsonElement): JsonElement = when (element) {
+    is JsonObject -> JsonObject(element
+        .filterKeys { it != "sourcePreviousBranch" }
+        .mapValues { (_, value) -> stripRemovedSourceMetadata(value) })
+    is JsonArray -> JsonArray(element.map(::stripRemovedSourceMetadata))
+    else -> element
 }

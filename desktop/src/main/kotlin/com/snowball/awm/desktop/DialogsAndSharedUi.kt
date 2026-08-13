@@ -62,7 +62,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -74,6 +73,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -84,6 +84,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
@@ -96,6 +97,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -112,10 +114,12 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.snowball.awm.core.AgentConflictResolution
 import com.snowball.awm.core.BootstrapConfig
+import com.snowball.awm.core.BootstrapCopyRule
+import com.snowball.awm.core.BootstrapCommand
 import com.snowball.awm.core.BootstrapPresets
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
-import com.snowball.awm.core.IdeType
+import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
@@ -123,11 +127,13 @@ import com.snowball.awm.core.RemoteBranchRef
 import com.snowball.awm.core.GroupConfig
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ServiceModuleConfig
+import com.snowball.awm.core.StandardWorktreeModuleNaming
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.TaskNaming
 import com.snowball.awm.core.TagOutputFormatter
+import com.snowball.awm.core.TagBuildMode
 import com.snowball.awm.core.RequirementDraftState
 import com.snowball.awm.core.WorkspaceToolLaunchStatus
 import com.snowball.awm.core.ThemePreference
@@ -139,6 +145,7 @@ import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.isHttpUrl
 import com.snowball.awm.core.selectionKey
+import com.snowball.awm.core.validated
 import com.snowball.awm.desktop.generated.resources.Res
 import com.snowball.awm.desktop.generated.resources.app_icon
 import io.github.vinceglb.filekit.FileKit
@@ -150,6 +157,7 @@ import java.awt.Dimension
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.util.UUID
+import java.nio.file.Path
 
 
 @Composable
@@ -161,7 +169,7 @@ internal fun BatchTagDialog(
     var selected by remember(workspaces) { mutableStateOf(workspaces.map(ServiceWorkspace::selectionKey).toSet()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("批量 UAT Tag") },
+        title = { Text("批量 Tag") },
         text = {
             Column(Modifier.widthIn(min = 520.dp).heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 workspaces.forEach { workspace ->
@@ -189,11 +197,19 @@ internal fun BatchTagDialog(
 @Composable
 internal fun BranchInfoDialog(content: String, onDismiss: () -> Unit, onCopy: () -> Unit) {
     AlertDialog(
+        modifier = Modifier.widthIn(min = 1040.dp, max = 1280.dp),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         onDismissRequest = onDismiss,
         title = { Text("分支信息") },
         text = {
             Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(11.dp)) {
-                Text(content.ifBlank { "暂无分支信息" }, Modifier.padding(13.dp), fontFamily = FontFamily.Monospace)
+                SelectionContainer {
+                    Text(
+                        content.ifBlank { "暂无分支信息" },
+                        Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(13.dp).verticalScroll(rememberScrollState()),
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
         },
         confirmButton = { Button(onClick = onCopy) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("复制") } },
@@ -235,29 +251,106 @@ internal fun AddRepositoryDialog(controller: DesktopApplication, onDismiss: () -
     )
 }
 
+internal data class ServiceModuleEditorDraft(
+    val id: String,
+    val name: String = StandardWorktreeModuleNaming.DEFAULT_NAME,
+    val baseRef: String = "origin/master",
+    val baseRemote: String = "origin",
+    val tagEnabled: Boolean = true,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    val tagTargetRef: String = "origin/release/test",
+    val tagMessagePrefix: String = "Tag",
+) {
+    fun toConfig(): ServiceModuleConfig = ServiceModuleConfig(
+        id = id,
+        name = name.trim().ifBlank { StandardWorktreeModuleNaming.DEFAULT_NAME },
+        baseRef = baseRef.trim(),
+        baseRemote = baseRemote.trim(),
+        tagEnabled = tagEnabled,
+        tagMode = tagMode,
+        tagTargetRef = if (tagMode == TagBuildMode.CURRENT_BRANCH) null else tagTargetRef.trim(),
+        tagMessagePrefix = tagMessagePrefix.trim(),
+    )
+}
+
+internal fun ServiceModuleConfig.toEditorDraft(): ServiceModuleEditorDraft = ServiceModuleEditorDraft(
+    id = id,
+    name = name,
+    baseRef = baseRef,
+    baseRemote = baseRemote,
+    tagEnabled = tagEnabled,
+    tagMode = tagMode,
+    tagTargetRef = tagTargetRef.orEmpty(),
+    tagMessagePrefix = tagMessagePrefix,
+)
+
+internal data class IndependentCloneModuleEditorDraft(
+    val id: String,
+    val name: String = "",
+    val branch: String = "origin/master",
+    val tagEnabled: Boolean = false,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    val tagTargetRef: String = "origin/release/test",
+    val tagMessagePrefix: String = "Tag",
+) {
+    fun toConfig(): IndependentCloneModuleConfig = IndependentCloneModuleConfig(
+        id = id,
+        name = name.trim(),
+        branch = branch.trim(),
+        tagEnabled = tagEnabled,
+        tagMode = tagMode,
+        tagTargetRef = if (tagMode == TagBuildMode.CURRENT_BRANCH) null else tagTargetRef.trim(),
+        tagMessagePrefix = tagMessagePrefix.trim(),
+    )
+}
+
+internal fun IndependentCloneModuleConfig.toEditorDraft(): IndependentCloneModuleEditorDraft = IndependentCloneModuleEditorDraft(
+    id = id,
+    name = name,
+    branch = branch,
+    tagEnabled = tagEnabled,
+    tagMode = tagMode,
+    tagTargetRef = tagTargetRef.orEmpty(),
+    tagMessagePrefix = tagMessagePrefix,
+)
+
 @Composable
 internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupServiceConfig, onDismiss: () -> Unit, onSave: (GroupServiceConfig) -> Unit) {
+    val widthPolicy = serviceEditorDialogWidthPolicy()
     val json = remember { Json { prettyPrint = true; encodeDefaults = true } }
     val initialBootstrapText = remember(service) { json.encodeToString(service.bootstrap) }
     var name by remember { mutableStateOf(service.displayName) }
     var enabled by remember { mutableStateOf(service.enabled) }
-    var ide by remember { mutableStateOf(service.ideType) }
+    var developmentTool by remember { mutableStateOf(service.developmentTool) }
+    var commitMessageTemplate by remember { mutableStateOf(service.commitMessageTemplate) }
     var strategy by remember { mutableStateOf(service.strategy) }
-    var modules by remember { mutableStateOf(service.modules) }
-    var cloneModules by remember { mutableStateOf(service.cloneModules.ifEmpty { listOf(IndependentCloneModuleConfig(id = "clone-default")) }) }
+    val initialModuleDrafts = remember(service) { service.modules.map(ServiceModuleConfig::toEditorDraft) }
+    val initialCloneModuleDrafts = remember(service) {
+        service.cloneModules.map(IndependentCloneModuleConfig::toEditorDraft)
+            .ifEmpty { listOf(IndependentCloneModuleEditorDraft(id = "clone-default")) }
+    }
+    var modules by remember(service) { mutableStateOf(initialModuleDrafts) }
+    var cloneModules by remember(service) { mutableStateOf(initialCloneModuleDrafts) }
+    var bootstrapConfig by remember(service) { mutableStateOf(service.bootstrap) }
     var bootstrapText by remember { mutableStateOf(initialBootstrapText) }
+    var bootstrapMode by remember { mutableStateOf("form") }
     var bootstrapError by remember { mutableStateOf<String?>(null) }
+    var serviceValidationError by remember { mutableStateOf<String?>(null) }
     var showBootstrapExample by remember { mutableStateOf(false) }
     var bootstrapCopied by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
-    val hasDraftChanges = name != service.displayName || enabled != service.enabled || ide != service.ideType ||
-        strategy != service.strategy || modules != service.modules ||
-        cloneModules != service.cloneModules.ifEmpty { listOf(IndependentCloneModuleConfig(id = "clone-default")) } ||
-        bootstrapText != initialBootstrapText
+    val hasDraftChanges = name != service.displayName || enabled != service.enabled || developmentTool != service.developmentTool || commitMessageTemplate != service.commitMessageTemplate ||
+        strategy != service.strategy || modules != initialModuleDrafts ||
+        cloneModules != initialCloneModuleDrafts ||
+        bootstrapConfig != service.bootstrap || bootstrapText != initialBootstrapText
     val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
-    Dialog(onDismissRequest = requestDismiss) {
+    Dialog(onDismissRequest = requestDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            Modifier.widthIn(min = 780.dp, max = 920.dp).heightIn(min = 620.dp, max = 820.dp),
+            Modifier
+                .fillMaxWidth(widthPolicy.fillFraction)
+                .fillMaxHeight(0.90f)
+                .widthIn(min = widthPolicy.minWidthDp.dp, max = widthPolicy.maxWidthDp.dp)
+                .heightIn(min = 620.dp, max = 900.dp),
             shape = RoundedCornerShape(22.dp),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
@@ -280,38 +373,31 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                 ) {
                 SectionHeader("基础信息", "IDE 是系统建议，可手工修改；保存值始终作为最终依据")
                 OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("展示名称") })
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("启用服务", style = MaterialTheme.typography.titleSmall); Switch(enabled, { enabled = it })
-                    Spacer(Modifier.width(8.dp))
-                    IdeType.entries.forEach { value -> FilterChip(ide == value, { ide = value }, label = { Text(value.name) }) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("启用服务", style = MaterialTheme.typography.titleSmall)
+                    Switch(enabled, { enabled = it })
                 }
+                Text("默认开发工具", style = MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    DevelopmentToolType.entries.forEach { value ->
+                        FilterChip(developmentTool == value, { developmentTool = value }, label = { Text(value.displayName) })
+                    }
+                }
+                OutlinedTextField(commitMessageTemplate, { commitMessageTemplate = it }, Modifier.fillMaxWidth(), label = { Text("默认提交信息模板（支持 {num}）") }, singleLine = true)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 SectionHeader("工作区策略", "决定新任务如何准备该服务的代码目录")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     WorkspaceStrategy.entries.forEach { value -> FilterChip(strategy == value, { strategy = value }, label = { Text(value.displayName) }) }
                 }
                 if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
-                    Text("不同基础分支创建不同 Worktree；相同基础分支的代码模块在 AGENTS.md 中约定。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("每个模块都会创建独立 Worktree；多个模块默认使用“任务分支-模块名”作为目标分支。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     modules.forEachIndexed { index, module ->
                         ModuleEditor(module, service.repositoryId, controller, canDelete = modules.size > 1, onChange = { changed -> modules = modules.mapIndexed { i, value -> if (i == index) changed else value } }, onDelete = { modules = modules.filterIndexed { i, _ -> i != index } })
                     }
                     OutlinedButton(onClick = {
-                        modules = modules + ServiceModuleConfig(id = "module-${UUID.randomUUID()}", baseRef = "origin/master")
+                        modules = modules + ServiceModuleEditorDraft(id = "module-${UUID.randomUUID()}", name = StandardWorktreeModuleNaming.DEFAULT_NAME)
                     }) { Icon(Icons.Outlined.Add, null); Text("添加基础分支模块") }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Bootstrap JSON", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                        TextButton(onClick = { bootstrapCopied = false; showBootstrapExample = true }) { Text("查看示例") }
-                    }
-                    OutlinedTextField(
-                        bootstrapText,
-                        { bootstrapText = it; bootstrapError = null },
-                        Modifier.fillMaxWidth(),
-                        label = { Text("copyRules 与 commands") },
-                        minLines = 5,
-                        isError = bootstrapError != null,
-                        supportingText = bootstrapError?.let { message -> { Text(message) } },
-                    )
-                } else {
+                } else if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
                     Text("独立克隆模块", fontWeight = FontWeight.SemiBold)
                     Text("选择该服务时会为以下每个固定分支创建独立目录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     cloneModules.forEachIndexed { index, module ->
@@ -325,9 +411,52 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                         )
                     }
                     OutlinedButton(onClick = {
-                        cloneModules = cloneModules + IndependentCloneModuleConfig(id = "clone-${UUID.randomUUID()}")
+                        cloneModules = cloneModules + IndependentCloneModuleEditorDraft(id = "clone-${UUID.randomUUID()}")
                     }) { Icon(Icons.Outlined.Add, null); Text("添加克隆模块") }
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    SectionHeader("Bootstrap", "创建工作区后复制本机文件并执行初始化命令")
+                    Spacer(Modifier.weight(1f))
+                    FilterChip(bootstrapMode == "form", {
+                        val parsed = runCatching { json.decodeFromString<BootstrapConfig>(bootstrapText).validated() }
+                            .getOrElse { error -> bootstrapError = "JSON 格式错误：${error.message}"; return@FilterChip }
+                        bootstrapConfig = parsed
+                        bootstrapMode = "form"
+                        bootstrapError = null
+                    }, label = { Text("表单配置") })
+                    Spacer(Modifier.width(6.dp))
+                    FilterChip(bootstrapMode == "json", {
+                        bootstrapText = json.encodeToString(bootstrapConfig)
+                        bootstrapMode = "json"
+                        bootstrapError = null
+                    }, label = { Text("高级 JSON") })
+                    TextButton(onClick = { bootstrapCopied = false; showBootstrapExample = true }) { Text("查看示例") }
+                }
+                if (bootstrapMode == "form") {
+                    BootstrapFormEditor(
+                        config = bootstrapConfig,
+                        repositoryRoot = controller.config.repositories.firstOrNull { it.id == service.repositoryId }?.rootPath,
+                        controller = controller,
+                        onChange = {
+                            bootstrapConfig = it
+                            bootstrapText = json.encodeToString(it)
+                            bootstrapError = null
+                        },
+                        onError = { bootstrapError = it },
+                    )
+                } else {
+                    OutlinedTextField(
+                        bootstrapText,
+                        { bootstrapText = it; bootstrapError = null },
+                        Modifier.fillMaxWidth(),
+                        label = { Text("Bootstrap JSON") },
+                        minLines = 8,
+                        isError = bootstrapError != null,
+                        supportingText = bootstrapError?.let { message -> { Text(message) } },
+                    )
+                }
+                bootstrapError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
@@ -335,21 +464,26 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                     TextButton(onClick = requestDismiss) { Text("取消") }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
-                        val bootstrap = if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
-                            runCatching { json.decodeFromString<BootstrapConfig>(bootstrapText) }
+                        val bootstrap = if (bootstrapMode == "json") {
+                            runCatching { json.decodeFromString<BootstrapConfig>(bootstrapText).validated() }
                                 .getOrElse { error -> bootstrapError = "JSON 格式错误：${error.message}"; return@Button }
-                        } else service.bootstrap
-                        val normalizedModules = if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) modules.map { it.copy(name = it.name.trim()) } else emptyList()
+                        } else bootstrapConfig
                         runCatching {
+                            val normalizedModules = if (strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
+                                modules.map(ServiceModuleEditorDraft::toConfig)
+                            } else emptyList()
+                            val normalizedCloneModules = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
+                                cloneModules.map(IndependentCloneModuleEditorDraft::toConfig)
+                            } else emptyList()
+                            validateServiceWorkspaceModules(strategy, normalizedModules, normalizedCloneModules)
                             service.copy(
-                                displayName = name.trim(), enabled = enabled, ideType = ide, strategy = strategy,
+                                displayName = name.trim(), enabled = enabled, developmentTool = developmentTool, strategy = strategy,
+                                commitMessageTemplate = commitMessageTemplate.trim(),
                                 modules = normalizedModules,
-                                cloneModules = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
-                                    cloneModules.map { it.copy(name = it.name.trim(), branch = it.branch.trim(), uatRef = it.uatRef.trim()) }
-                                } else emptyList(),
+                                cloneModules = normalizedCloneModules,
                                 bootstrap = bootstrap,
                             )
-                        }.onSuccess(onSave).onFailure { bootstrapError = it.message }
+                        }.onSuccess(onSave).onFailure { serviceValidationError = OperationFailureDetails.format(it) }
                     }, enabled = name.isNotBlank() && (strategy != WorkspaceStrategy.INDEPENDENT_CLONE || cloneModules.isNotEmpty() && cloneModules.all { it.branch.isNotBlank() }) && (strategy != WorkspaceStrategy.STANDARD_WORKTREE || modules.isNotEmpty())) { Icon(Icons.Outlined.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("保存配置") }
                 }
             }
@@ -401,6 +535,14 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
             }
         }
     }
+    serviceValidationError?.let { details ->
+        TagResultDialog(
+            title = "服务配置无法保存",
+            content = details,
+            onDismiss = { serviceValidationError = null },
+            onCopy = { controller.copyText(details, "错误详情已复制") },
+        )
+    }
     if (confirmDiscard) {
         DiscardChangesDialog(
             title = "放弃服务配置修改？",
@@ -411,8 +553,151 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
     }
 }
 
+internal data class ServiceEditorDialogWidthPolicy(
+    val fillFraction: Float,
+    val minWidthDp: Int,
+    val maxWidthDp: Int,
+)
+
+internal fun serviceEditorDialogWidthPolicy(): ServiceEditorDialogWidthPolicy =
+    ServiceEditorDialogWidthPolicy(
+        fillFraction = 0.46f,
+        minWidthDp = 410,
+        maxWidthDp = 640,
+    )
+
 @Composable
-internal fun UatResultDialog(
+private fun BootstrapFormEditor(
+    config: BootstrapConfig,
+    repositoryRoot: String?,
+    controller: DesktopApplication,
+    onChange: (BootstrapConfig) -> Unit,
+    onError: (String?) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("复制规则", fontWeight = FontWeight.SemiBold)
+        config.copyRules.forEachIndexed { index, rule ->
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(rule.source, { value ->
+                            onChange(config.copy(copyRules = config.copyRules.replaceAt(index, rule.copy(source = value))))
+                        }, Modifier.weight(1f), label = { Text("仓库内源路径") }, singleLine = true)
+                        OutlinedButton(onClick = {
+                            if (repositoryRoot.isNullOrBlank()) {
+                                onError("请先配置原始仓库目录")
+                            } else controller.chooseFile(repositoryRoot) { chosen ->
+                                runCatching { repositoryRelativePath(repositoryRoot, chosen) }
+                                    .onSuccess { relative ->
+                                        onChange(config.copy(copyRules = config.copyRules.replaceAt(index, rule.withSelectedSource(relative))))
+                                    }
+                                    .onFailure { onError(it.message) }
+                            }
+                        }) { Text("选择文件") }
+                        OutlinedButton(onClick = {
+                            if (repositoryRoot.isNullOrBlank()) {
+                                onError("请先配置原始仓库目录")
+                            } else controller.chooseDirectory(repositoryRoot) { chosen ->
+                                runCatching { repositoryRelativePath(repositoryRoot, chosen) }
+                                    .onSuccess { relative ->
+                                        onChange(config.copy(copyRules = config.copyRules.replaceAt(index, rule.withSelectedSource(relative))))
+                                    }
+                                    .onFailure { onError(it.message) }
+                            }
+                        }) { Text("选择目录") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(rule.target, { value ->
+                            onChange(config.copy(copyRules = config.copyRules.replaceAt(index, rule.copy(target = value))))
+                        }, Modifier.weight(1f), label = { Text("工作区目标路径") }, singleLine = true)
+                        Checkbox(rule.overwrite, { checked ->
+                            onChange(config.copy(copyRules = config.copyRules.replaceAt(index, rule.copy(overwrite = checked))))
+                        })
+                        Text("允许覆盖")
+                        IconButton(onClick = { onChange(config.copy(copyRules = config.copyRules.filterIndexed { i, _ -> i != index })) }) {
+                            Icon(Icons.Outlined.Delete, "删除复制规则")
+                        }
+                    }
+                }
+            }
+        }
+        OutlinedButton(onClick = {
+            onChange(config.copy(copyRules = config.copyRules + BootstrapCopyRule(source = "", target = "")))
+        }) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(4.dp)); Text("添加复制规则") }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text("初始化命令", fontWeight = FontWeight.SemiBold)
+        config.commands.forEachIndexed { index, command ->
+            var argumentsText by remember(command) { mutableStateOf(command.arguments.joinToString("\n")) }
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(command.name, { value -> onChange(config.copy(commands = config.commands.replaceAt(index, command.copy(name = value)))) }, Modifier.weight(1f), label = { Text("名称") }, singleLine = true)
+                        OutlinedTextField(command.executable, { value -> onChange(config.copy(commands = config.commands.replaceAt(index, command.copy(executable = value)))) }, Modifier.weight(1f), label = { Text("可执行程序") }, singleLine = true)
+                    }
+                    OutlinedTextField(argumentsText, { value ->
+                        argumentsText = value
+                        onChange(config.copy(commands = config.commands.replaceAt(index, command.copy(arguments = value.lines().filter { it.isNotBlank() }))))
+                    }, Modifier.fillMaxWidth(), label = { Text("参数（每行一个）") }, minLines = 2)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(command.workingDirectory, { value -> onChange(config.copy(commands = config.commands.replaceAt(index, command.copy(workingDirectory = value)))) }, Modifier.weight(1f), label = { Text("工作目录") }, singleLine = true)
+                        OutlinedTextField(command.timeoutSeconds.toString(), { value -> value.toLongOrNull()?.takeIf { it > 0 }?.let { timeout -> onChange(config.copy(commands = config.commands.replaceAt(index, command.copy(timeoutSeconds = timeout)))) } }, Modifier.width(150.dp), label = { Text("超时（秒）") }, singleLine = true)
+                        Checkbox(command.enabled, { checked -> onChange(config.copy(commands = config.commands.replaceAt(index, command.copy(enabled = checked)))) })
+                        Text("启用")
+                        IconButton(onClick = { onChange(config.copy(commands = config.commands.filterIndexed { i, _ -> i != index })) }) { Icon(Icons.Outlined.Delete, "删除命令") }
+                    }
+                    val preview = (listOf(command.executable) + command.arguments).joinToString(" ") { argument -> if (argument.any(Char::isWhitespace)) "\"$argument\"" else argument }
+                    SelectionContainer { Text("预览：$preview", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                }
+            }
+        }
+        OutlinedButton(onClick = {
+            onChange(config.copy(commands = config.commands + BootstrapCommand(name = "初始化", executable = "")))
+        }) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(4.dp)); Text("添加命令") }
+    }
+}
+
+private fun <T> List<T>.replaceAt(index: Int, value: T): List<T> = mapIndexed { current, existing ->
+    if (current == index) value else existing
+}
+
+internal fun BootstrapCopyRule.withSelectedSource(relative: String): BootstrapCopyRule = copy(
+    source = relative,
+    target = if (target.isBlank() || target == source) relative else target,
+)
+
+private fun repositoryRelativePath(repositoryRoot: String, selectedPath: String): String {
+    val root = Path.of(repositoryRoot).toAbsolutePath().normalize()
+    val selected = Path.of(selectedPath).toAbsolutePath().normalize()
+    require(selected.startsWith(root)) { "只能选择原始仓库内的文件或目录" }
+    val relative = root.relativize(selected)
+    require(relative.none { it.toString() == ".." }) { "路径不能包含 .." }
+    require(relative.none { it.toString().equals(".git", ignoreCase = true) }) { "不能选择 .git 内容" }
+    require(!java.nio.file.Files.isSymbolicLink(selected)) { "不能选择符号链接" }
+    return relative.toString().replace('\\', '/')
+}
+
+internal fun validateServiceWorkspaceModules(
+    strategy: WorkspaceStrategy,
+    modules: List<ServiceModuleConfig>,
+    cloneModules: List<IndependentCloneModuleConfig>,
+) {
+    when (strategy) {
+        WorkspaceStrategy.STANDARD_WORKTREE -> StandardWorktreeModuleNaming.requireValid(modules)
+        WorkspaceStrategy.INDEPENDENT_CLONE -> {
+            require(cloneModules.isNotEmpty()) { "独立克隆服务至少需要一个克隆模块" }
+            val duplicates = cloneModules.groupBy { it.branch.trim().lowercase() }.filterValues { it.size > 1 }.values
+            require(duplicates.isEmpty()) {
+                "独立克隆模块分支不能重复：" + duplicates.joinToString("；") { repeated ->
+                    "${repeated.first().branch.trim()}（${repeated.joinToString { it.name.trim().ifBlank { it.id } }}）"
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun TagResultDialog(
     title: String,
     content: String,
     onDismiss: () -> Unit,
@@ -462,92 +747,146 @@ internal fun UatResultDialog(
 
 @Composable
 private fun CloneModuleEditor(
-    module: IndependentCloneModuleConfig,
+    module: IndependentCloneModuleEditorDraft,
     repositoryId: String,
     controller: DesktopApplication,
     canDelete: Boolean,
-    onChange: (IndependentCloneModuleConfig) -> Unit,
+    onChange: (IndependentCloneModuleEditorDraft) -> Unit,
     onDelete: () -> Unit,
 ) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(module.name, { onChange(module.copy(name = it)) }, Modifier.weight(1f), label = { Text("显示名称（可选）") })
-                ActionIconButton("删除标准 Worktree 模块", onDelete, enabled = canDelete) {
-                    Icon(Icons.Outlined.Delete, "删除模块")
-                }
-            }
-            RemoteBranchPicker(module.branch, { onChange(module.copy(branch = it)) }, "固定远程分支", repositoryId, controller, Modifier.fillMaxWidth())
-            Row(verticalAlignment = Alignment.CenterVertically) { Text("允许参与 UAT Tag", Modifier.weight(1f)); Switch(module.uatTagEnabled, { onChange(module.copy(uatTagEnabled = it)) }) }
-            if (module.uatTagEnabled) {
-                RemoteBranchPicker(module.uatRef, { onChange(module.copy(uatRef = it)) }, "UAT 目标分支", repositoryId, controller, Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(module.initialUatTag.orEmpty(), { onChange(module.copy(initialUatTag = it.ifBlank { null })) }, Modifier.weight(1f), label = { Text("初始 Tag（可选）") })
-                    OutlinedTextField(module.tagMessagePrefix, { onChange(module.copy(tagMessagePrefix = it)) }, Modifier.weight(1f), label = { Text("Tag 消息前缀") })
-                }
-            }
-        }
-    }
-}
-
-/** UI-only branch chooser: all Git I/O remains in DesktopApplication. */
-@Composable
-private fun RemoteBranchPicker(value: String, onValueChange: (String) -> Unit, label: String, repositoryId: String, controller: DesktopApplication, modifier: Modifier = Modifier) {
-    var expanded by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    val remote = runCatching { RemoteBranchRef.parse(value.trim()).remote }.getOrDefault("origin")
-    val state = controller.remoteBranchState(repositoryId, remote)
-    Box(modifier) {
-        OutlinedTextField(value, onValueChange, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
-            trailingIcon = {
-                ActionIconButton("搜索并选择远程分支", {
-                    controller.loadRemoteBranches(repositoryId, remote)
-                    query = ""
-                    expanded = true
-                }) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支") }
-            })
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.widthIn(min = 560.dp, max = 720.dp), containerColor = MaterialTheme.colorScheme.surfaceVariant, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 8.dp), label = { Text("搜索远程分支") }, singleLine = true)
-            when (state) {
-                RemoteBranchesState.Loading -> DropdownMenuItem(text = { Text("正在读取远程分支…") }, onClick = {}, enabled = false)
-                is RemoteBranchesState.Failed -> DropdownMenuItem(text = { Text("加载失败：${state.message}") }, onClick = { controller.loadRemoteBranches(repositoryId, remote, true) })
-                is RemoteBranchesState.Loaded -> {
-                    val branches = RemoteBranchSearch.filter(state.branches, query)
-                    if (branches.isEmpty()) DropdownMenuItem(text = { Text("没有匹配分支") }, onClick = {}, enabled = false)
-                    branches.forEach { branch -> DropdownMenuItem(text = { Text(branch) }, onClick = { onValueChange(branch); expanded = false }) }
-                }
-                RemoteBranchesState.Idle -> DropdownMenuItem(text = { Text("正在准备读取远程分支…") }, onClick = {}, enabled = false)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ModuleEditor(module: ServiceModuleConfig, repositoryId: String, controller: DesktopApplication, canDelete: Boolean, onChange: (ServiceModuleConfig) -> Unit, onDelete: () -> Unit) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    module.name,
-                    { onChange(module.copy(name = it)) },
-                    Modifier.weight(1f),
-                    label = { Text("显示名称（可选）") },
-                    placeholder = { Text("单分支默认服务名，多分支默认基础分支末段") },
-                )
-                RemoteBranchPicker(module.baseRef, { onChange(module.copy(baseRef = it)) }, "基础分支", repositoryId, controller, Modifier.weight(1f))
                 ActionIconButton("删除独立克隆模块", onDelete, enabled = canDelete) {
                     Icon(Icons.Outlined.Delete, "删除模块")
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("UAT Tag", Modifier.weight(1f)); Switch(module.uatTagEnabled, { onChange(module.copy(uatTagEnabled = it)) })
-            }
-            if (module.uatTagEnabled) RemoteBranchPicker(module.uatRef, { onChange(module.copy(uatRef = it)) }, "UAT 目标分支", repositoryId, controller, Modifier.fillMaxWidth())
-            if (module.uatTagEnabled) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(module.initialUatTag.orEmpty(), { onChange(module.copy(initialUatTag = it.ifBlank { null })) }, Modifier.weight(1f), label = { Text("初始 Tag（可选）") })
-                OutlinedTextField(module.tagMessagePrefix, { onChange(module.copy(tagMessagePrefix = it)) }, Modifier.weight(1f), label = { Text("Tag 消息前缀") }, supportingText = { Text("只影响说明首行，不改变 Tag 名") })
+            RemoteBranchPicker(module.branch, { onChange(module.copy(branch = it)) }, "固定远程分支", repositoryId, controller, Modifier.fillMaxWidth())
+            Row(verticalAlignment = Alignment.CenterVertically) { Text("允许构建 Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) }) }
+            if (module.tagEnabled) {
+                TagModeSelector(module.tagMode) { mode ->
+                    onChange(module.copy(tagMode = mode, tagTargetRef = if (mode == TagBuildMode.CURRENT_BRANCH) "" else module.tagTargetRef.ifBlank { "origin/release/test" }))
+                }
+                TagConfigurationFields(
+                    targetVisible = module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
+                    targetRef = module.tagTargetRef,
+                    onTargetRefChange = { onChange(module.copy(tagTargetRef = it)) },
+                    messagePrefix = module.tagMessagePrefix,
+                    onMessagePrefixChange = { onChange(module.copy(tagMessagePrefix = it)) },
+                    repositoryId = repositoryId,
+                    controller = controller,
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String, controller: DesktopApplication, canDelete: Boolean, onChange: (ServiceModuleEditorDraft) -> Unit, onDelete: () -> Unit) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                OutlinedTextField(
+                    module.name,
+                    { onChange(module.copy(name = it)) },
+                    Modifier.weight(1f),
+                    label = { Text("模块名") },
+                    placeholder = { Text(StandardWorktreeModuleNaming.DEFAULT_NAME) },
+                    supportingText = { Text("仅允许英文字母、数字、-、_、/") },
+                )
+                RemoteBranchPicker(module.baseRef, { onChange(module.copy(baseRef = it)) }, "基础分支", repositoryId, controller, Modifier.weight(1f))
+                ActionIconButton("删除标准 Worktree 模块", onDelete, Modifier.padding(top = 8.dp), enabled = canDelete) {
+                    Icon(Icons.Outlined.Delete, "删除模块")
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
+            }
+            if (module.tagEnabled) TagModeSelector(module.tagMode) { mode ->
+                onChange(module.copy(tagMode = mode, tagTargetRef = if (mode == TagBuildMode.CURRENT_BRANCH) "" else module.tagTargetRef.ifBlank { "origin/release/test" }))
+            }
+            if (module.tagEnabled) TagConfigurationFields(
+                targetVisible = module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
+                targetRef = module.tagTargetRef,
+                onTargetRefChange = { onChange(module.copy(tagTargetRef = it)) },
+                messagePrefix = module.tagMessagePrefix,
+                onMessagePrefixChange = { onChange(module.copy(tagMessagePrefix = it)) },
+                repositoryId = repositoryId,
+                controller = controller,
+            )
+        }
+    }
+}
+
+internal data class TagConfigurationFieldLayout(
+    val heightDp: Int?,
+    val singleLine: Boolean,
+    val targetWeight: Float,
+    val messageWeight: Float,
+)
+
+internal fun tagConfigurationFieldLayout(): TagConfigurationFieldLayout =
+    TagConfigurationFieldLayout(
+        heightDp = null,
+        singleLine = true,
+        targetWeight = 1f,
+        messageWeight = 1f,
+    )
+
+private fun Modifier.tagConfigurationFieldHeight(heightDp: Int?): Modifier =
+    if (heightDp == null) this else height(heightDp.dp)
+
+@Composable
+private fun TagConfigurationFields(
+    targetVisible: Boolean,
+    targetRef: String,
+    onTargetRefChange: (String) -> Unit,
+    messagePrefix: String,
+    onMessagePrefixChange: (String) -> Unit,
+    repositoryId: String,
+    controller: DesktopApplication,
+) {
+    val layout = tagConfigurationFieldLayout()
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (targetVisible) {
+            RemoteBranchPicker(
+                targetRef,
+                onTargetRefChange,
+                "Tag 目标分支",
+                repositoryId,
+                controller,
+                Modifier.weight(layout.targetWeight).tagConfigurationFieldHeight(layout.heightDp),
+            )
+        }
+        OutlinedTextField(
+            messagePrefix,
+            onMessagePrefixChange,
+            Modifier.weight(layout.messageWeight).tagConfigurationFieldHeight(layout.heightDp),
+            label = { Text("Tag 消息前缀") },
+            singleLine = layout.singleLine,
+            colors = branchPickerFieldColors(),
+        )
+    }
+}
+
+@Composable
+private fun TagModeSelector(mode: TagBuildMode, onChange: (TagBuildMode) -> Unit) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilterChip(
+            selected = mode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
+            onClick = { onChange(TagBuildMode.MERGE_TO_TARGET_BRANCH) },
+            label = { Text("合并到目标分支后打 Tag") },
+        )
+        FilterChip(
+            selected = mode == TagBuildMode.CURRENT_BRANCH,
+            onClick = { onChange(TagBuildMode.CURRENT_BRANCH) },
+            label = { Text("当前分支直接打 Tag") },
+        )
     }
 }
 
@@ -660,14 +999,21 @@ internal fun ActionIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    loading: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
         tooltip = { PlainTooltip { Text(label) } },
         state = rememberTooltipState(),
     ) {
-        IconButton(onClick = onClick, modifier = modifier, enabled = enabled) { content() }
+        IconButton(onClick = onClick, modifier = modifier, enabled = enabled && !loading) {
+            if (loading) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            } else {
+                content()
+            }
+        }
     }
 }
 

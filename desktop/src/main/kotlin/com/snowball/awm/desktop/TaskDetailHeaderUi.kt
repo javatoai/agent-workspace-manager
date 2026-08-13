@@ -1,0 +1,281 @@
+package com.snowball.awm.desktop
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.snowball.awm.core.ServiceWorkspace
+import com.snowball.awm.core.TaskLifecycleStatus
+import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.WorkspaceGitHealthState
+import com.snowball.awm.core.WorkspaceGitHealth
+import com.snowball.awm.core.WorkspaceHealth
+import com.snowball.awm.core.health
+import com.snowball.awm.core.isHttpUrl
+import com.snowball.awm.core.RequirementReference
+
+internal data class ParticipantSummary(
+    val label: String,
+    val details: String,
+)
+
+internal data class ActualBranchSummaryItem(
+    val branch: String,
+    val verified: Boolean,
+) {
+    val displayText: String get() = if (verified) branch else "$branch（未验证）"
+}
+
+internal fun actualBranchSummary(
+    workspaces: List<ServiceWorkspace>,
+    health: (ServiceWorkspace) -> WorkspaceGitHealth?,
+): List<ActualBranchSummaryItem> {
+    val byBranch = linkedMapOf<String, ActualBranchSummaryItem>()
+    workspaces.forEach { workspace ->
+        val actual = health(workspace)?.actualBranch?.trim()?.takeIf(String::isNotEmpty)
+        val item = ActualBranchSummaryItem(actual ?: workspace.branch, actual != null)
+        val previous = byBranch[item.branch]
+        if (previous == null || !previous.verified && item.verified) byBranch[item.branch] = item
+    }
+    return byBranch.values.toList()
+}
+
+internal fun visibleActualBranchSummary(
+    workspaces: List<ServiceWorkspace>,
+    health: (ServiceWorkspace) -> WorkspaceGitHealth?,
+    hiddenBranches: List<String>,
+): List<ActualBranchSummaryItem> = actualBranchSummary(workspaces, health)
+    .filterNot { it.branch in hiddenBranches }
+
+internal fun participantSummary(role: String, names: List<String>, inlineLimit: Int = 2): ParticipantSummary? {
+    val normalized = names.map(String::trim).filter(String::isNotEmpty).distinct()
+    if (normalized.isEmpty()) return null
+    val details = "$role：${normalized.joinToString("、")}"
+    val label = if (normalized.size <= inlineLimit) details else "$role ${normalized.size} 人"
+    return ParticipantSummary(label, details)
+}
+
+@Composable
+internal fun TaskDetailHeader(
+    controller: DesktopApplication,
+    task: TaskManifest,
+    requirementState: RequirementUiState,
+    physicalWorkspaces: List<ServiceWorkspace>,
+    groupName: String?,
+    showGroup: Boolean,
+    onArchive: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val abnormalCount = physicalWorkspaces.count { workspace ->
+        controller.gitHealth(workspace)?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)
+    }
+    val branchSummary = visibleActualBranchSummary(
+        physicalWorkspaces,
+        controller::gitHealth,
+        controller.config.hiddenTaskDetailBranches,
+    )
+    val requirementNumber = RequirementReference.number(task.requirementLink)
+    Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f), shape = RoundedCornerShape(16.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TaskHeaderMetadata(task, requirementState, groupName, showGroup, abnormalCount, Modifier.fillMaxWidth())
+                if (task.requirementLink.isNotBlank()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        TooltipText(
+                            text = task.requirementLink,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isHttpUrl(task.requirementLink)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            onClick = if (isHttpUrl(task.requirementLink)) ({ controller.openUrl(task.requirementLink) }) else null,
+                        )
+                        ActionIconButton(
+                            label = "复制需求链接",
+                            onClick = { controller.copyText(task.requirementLink, "需求链接已复制") },
+                            modifier = Modifier.size(30.dp),
+                        ) { Icon(Icons.Outlined.ContentCopy, "复制需求链接", Modifier.size(15.dp)) }
+                        requirementNumber?.let { number ->
+                            ActionIconButton(
+                                label = "复制需求编号 $number",
+                                onClick = { controller.copyText(number, "需求编号已复制") },
+                                modifier = Modifier.size(30.dp),
+                            ) { Icon(Icons.Outlined.ContentCopy, "复制需求编号", Modifier.size(15.dp)) }
+                        }
+                    }
+                }
+                if (branchSummary.isNotEmpty()) FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    branchSummary.forEach { item ->
+                        Row(Modifier.widthIn(max = 680.dp), verticalAlignment = Alignment.CenterVertically) {
+                            SelectionContainer(Modifier.weight(1f, fill = false)) {
+                                Text(item.displayText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                            }
+                            ActionIconButton(
+                                label = "复制分支 ${item.branch}",
+                                onClick = { controller.copyText(item.branch, "分支已复制") },
+                                modifier = Modifier.size(30.dp),
+                            ) { Icon(Icons.Outlined.ContentCopy, "复制分支", Modifier.size(15.dp)) }
+                        }
+                    }
+                }
+            }
+            TaskLifecycleActions(controller, task, onArchive, onDelete)
+        }
+    }
+}
+
+@Composable
+private fun TaskHeaderMetadata(
+    task: TaskManifest,
+    requirementState: RequirementUiState,
+    groupName: String?,
+    showGroup: Boolean,
+    abnormalCount: Int,
+    modifier: Modifier = Modifier,
+) {
+    FlowRow(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (task.requirementLink.isNotBlank()) {
+            when (requirementState) {
+                RequirementUiState.Loading -> Text("正在读取需求标题…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                RequirementUiState.Failed -> Text("未读取到需求标题", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                is RequirementUiState.Loaded -> requirementState.metadata.title?.takeIf(String::isNotBlank)?.let { title ->
+                    TooltipText(
+                        text = title,
+                        modifier = Modifier.widthIn(max = 320.dp),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                }
+                RequirementUiState.NotLoaded -> Unit
+            }
+            RequirementStatePill(requirementState)
+            (requirementState as? RequirementUiState.Loaded)?.metadata?.participants?.let { participants ->
+                participantSummary("测试", participants.qcOwners.map { it.name })?.let { ParticipantPill(it) }
+                participantSummary("产品", participants.productManagers.map { it.name })?.let { ParticipantPill(it) }
+            }
+        }
+        if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) StatusPill("ARCHIVED")
+        if (task.health != WorkspaceHealth.READY) StatusPill(task.health.name)
+        if (showGroup) MetaPill(groupName ?: task.groupId)
+        if (abnormalCount > 0) WorkspaceProblemPill("$abnormalCount 个工作区异常")
+    }
+}
+
+@Composable
+private fun TaskLifecycleActions(
+    controller: DesktopApplication,
+    task: TaskManifest,
+    onArchive: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) {
+            OutlinedButton(onClick = { controller.restoreTask(task) }) {
+                Icon(Icons.Outlined.Restore, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("恢复")
+            }
+        } else {
+            OutlinedButton(onClick = onArchive) {
+                Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("归档")
+            }
+        }
+        OutlinedButton(
+            onClick = onDelete,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) {
+            Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("删除任务")
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+internal fun TooltipText(
+    text: String,
+    modifier: Modifier,
+    style: TextStyle,
+    color: Color = Color.Unspecified,
+    onClick: (() -> Unit)? = null,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(text) } },
+        state = rememberTooltipState(),
+    ) {
+        Text(
+            text,
+            modifier.then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            style = style,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ParticipantPill(summary: ParticipantSummary) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(summary.details) } },
+        state = rememberTooltipState(),
+    ) {
+        MetaPill(summary.label)
+    }
+}
+
+@Composable
+internal fun WorkspaceProblemPill(text: String) {
+    val color = MaterialTheme.colorScheme.error
+    Surface(color = color.copy(alpha = 0.10f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.25f))) {
+        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color, style = MaterialTheme.typography.labelSmall)
+    }
+}

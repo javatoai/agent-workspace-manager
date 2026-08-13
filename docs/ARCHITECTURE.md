@@ -47,7 +47,7 @@ Desktop -> Application -> Domain
 ## Git 隔离和安全
 
 - 人工选择的仓库按规范化 `git-common-dir` 标识和去重。
-- 一个标准服务中，每个不同基础分支对应一个 Worktree；相同基础分支只创建一个 Worktree。
+- 一个标准服务中，每个模块都对应一个独立 Worktree；相同基础分支也不会合并物理目录。旧任务清单若记录共享路径，运行时仍按规范化路径去重以保持兼容。
 - 独立克隆从 `origin` 完整克隆到任务目录，并直接使用选定分支。
 - Tag 构建按仓库公共目录获取 OS 文件锁，临时 Worktree 路径包含仓库 Hash 和 UUID。
 - 测试分支和 Tag Push 均非强制；不自动 Pull/Rebase、不 Force Push、不自动解决冲突。
@@ -62,9 +62,9 @@ Desktop -> Application -> Domain
 - 标准 Worktree、独立克隆、单模块兼容和多模块分支后缀；
 - Tag 组级和子级开关、克隆分支 Tag；
 - 三级 Agent 合成、人工区保留、外部同步和冲突处理；
-- 归档、删除、合并预检及 UAT Tag 状态机。
+- 归档、删除、合并预检及 Tag 状态机。
 - `{num}` 分支占位符、Meegle 标题保护以及本地未提交/未推送状态；
-- 可注入交付流水线注册表和 UAT Tag 适配器。
+- 可注入交付流水线注册表和 Tag 适配器。
 
 提交前至少运行：
 

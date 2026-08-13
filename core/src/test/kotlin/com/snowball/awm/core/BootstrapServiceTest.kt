@@ -56,13 +56,14 @@ class BootstrapServiceTest {
         GitTestSupport.run(target, "init")
         Files.writeString(temporary.resolve("secret"), "secret")
 
-        val result = BootstrapService().initialize(
-            source,
-            target,
-            BootstrapConfig(copyRules = listOf(BootstrapCopyRule("../secret", "secret"))),
-        )
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            BootstrapService().initialize(
+                source,
+                target,
+                BootstrapConfig(copyRules = listOf(BootstrapCopyRule("../secret", "secret"))),
+            )
+        }
 
-        assertFalse(result.succeeded)
         assertFalse(Files.exists(target.resolve("secret")))
     }
 

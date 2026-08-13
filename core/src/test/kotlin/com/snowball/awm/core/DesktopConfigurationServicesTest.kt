@@ -8,15 +8,15 @@ import kotlin.test.assertEquals
 
 class DesktopConfigurationServicesTest {
     @Test
-    fun `IDE recommendation checks root markers and gives JVM priority`() {
+    fun `development tool recommendation checks root markers and gives JVM priority`() {
         val root = Files.createTempDirectory("awm-ide-recommendation")
-        val service = RootMarkerIdeRecommendationService()
+        val service = RootMarkerDevelopmentToolRecommendationService()
 
-        assertEquals(IdeType.IDEA, service.recommend(root))
+        assertEquals(DevelopmentToolType.INTELLIJ_IDEA, service.recommend(root))
         Files.writeString(root.resolve("package.json"), "{}")
-        assertEquals(IdeType.WEBSTORM, service.recommend(root))
+        assertEquals(DevelopmentToolType.WEBSTORM, service.recommend(root))
         Files.writeString(root.resolve("build.gradle.kts"), "")
-        assertEquals(IdeType.IDEA, service.recommend(root))
+        assertEquals(DevelopmentToolType.INTELLIJ_IDEA, service.recommend(root))
     }
 
     @Test

@@ -12,3 +12,5 @@ desktop-run.*.log
 local.properties
 **/build/
 desktop/src/main/resources/generated/
+__pycache__/
+*.py[cod]

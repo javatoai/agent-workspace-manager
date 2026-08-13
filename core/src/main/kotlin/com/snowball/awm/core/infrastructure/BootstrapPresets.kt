@@ -25,7 +25,6 @@ object BootstrapPresets {
                 executable = "pnpm",
                 arguments = listOf("install", "--frozen-lockfile"),
                 timeoutSeconds = 900,
-                platforms = setOf("windows", "macos", "linux"),
             ),
         ),
     )

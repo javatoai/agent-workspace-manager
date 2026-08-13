@@ -33,13 +33,14 @@ data class FeatureSyncStatus(
 data class TagPreflight(
     val folderName: String,
     val serviceName: String,
-    val featureBranch: String,
-    val featureSha: String,
+    val sourceBranch: String,
+    val sourceSha: String,
     val remote: String,
-    val testBranch: String,
-    val testSha: String,
-    val featureSync: FeatureSyncStatus,
-    val mergeMode: MergeMode,
+    val targetBranch: String?,
+    val targetSha: String?,
+    val sourceSync: FeatureSyncStatus,
+    val tagMode: TagBuildMode,
+    val mergeMode: MergeMode?,
     val commitList: List<String>,
     val diffStat: String,
     val estimatedTag: String,
@@ -54,6 +55,7 @@ class TagBuildService(
     private val events: EventSink = JsonlEventSink(paths, clock),
     private val workspaceLifecycle: WorkspaceLifecycle = GitWorkspaceLifecycle(git),
     private val taskLock: TaskOperationLock = FileTaskOperationLock(paths),
+    private val repositoryLock: RepositoryOperationLock = RepositoryOperationLock(paths),
 ) {
     fun buildBatch(
         config: AppConfig,
@@ -88,9 +90,10 @@ class TagBuildService(
             folderName = manifest.folderName,
             serviceName = workspace.serviceName,
             repositoryId = workspace.repositoryId,
-            featureBranch = workspace.branch,
-            testBranch = target?.uatBranch.orEmpty(),
+            sourceBranch = workspace.branch,
+            targetBranch = target?.targetBranch,
             remote = target?.remote.orEmpty(),
+            tagMode = target?.mode ?: TagBuildMode.MERGE_TO_TARGET_BRANCH,
             state = TagOperationState.FAILED,
             createdAt = now,
             updatedAt = now,
@@ -114,45 +117,7 @@ class TagBuildService(
         val worktree = validated.worktree
 
         withRepositoryLock(repository) {
-            ensureCleanFeatureWorktree(worktree)
-            git.fetch(repository, service.remote)
-            val featureSha = git.resolve(repository, workspace.branch)
-            val remoteFeatureRef = "${service.remote}/${workspace.branch}"
-            val sync = featureSync(repository, featureSha, remoteFeatureRef)
-            require(sync.canPush) {
-                "远端特性分支领先本地 ${sync.behind} 个提交，请先手工同步；工具不会自动 pull/rebase"
-            }
-            val testRef = "${service.remote}/${service.uatBranch}"
-            val testSha = git.resolve(repository, testRef)
-            val mergeMode = when {
-                git.isAncestor(repository, featureSha, testSha) -> MergeMode.ALREADY_MERGED
-                git.isAncestor(repository, testSha, featureSha) -> MergeMode.FAST_FORWARD
-                else -> MergeMode.MERGE_COMMIT
-            }
-            verifyMergeInTemporaryWorktree(repository, testSha, featureSha, workspace.serviceName)
-            val commitList = git.run(
-                repository,
-                "log",
-                "--format=%h %s",
-                "--no-merges",
-                "$testSha..$featureSha",
-            ).stdout.lineSequence().filter { it.isNotBlank() }.toList()
-            val diffStat = git.run(repository, "diff", "--stat", testSha, featureSha).stdout.trim()
-            val estimatedTag = nextTag(repository, testSha, service.initialUatTag)
-            TagPreflight(
-                folderName = manifest.folderName,
-                serviceName = workspace.serviceName,
-                featureBranch = workspace.branch,
-                featureSha = featureSha,
-                remote = service.remote,
-                testBranch = service.uatBranch,
-                testSha = testSha,
-                featureSync = sync,
-                mergeMode = mergeMode,
-                commitList = commitList,
-                diffStat = diffStat,
-                estimatedTag = estimatedTag,
-            )
+            preflightUnlocked(service, manifest, workspace, repository, worktree)
         }
     }
 
@@ -181,9 +146,10 @@ class TagBuildService(
             folderName = manifest.folderName,
             serviceName = workspace.serviceName,
             repositoryId = workspace.repositoryId,
-            featureBranch = workspace.branch,
-            testBranch = service.uatBranch,
+            sourceBranch = workspace.branch,
+            targetBranch = service.targetBranch,
             remote = service.remote,
+            tagMode = service.mode,
             state = TagOperationState.CREATED,
             createdAt = now,
             updatedAt = now,
@@ -193,7 +159,7 @@ class TagBuildService(
         operations.save(taskDirectory, operation)
         events.info(
             event = "tag.build.started",
-            message = "开始 UAT Tag 构建",
+            message = "开始 Tag 构建",
             metadata = mapOf(
                 "operationId" to operation.operationId,
                 "folderName" to operation.folderName,
@@ -209,52 +175,57 @@ class TagBuildService(
                     taskDirectory,
                     operation,
                     TagOperationState.PREFLIGHT_PASSED,
-                    featureSha = preview.featureSha,
-                    testSha = preview.testSha,
+                    sourceSha = preview.sourceSha,
+                    targetSha = preview.targetSha,
                 )
-                if (preview.featureSync.pushRequired) {
+                if (preview.sourceSync.pushRequired || service.mode == TagBuildMode.CURRENT_BRANCH) {
                     git.run(
                         repository,
                         "push",
                         "--set-upstream",
                         service.remote,
-                        "${workspace.branch}:${workspace.branch}",
+                        "${workspace.branch}:refs/heads/${workspace.branch}",
                     )
                 }
-                operation = transition(taskDirectory, operation, TagOperationState.FEATURE_PUSHED)
+                operation = transition(taskDirectory, operation, TagOperationState.SOURCE_BRANCH_PUSHED)
 
-                val mergeResult = mergeAndPushTestBranch(
-                    repository = repository,
-                    featureSha = preview.featureSha,
-                    service = service,
-                    serviceName = workspace.serviceName,
-                )
-                if (mergeResult.conflicts.isNotEmpty()) {
+                val tagCommit = if (service.mode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+                    val mergeResult = mergeAndPushTargetBranch(
+                        repository = repository,
+                        sourceSha = preview.sourceSha,
+                        service = service,
+                        serviceName = workspace.serviceName,
+                    )
+                    if (mergeResult.conflicts.isNotEmpty()) {
+                        operation = transition(
+                            taskDirectory,
+                            operation,
+                            TagOperationState.CONFLICT,
+                            message = "自动合并检测到冲突，请手工合并并推送 ${service.targetBranch} 后重试",
+                            conflictFiles = mergeResult.conflicts,
+                        )
+                        recordHistory(taskDirectory, operation)
+                        return@withRepositoryLock operation
+                    }
                     operation = transition(
                         taskDirectory,
                         operation,
-                        TagOperationState.CONFLICT,
-                        message = "自动合并检测到冲突，请手工合并并推送 ${service.uatBranch} 后重试",
-                        conflictFiles = mergeResult.conflicts,
+                        TagOperationState.TARGET_BRANCH_PUSHED,
+                        targetSha = mergeResult.targetSha,
                     )
-                    recordHistory(taskDirectory, operation)
-                    return@withRepositoryLock operation
+                    mergeResult.targetSha
+                } else {
+                    preview.sourceSha
                 }
-                operation = transition(
-                    taskDirectory,
-                    operation,
-                    TagOperationState.TEST_BRANCH_PUSHED,
-                    testSha = mergeResult.testSha,
-                )
 
-                var tag = nextTag(repository, mergeResult.testSha, service.initialUatTag)
+                var tag = nextTag(repository, tagCommit)
                 var pushed = false
                 for (attempt in 0..1) {
                     createOrValidateLocalTag(
                         repository,
                         tag,
-                        mergeResult.testSha,
-                        auditMessage(manifest, workspace, service, preview.featureSha, mergeResult.testSha),
+                        tagCommit,
+                        auditMessage(manifest, workspace, service, preview.sourceSha, tagCommit),
                     )
                     operation = transition(
                         taskDirectory,
@@ -263,7 +234,7 @@ class TagBuildService(
                         tag = tag,
                     )
                     try {
-                        pushTag(repository, service.remote, tag, mergeResult.testSha)
+                        pushTag(repository, service.remote, tag, tagCommit)
                         pushed = true
                         break
                     } catch (collision: TagCollisionException) {
@@ -287,13 +258,13 @@ class TagBuildService(
                     taskDirectory,
                     operation,
                     TagOperationState.CONFLICT,
-                    message = "自动合并检测到冲突，请手工合并并推送 ${service.uatBranch} 后重试",
+                    message = "自动合并检测到冲突，请手工合并并推送 ${service.targetBranch} 后重试",
                     conflictFiles = conflict.files,
                 )
                 recordHistory(taskDirectory, operation)
                 operation
             } catch (error: Throwable) {
-                val partial = operation.state == TagOperationState.TEST_BRANCH_PUSHED ||
+                val partial = operation.state == TagOperationState.TARGET_BRANCH_PUSHED ||
                     operation.state == TagOperationState.LOCAL_TAG_CREATED
                 operation = transition(
                     taskDirectory,
@@ -321,17 +292,18 @@ class TagBuildService(
         val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
         val repository = validated.repository
         val tag = operation.tag ?: throw IllegalStateException("操作没有可恢复的本地 Tag")
-        val testSha = operation.testSha ?: throw IllegalStateException("操作没有测试分支提交")
+        val tagCommit = operation.targetSha ?: operation.sourceSha
+            ?: throw IllegalStateException("操作没有可恢复的 Tag 提交")
 
         withRepositoryLock(repository) {
             try {
                 createOrValidateLocalTag(
                     repository,
                     tag,
-                    testSha,
-                    auditMessage(manifest, workspace, service, operation.featureSha.orEmpty(), testSha),
+                    tagCommit,
+                    auditMessage(manifest, workspace, service, operation.sourceSha.orEmpty(), tagCommit),
                 )
-                pushTag(repository, service.remote, tag, testSha)
+                pushTag(repository, service.remote, tag, tagCommit)
                 operation = transition(taskDirectory, operation, TagOperationState.TAG_PUSHED)
                 operation = transition(
                     taskDirectory,
@@ -363,39 +335,67 @@ class TagBuildService(
     ): TagPreflight {
         ensureCleanFeatureWorktree(worktree)
         git.fetch(repository, service.remote)
-        val featureSha = git.resolve(repository, workspace.branch)
-        val remoteFeatureRef = "${service.remote}/${workspace.branch}"
-        val sync = featureSync(repository, featureSha, remoteFeatureRef)
+        git.fetchTags(repository, service.remote)
+        val sourceSha = git.resolve(repository, workspace.branch)
+        val remoteSourceRef = "${service.remote}/${workspace.branch}"
+        val sync = featureSync(repository, sourceSha, remoteSourceRef)
         require(sync.canPush) {
-            "远端特性分支领先本地 ${sync.behind} 个提交，请先手工同步"
+            "远端当前分支领先本地 ${sync.behind} 个提交，请先手工同步；工具不会自动 pull/rebase"
         }
-        val testRef = "${service.remote}/${service.uatBranch}"
-        val testSha = git.resolve(repository, testRef)
+        if (service.mode == TagBuildMode.CURRENT_BRANCH) {
+            val range = if (sync.remoteExists) "$remoteSourceRef..$sourceSha" else sourceSha
+            return TagPreflight(
+                folderName = manifest.folderName,
+                serviceName = workspace.serviceName,
+                sourceBranch = workspace.branch,
+                sourceSha = sourceSha,
+                remote = service.remote,
+                targetBranch = null,
+                targetSha = null,
+                sourceSync = sync,
+                tagMode = service.mode,
+                mergeMode = null,
+                commitList = git.run(
+                    repository,
+                    "log",
+                    "--format=%h %s",
+                    "--no-merges",
+                    range,
+                ).stdout.lineSequence().filter { it.isNotBlank() }.toList(),
+                diffStat = "",
+                estimatedTag = nextTag(repository, sourceSha),
+            )
+        }
+
+        val targetBranch = requireNotNull(service.targetBranch) { "合并到目标分支模式缺少目标分支" }
+        val targetRef = "${service.remote}/$targetBranch"
+        val targetSha = git.resolve(repository, targetRef)
         val mergeMode = when {
-            git.isAncestor(repository, featureSha, testSha) -> MergeMode.ALREADY_MERGED
-            git.isAncestor(repository, testSha, featureSha) -> MergeMode.FAST_FORWARD
+            git.isAncestor(repository, sourceSha, targetSha) -> MergeMode.ALREADY_MERGED
+            git.isAncestor(repository, targetSha, sourceSha) -> MergeMode.FAST_FORWARD
             else -> MergeMode.MERGE_COMMIT
         }
-        verifyMergeInTemporaryWorktree(repository, testSha, featureSha, workspace.serviceName)
+        verifyMergeInTemporaryWorktree(repository, targetSha, sourceSha, workspace.serviceName)
         return TagPreflight(
             folderName = manifest.folderName,
             serviceName = workspace.serviceName,
-            featureBranch = workspace.branch,
-            featureSha = featureSha,
+            sourceBranch = workspace.branch,
+            sourceSha = sourceSha,
             remote = service.remote,
-            testBranch = service.uatBranch,
-            testSha = testSha,
-            featureSync = sync,
+            targetBranch = targetBranch,
+            targetSha = targetSha,
+            sourceSync = sync,
+            tagMode = service.mode,
             mergeMode = mergeMode,
             commitList = git.run(
                 repository,
                 "log",
                 "--format=%h %s",
                 "--no-merges",
-                "$testSha..$featureSha",
+                "$targetSha..$sourceSha",
             ).stdout.lineSequence().filter { it.isNotBlank() }.toList(),
-            diffStat = git.run(repository, "diff", "--stat", testSha, featureSha).stdout.trim(),
-            estimatedTag = nextTag(repository, testSha, service.initialUatTag),
+            diffStat = git.run(repository, "diff", "--stat", targetSha, sourceSha).stdout.trim(),
+            estimatedTag = nextTag(repository, targetSha),
         )
     }
 
@@ -406,79 +406,82 @@ class TagBuildService(
     }
 
     private data class MergePushResult(
-        val testSha: String,
+        val targetSha: String,
         val conflicts: List<String> = emptyList(),
     )
 
-    private fun mergeAndPushTestBranch(
+    private fun mergeAndPushTargetBranch(
         repository: Path,
-        featureSha: String,
+        sourceSha: String,
         service: EffectiveTagTarget,
         serviceName: String,
     ): MergePushResult {
+        val targetBranch = requireNotNull(service.targetBranch) { "合并到目标分支模式缺少目标分支" }
         repeat(2) { attempt ->
             git.fetch(repository, service.remote)
-            val remoteTestRef = "${service.remote}/${service.uatBranch}"
-            val remoteTestSha = git.resolve(repository, remoteTestRef)
-            if (git.isAncestor(repository, featureSha, remoteTestSha)) {
-                return MergePushResult(remoteTestSha)
+            git.fetchTags(repository, service.remote)
+            val remoteTargetRef = "${service.remote}/$targetBranch"
+            val remoteTargetSha = git.resolve(repository, remoteTargetRef)
+            if (git.isAncestor(repository, sourceSha, remoteTargetSha)) {
+                return MergePushResult(remoteTargetSha)
             }
             val temporary = temporaryWorktreePath(repository, "$serviceName-build-${attempt + 1}")
             try {
-                git.addDetachedWorktree(repository, temporary, remoteTestSha)
+                git.addDetachedWorktree(repository, temporary, remoteTargetSha)
                 val merge = git.run(
                     temporary,
                     "merge",
                     "--no-edit",
-                    featureSha,
+                    sourceSha,
                     check = false,
                 )
                 if (!merge.succeeded) {
                     val conflicts = conflictFiles(temporary)
                     git.run(temporary, "merge", "--abort", check = false)
-                    if (conflicts.isNotEmpty()) return MergePushResult(remoteTestSha, conflicts)
-                    throw GitException("合并测试分支失败", merge)
+                    if (conflicts.isNotEmpty()) return MergePushResult(remoteTargetSha, conflicts)
+                    throw GitException("合并目标分支失败", merge)
                 }
                 val mergedSha = git.resolve(temporary, "HEAD")
                 val push = git.run(
                     temporary,
                     "push",
                     service.remote,
-                    "HEAD:refs/heads/${service.uatBranch}",
+                    "HEAD:refs/heads/$targetBranch",
                     check = false,
                 )
                 if (push.succeeded) {
                     git.fetch(repository, service.remote)
-                    val verified = git.resolve(repository, remoteTestRef)
+                    git.fetchTags(repository, service.remote)
+                    val verified = git.resolve(repository, remoteTargetRef)
                     require(verified == mergedSha) {
-                        "推送后远端 ${service.uatBranch} 的 SHA 校验失败"
+                        "推送后远端 $targetBranch 的 SHA 校验失败"
                     }
                     return MergePushResult(mergedSha)
                 }
-                if (attempt == 1) throw GitException("测试分支在推送期间被更新，重试后仍失败", push)
+                if (attempt == 1) throw GitException("目标分支在推送期间被更新，重试后仍失败", push)
             } finally {
                 cleanupTemporaryWorktree(repository, temporary)
             }
         }
-        error("无法更新测试分支")
+        error("无法更新目标分支")
     }
 
     private fun verifyMergeInTemporaryWorktree(
         repository: Path,
-        testSha: String,
-        featureSha: String,
+        targetSha: String,
+        sourceSha: String,
         serviceName: String,
     ) {
-        if (git.isAncestor(repository, featureSha, testSha)) return
+        if (git.isAncestor(repository, sourceSha, targetSha)) return
         val temporary = temporaryWorktreePath(repository, "$serviceName-preflight")
         try {
-            git.addDetachedWorktree(repository, temporary, testSha)
+            git.addDetachedWorktree(repository, temporary, targetSha)
             val merge = git.run(
                 temporary,
                 "merge",
                 "--no-commit",
                 "--no-ff",
-                featureSha,
+                sourceSha,
                 check = false,
             )
             val conflicts = conflictFiles(temporary)
@@ -501,20 +504,20 @@ class TagBuildService(
 
     private fun featureSync(
         repository: Path,
-        featureSha: String,
-        remoteFeatureRef: String,
+        sourceSha: String,
+        remoteSourceRef: String,
     ): FeatureSyncStatus {
         val exists = git.run(
             repository,
             "rev-parse",
             "--verify",
-            "$remoteFeatureRef^{commit}",
+            "$remoteSourceRef^{commit}",
             check = false,
         ).succeeded
         if (!exists) return FeatureSyncStatus(remoteExists = false, ahead = 0, behind = 0)
-        val ahead = git.run(repository, "rev-list", "--count", "$remoteFeatureRef..$featureSha")
+        val ahead = git.run(repository, "rev-list", "--count", "$remoteSourceRef..$sourceSha")
             .stdout.trim().toInt()
-        val behind = git.run(repository, "rev-list", "--count", "$featureSha..$remoteFeatureRef")
+        val behind = git.run(repository, "rev-list", "--count", "$sourceSha..$remoteSourceRef")
             .stdout.trim().toInt()
         return FeatureSyncStatus(remoteExists = true, ahead = ahead, behind = behind)
     }
@@ -530,7 +533,7 @@ class TagBuildService(
         }
     }
 
-    private fun nextTag(repository: Path, commit: String, initialTag: String?): String {
+    private fun nextTag(repository: Path, commit: String): String {
         val tags = git.run(
             repository,
             "for-each-ref",
@@ -545,12 +548,7 @@ class TagBuildService(
         }.toList()
         val latest = TagVersioning.latest(tags)
         if (latest != null) return TagVersioning.next(latest)
-        val initial = initialTag?.trim()
-            ?: throw IllegalStateException("仓库没有可用的历史 Tag，请先配置 initialUatTag")
-        require(TagVersioning.validPattern.matches(initial)) {
-            "initialUatTag 格式不合法：$initial"
-        }
-        return initial
+        throw IllegalStateException("仓库没有可用的历史 Tag，无法计算下一版本；请先在仓库创建并推送一个符合版本规则的 Tag")
     }
 
     private fun createOrValidateLocalTag(
@@ -598,8 +596,8 @@ class TagBuildService(
         manifest: TaskManifest,
         workspace: ServiceWorkspace,
         service: EffectiveTagTarget,
-        featureSha: String,
-        testSha: String,
+        sourceSha: String,
+        tagCommit: String,
     ): String = buildString {
         appendLine("${service.tagMessagePrefix} build")
         appendLine("Task: ${manifest.folderName}")
@@ -630,16 +628,16 @@ class TagBuildService(
         taskDirectory: Path,
         operation: TagOperation,
         state: TagOperationState,
-        featureSha: String? = operation.featureSha,
-        testSha: String? = operation.testSha,
+        sourceSha: String? = operation.sourceSha,
+        targetSha: String? = operation.targetSha,
         tag: String? = operation.tag,
         message: String? = operation.message,
         conflictFiles: List<String> = operation.conflictFiles,
     ): TagOperation = operation.copy(
         state = state,
         updatedAt = AwmTime.format(Instant.now(clock)),
-        featureSha = featureSha,
-        testSha = testSha,
+        sourceSha = sourceSha,
+        targetSha = targetSha,
         tag = tag,
         message = message,
         conflictFiles = conflictFiles,
@@ -653,8 +651,9 @@ class TagBuildService(
                 timestamp = operation.updatedAt,
                 folderName = operation.folderName,
                 serviceName = operation.serviceName,
-                featureBranch = operation.featureBranch,
-                testBranch = operation.testBranch,
+                sourceBranch = operation.sourceBranch,
+                targetBranch = operation.targetBranch,
+                tagMode = operation.tagMode,
                 tag = operation.tag,
                 state = operation.state,
                 message = operation.message,
@@ -670,14 +669,14 @@ class TagBuildService(
         if (operation.state == TagOperationState.SUCCESS) {
             events.info(
                 event = "tag.build.completed",
-                message = "UAT Tag 构建成功",
+                message = "Tag 构建成功",
                 metadata = metadata,
                 clock = clock,
             )
         } else {
             events.error(
                 event = "tag.build.completed",
-                message = operation.message ?: "UAT Tag 构建未成功",
+                message = operation.message ?: "Tag 构建未成功",
                 metadata = metadata,
                 clock = clock,
             )
@@ -685,12 +684,7 @@ class TagBuildService(
     }
 
     private fun <T> withRepositoryLock(repository: Path, block: () -> T): T {
-        val lockPath = paths.locks.resolve("${repositoryHash(git.commonDirectory(repository))}.lock")
-        return FileLocking.withExclusiveLock(
-            lockPath,
-            "repository is already running another Tag operation",
-            block,
-        )
+        return repositoryLock.withLock(git.commonDirectory(repository), block)
     }
 
     private fun repositoryHash(path: Path): String =

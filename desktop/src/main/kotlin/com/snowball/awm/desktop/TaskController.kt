@@ -11,18 +11,34 @@ import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.CreateGroupedTaskRequest
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.ManifestStore
+import com.snowball.awm.core.ModuleBaseOverride
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskApplicationService
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.TaskBranchCatalog
+import com.snowball.awm.core.TaskBranchCatalogResult
+import com.snowball.awm.core.TaskBranchCatalogProgress
 import com.snowball.awm.core.WorkspaceGitHealth
 import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitStatusService
 import com.snowball.awm.core.WorkspaceToolLaunchService
+import com.snowball.awm.core.WorkspaceGitOperationService
+import com.snowball.awm.core.WorkspaceGitBatchMode
+import com.snowball.awm.core.WorkspaceGitBatchResult
+import com.snowball.awm.core.WorkspaceGitChangePreview
+import com.snowball.awm.core.WorkspaceRepairConfirmation
+import com.snowball.awm.core.WorkspaceRepairPreview
+import com.snowball.awm.core.WorkspaceRepairResult
+import com.snowball.awm.core.CommitMessageTemplate
+import com.snowball.awm.core.EventSink
+import com.snowball.awm.core.NoOpEventSink
+import com.snowball.awm.core.info
 import com.snowball.awm.core.toInfo
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -36,6 +52,20 @@ data class TaskUiState(
     val deleteRisks: Map<String, DeleteRiskInspection>,
     val busy: Boolean,
 )
+
+sealed interface TaskBranchCandidatesState {
+    data object Idle : TaskBranchCandidatesState
+    data class Loading(val completed: Int = 0, val total: Int = 0) : TaskBranchCandidatesState
+    data class Loaded(val result: TaskBranchCatalogResult) : TaskBranchCandidatesState
+    data class Failed(val message: String) : TaskBranchCandidatesState
+}
+
+sealed interface BatchGitPreviewState {
+    data object Idle : BatchGitPreviewState
+    data object Loading : BatchGitPreviewState
+    data class Loaded(val previews: Map<String, WorkspaceGitChangePreview>) : BatchGitPreviewState
+    data class Failed(val message: String) : BatchGitPreviewState
+}
 
 /**
  * Owns task lifecycle and workspace-health use cases.
@@ -51,6 +81,8 @@ class TaskController internal constructor(
     private val tasks: TaskApplicationService,
     private val gitStatus: WorkspaceGitStatusService,
     private val workspaceTools: WorkspaceToolLaunchService,
+    private val gitOperations: WorkspaceGitOperationService,
+    private val taskBranchCatalog: TaskBranchCatalog,
     private val operations: OperationRunner,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -61,10 +93,22 @@ class TaskController internal constructor(
     private val onRequirementSelected: (TaskManifest) -> Unit,
     private val onError: (Throwable) -> Unit,
     private val isBusy: () -> Boolean,
+    private val events: EventSink = NoOpEventSink,
 ) {
     private var gitStatusRevision = 0L
+    private var gitStatusJob: Job? = null
+    private var branchCandidateRevision = 0L
+    private var branchCandidateJob: Job? = null
     private var gitHealth by mutableStateOf<Map<String, WorkspaceGitHealth>>(emptyMap())
     private var deleteRisks by mutableStateOf<Map<String, DeleteRiskInspection>>(emptyMap())
+    var repairPreview by mutableStateOf<WorkspaceRepairPreview?>(null)
+        private set
+    var repairResult by mutableStateOf<WorkspaceRepairResult?>(null)
+        private set
+    var branchCandidates by mutableStateOf<TaskBranchCandidatesState>(TaskBranchCandidatesState.Idle)
+        private set
+    var batchGitPreviews by mutableStateOf<BatchGitPreviewState>(BatchGitPreviewState.Idle)
+        private set
 
     val state: TaskUiState
         get() = TaskUiState(
@@ -78,12 +122,15 @@ class TaskController internal constructor(
 
     fun select(task: TaskManifest) {
         session.selectedTask = task
+        repairPreview = null
+        repairResult = null
+        batchGitPreviews = BatchGitPreviewState.Idle
         refreshGitStatus()
         onRequirementSelected(task)
     }
 
     /** Explicit refresh is the only task path that validates every repository. */
-    fun refresh(): Boolean = operations.run("正在刷新状态…", "状态刷新完成", block = {
+    fun refresh(): Boolean = operations.run("正在刷新状态…", "状态刷新完成", cancellable = true, block = {
         val latest = configStore.load()
         val validated = latest.repositories.map { persisted ->
             val inspected = repositoryInspector.inspect(Path.of(persisted.rootPath))
@@ -93,8 +140,19 @@ class TaskController internal constructor(
             }
             inspected.copy(id = persisted.id)
         }
-        val refreshedConfig = latest.copy(repositories = validated)
-        configStore.save(refreshedConfig)
+        val validatedById = validated.associateBy(RepositoryConfig::id)
+        val snapshotById = latest.repositories.associateBy(RepositoryConfig::id)
+        val refreshedConfig = configStore.update { current ->
+            require(
+                current.repositories.size == snapshotById.size && current.repositories.all { repository ->
+                    val snapshot = snapshotById[repository.id]
+                    snapshot != null &&
+                        samePathIdentity(snapshot.rootPath, repository.rootPath) &&
+                        samePathIdentity(snapshot.gitCommonDirectory, repository.gitCommonDirectory)
+                },
+            ) { "刷新期间仓库配置已经变化，请重新刷新" }
+            current.copy(repositories = current.repositories.map { validatedById.getValue(it.id) })
+        }
         val loaded = scanTasks(refreshedConfig)
         loaded.manifests.forEach { task ->
             tasks.refreshAgents(refreshedConfig, taskDirectory(refreshedConfig, task))
@@ -119,11 +177,12 @@ class TaskController internal constructor(
         notes: String,
         toolIds: List<String>,
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
         onCompleted: () -> Unit = {},
-    ): Boolean = operations.run("正在创建任务…", "任务已创建", block = {
+    ): Boolean = operations.run("正在创建任务…", "任务已创建", cancellable = true, block = {
         val created = tasks.create(
             session.config,
-            CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, confirmedBranchReuseKeys),
+            CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, confirmedBranchReuseKeys, baseOverrides),
         )
         workspaceTools.launch(taskDirectory(session.config, created), created, toolIds)
     }, onSuccess = { created ->
@@ -179,13 +238,14 @@ class TaskController internal constructor(
         task: TaskManifest,
         serviceIds: List<String>,
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
         onCompleted: () -> Unit = {},
     ): Boolean =
-        operations.run("正在追加服务…", "服务已追加", block = {
+        operations.run("正在追加服务…", "服务已追加", cancellable = true, block = {
             tasks.addServices(
                 session.config,
                 taskDirectory(task),
-                AddGroupedTaskServicesRequest(serviceIds, confirmedBranchReuseKeys),
+                AddGroupedTaskServicesRequest(serviceIds, confirmedBranchReuseKeys, baseOverrides),
             )
         }, onSuccess = { reloadTasks(it.folderName); onCompleted() })
 
@@ -196,6 +256,7 @@ class TaskController internal constructor(
         serviceIds: List<String>,
         link: String,
         notes: String,
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
         onResolved: (List<BranchReuseConflict>) -> Unit,
         onFinished: () -> Unit,
     ): Boolean {
@@ -206,7 +267,7 @@ class TaskController internal constructor(
                 runCatching {
                     tasks.inspectCreateBranchReuse(
                         config,
-                        CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes),
+                        CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, baseOverrides = baseOverrides),
                     )
                 }
             }
@@ -219,6 +280,7 @@ class TaskController internal constructor(
     fun inspectAddServicesBranchReuse(
         task: TaskManifest,
         serviceIds: List<String>,
+        baseOverrides: List<ModuleBaseOverride> = emptyList(),
         onResolved: (List<BranchReuseConflict>) -> Unit,
         onFinished: () -> Unit,
     ): Boolean {
@@ -228,7 +290,7 @@ class TaskController internal constructor(
         scope.launch {
             val result = withContext(ioDispatcher) {
                 runCatching {
-                    tasks.inspectAddServicesBranchReuse(config, directory, AddGroupedTaskServicesRequest(serviceIds))
+                    tasks.inspectAddServicesBranchReuse(config, directory, AddGroupedTaskServicesRequest(serviceIds, baseOverrides = baseOverrides))
                 }
             }
             result.onSuccess(onResolved).onFailure(onError)
@@ -238,7 +300,7 @@ class TaskController internal constructor(
     }
 
     fun retry(task: TaskManifest, serviceIds: List<String>? = null): Boolean =
-        operations.run("正在重试失败服务…", "失败服务已重试", block = {
+        operations.run("正在重试失败服务…", "失败服务已重试", cancellable = true, block = {
             tasks.retryFailedServices(session.config, taskDirectory(task), serviceIds)
         }, onSuccess = { reloadTasks(it.folderName) })
 
@@ -248,6 +310,7 @@ class TaskController internal constructor(
         }, onSuccess = { reloadTasks(it.folderName) })
 
     fun refreshGitStatus() {
+        gitStatusJob?.cancel()
         val task = session.selectedTask ?: run {
             gitHealth = emptyMap()
             return
@@ -255,8 +318,12 @@ class TaskController internal constructor(
         val revision = ++gitStatusRevision
         val paths = task.services.map(::normalizedWorkspacePath).distinct()
         gitHealth = paths.associateWith { WorkspaceGitHealth(WorkspaceGitHealthState.CHECKING) }
-        scope.launch {
-            val inspected = withContext(ioDispatcher) { gitStatus.inspect(task.services) }
+        gitStatusJob = scope.launch {
+            val inspected = gitStatus.inspect(task.services) { path, health ->
+                if (revision == gitStatusRevision && session.selectedTask?.taskDirectoryName == task.taskDirectoryName) {
+                    gitHealth = gitHealth + (path.toString() to health)
+                }
+            }
                 .mapKeys { (path, _) -> path.toString() }
             if (revision == gitStatusRevision && session.selectedTask?.taskDirectoryName == task.taskDirectoryName) {
                 gitHealth = inspected
@@ -266,7 +333,152 @@ class TaskController internal constructor(
 
     fun gitHealth(workspace: ServiceWorkspace): WorkspaceGitHealth? = gitHealth[normalizedWorkspacePath(workspace)]
 
+    fun loadTaskBranchCandidates(groupId: String, serviceIds: Set<String>) {
+        val revision = ++branchCandidateRevision
+        branchCandidateJob?.cancel()
+        if (serviceIds.isEmpty()) {
+            branchCandidates = TaskBranchCandidatesState.Idle
+            branchCandidateJob = null
+            return
+        }
+        branchCandidates = TaskBranchCandidatesState.Loading()
+        val config = session.config
+        branchCandidateJob = scope.launch {
+            val result = runCatching {
+                withContext(ioDispatcher) {
+                    taskBranchCatalog.list(config, groupId, serviceIds) { progress: TaskBranchCatalogProgress ->
+                        scope.launch {
+                            if (
+                                revision == branchCandidateRevision &&
+                                branchCandidates is TaskBranchCandidatesState.Loading &&
+                                progress.completed >= (branchCandidates as TaskBranchCandidatesState.Loading).completed
+                            ) {
+                                branchCandidates = TaskBranchCandidatesState.Loading(progress.completed, progress.total)
+                            }
+                        }
+                    }
+                }
+            }
+            if (revision != branchCandidateRevision) return@launch
+            branchCandidates = result.fold(
+                onSuccess = TaskBranchCandidatesState::Loaded,
+                onFailure = { TaskBranchCandidatesState.Failed(it.message ?: "远程分支查询失败") },
+            )
+            branchCandidateJob = null
+        }
+    }
+
+    fun cancelTaskBranchCandidates() {
+        branchCandidateRevision++
+        branchCandidateJob?.cancel()
+        branchCandidateJob = null
+        branchCandidates = TaskBranchCandidatesState.Idle
+    }
+
+    fun inspectRepair(task: TaskManifest, workspace: ServiceWorkspace): Boolean = operations.run(
+        "正在检查工作区修复方案…",
+        "修复方案已生成",
+        cancellable = true,
+        block = { tasks.inspectWorkspaceRepair(session.config, taskDirectory(task), workspace.worktreePath) },
+        onSuccess = { repairPreview = it },
+    )
+
+    fun repairWorkspace(
+        task: TaskManifest,
+        preview: WorkspaceRepairPreview,
+        confirmation: WorkspaceRepairConfirmation,
+    ): Boolean = operations.run(
+        "正在修复工作区…",
+        "工作区修复完成",
+        cancellable = true,
+        block = { tasks.repairWorkspace(session.config, taskDirectory(task), preview, confirmation) },
+        onSuccess = { result ->
+            repairPreview = null
+            repairResult = result
+            events.info(
+                event = "workspace.repair",
+                message = result.message,
+                metadata = mapOf(
+                    "service" to result.serviceName,
+                    "workspace" to result.workspacePath,
+                    "backup" to result.backupPath.orEmpty(),
+                    "warnings" to result.warnings.joinToString(" | "),
+                ),
+            )
+            reloadTasks(task.folderName)
+        },
+    )
+
+    fun clearRepairPreview() { repairPreview = null }
+    fun clearRepairResult() { repairResult = null }
+
     fun openWorkData(task: TaskManifest) = desktopActions.openWorkData(taskDirectory(task))
+
+    fun defaultCommitMessage(task: TaskManifest, workspace: ServiceWorkspace): String {
+        val template = session.config.group(task.groupId).services.firstOrNull { it.id == workspace.groupServiceId }
+            ?.commitMessageTemplate.orEmpty()
+        return CommitMessageTemplate.render(template, task.requirementLink)
+    }
+
+    fun commit(task: TaskManifest, workspace: ServiceWorkspace, message: String, pushAfter: Boolean = false, expectedFingerprint: String? = null): Boolean =
+        operations.run(
+            if (pushAfter) "正在提交并推送 ${workspace.operationLabel()}…" else "正在提交 ${workspace.operationLabel()}…",
+            if (pushAfter) "提交并推送完成" else "提交完成",
+            block = {
+                if (pushAfter) gitOperations.commitAndPush(workspace, message, expectedFingerprint) else gitOperations.commit(workspace, message, expectedFingerprint)
+            },
+            onSuccess = { refreshGitStatus() },
+        )
+
+    fun push(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
+        operations.run("正在推送 ${workspace.operationLabel()}…", "推送完成", block = { gitOperations.push(workspace) }, onSuccess = { refreshGitStatus() })
+
+    fun physicalWorkspaces(task: TaskManifest): List<ServiceWorkspace> =
+        task.services.distinctBy(WorkspaceGitOperationService::workspacePathKey)
+
+    fun workspaceKey(workspace: ServiceWorkspace): String = WorkspaceGitOperationService.workspacePathKey(workspace)
+
+    fun loadBatchGitPreviews(task: TaskManifest) {
+        batchGitPreviews = BatchGitPreviewState.Loading
+        val taskKey = task.taskDirectoryName
+        scope.launch {
+            val result = withContext(ioDispatcher) {
+                runCatching { physicalWorkspaces(task).associate { workspaceKey(it) to gitOperations.preview(it) } }
+            }
+            if (session.selectedTask?.taskDirectoryName != taskKey) return@launch
+            batchGitPreviews = result.fold(
+                onSuccess = { BatchGitPreviewState.Loaded(it) },
+                onFailure = { BatchGitPreviewState.Failed(it.message ?: "Git 变更预览失败") },
+            )
+        }
+    }
+
+    fun batchGit(
+        task: TaskManifest,
+        mode: WorkspaceGitBatchMode,
+        selectedWorkspaceKeys: Set<String>,
+        commitMessages: Map<String, String> = emptyMap(),
+        expectedFingerprints: Map<String, String> = emptyMap(),
+        onCompleted: (WorkspaceGitBatchResult) -> Unit,
+    ): Boolean = operations.run(
+        activeMessage = when (mode) {
+            WorkspaceGitBatchMode.COMMIT -> "正在提交全部工作区…"
+            WorkspaceGitBatchMode.PUSH -> "正在推送全部工作区…"
+            WorkspaceGitBatchMode.COMMIT_AND_PUSH -> "正在提交并推送全部工作区…"
+        },
+        successMessage = "批量 Git 操作已完成",
+        block = {
+            val current = physicalWorkspaces(task)
+            val selected = selectPhysicalWorkspaces(current, selectedWorkspaceKeys)
+            gitOperations.batch(
+                selected,
+                mode,
+                commitMessages.filterKeys(selectedWorkspaceKeys::contains),
+                expectedFingerprints.filterKeys(selectedWorkspaceKeys::contains),
+            )
+        },
+        onSuccess = { result -> refreshGitStatus(); onCompleted(result) },
+    )
 
     private fun reloadTasks(preferredFolder: String? = session.selectedTask?.folderName) {
         val loaded = scanTasks(session.config)
@@ -276,13 +488,15 @@ class TaskController internal constructor(
         loaded.warning?.let { onError(IllegalStateException(it)) }
     }
 
+    private fun ServiceWorkspace.operationLabel(): String = moduleName.ifBlank { serviceName }
+
     private fun scanTasks(config: AppConfig): LoadedTaskSnapshot {
         val root = config.taskRoot?.let(Path::of) ?: return LoadedTaskSnapshot(emptyList())
         val scan = runCatching { manifests.scan(root) }.getOrElse { error ->
             return LoadedTaskSnapshot(emptyList(), "任务目录扫描失败：${error.message ?: error::class.simpleName}")
         }
         val messages = buildList {
-            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM v5 任务目录")
+            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.7.x 任务目录")
             if (scan.failures.isNotEmpty()) {
                 add("${scan.failures.size} 个任务清单读取失败：" + scan.failures.entries.joinToString { (path, reason) -> "${path.fileName}：$reason" })
             }
@@ -306,6 +520,18 @@ class TaskController internal constructor(
         val right = Path.of(actual).toAbsolutePath().normalize().toString()
         return if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) left.equals(right, true) else left == right
     }
+}
+
+internal fun selectPhysicalWorkspaces(
+    current: List<ServiceWorkspace>,
+    selectedWorkspaceKeys: Set<String>,
+): List<ServiceWorkspace> {
+    require(selectedWorkspaceKeys.isNotEmpty()) { "请至少选择一个工作区" }
+    val unique = current.distinctBy(WorkspaceGitOperationService::workspacePathKey)
+    val byKey = unique.associateBy(WorkspaceGitOperationService::workspacePathKey)
+    val unknown = selectedWorkspaceKeys - byKey.keys
+    require(unknown.isEmpty()) { "所选工作区已发生变化，请重新打开批量 Git 弹窗：${unknown.joinToString()}" }
+    return unique.filter { WorkspaceGitOperationService.workspacePathKey(it) in selectedWorkspaceKeys }
 }
 
 private data class LoadedTaskSnapshot(

@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.6.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.7.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,12 +13,20 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.6.0 的 `config.json` 使用严格字符串 schema `"0.6.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.7.0 的 `config.json` 使用严格字符串 schema `"0.7.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.6.0",
+  "schemaVersion": "0.7.0",
   "taskRoot": "Q:\\tasks",
+  "developmentTools": [
+    { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
+    { "type": "VISUAL_STUDIO_CODE", "path": "C:\\Tools\\Code.exe" }
+  ],
+  "defaultDevelopmentTool": "INTELLIJ_IDEA",
+  "allowTemporaryDevelopmentToolSelection": false,
+  "hiddenTaskDetailBranches": ["master", "develop"],
+  "terminalExecutable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
   "repositories": [
     {
       "id": "repo-…",
@@ -34,7 +42,7 @@ agents/groups/<groupId>/AGENTS.md
     {
       "id": "default",
       "name": "默认组",
-      "uatTagEnabled": true,
+      "tagEnabled": true,
       "defaultBranchPrefix": "feature/zhangsan_{num}_",
       "defaultWorkspaceToolIds": ["codex"],
       "services": [
@@ -43,18 +51,19 @@ agents/groups/<groupId>/AGENTS.md
           "repositoryId": "repo-…",
           "displayName": "订单服务",
           "enabled": true,
-          "ideType": "IDEA",
+          "developmentTool": "INTELLIJ_IDEA",
+          "commitMessageTemplate": "feat: {num} 完成开发",
           "strategy": "STANDARD_WORKTREE",
           "modules": [
             {
               "id": "default",
-              "name": "",
+              "name": "default",
               "baseRef": "origin/master",
               "baseRemote": "origin",
-              "uatTagEnabled": true,
-              "uatRef": "origin/release/test",
-              "initialUatTag": null,
-              "tagMessagePrefix": "UAT"
+              "tagEnabled": true,
+              "tagMode": "MERGE_TO_TARGET_BRANCH",
+              "tagTargetRef": "origin/release/test",
+              "tagMessagePrefix": "Tag"
             }
           ],
           "cloneModules": [],
@@ -78,19 +87,19 @@ agents/groups/<groupId>/AGENTS.md
     "id": "feign-master",
     "name": "主线客户端",
     "branch": "origin/master",
-    "uatTagEnabled": true,
-    "uatRef": "origin/release/test",
-    "initialUatTag": null,
-    "tagMessagePrefix": "UAT"
+    "tagEnabled": true,
+    "tagMode": "MERGE_TO_TARGET_BRANCH",
+    "tagTargetRef": "origin/release/test",
+    "tagMessagePrefix": "Tag"
   },
   {
     "id": "feign-development",
     "name": "开发客户端",
     "branch": "origin/development",
-    "uatTagEnabled": false,
-    "uatRef": "origin/release/test",
-    "initialUatTag": null,
-    "tagMessagePrefix": "UAT"
+    "tagEnabled": false,
+    "tagMode": "CURRENT_BRANCH",
+    "tagTargetRef": null,
+    "tagMessagePrefix": "Tag"
   }
 ]
 ```
@@ -127,27 +136,29 @@ agents/groups/<groupId>/AGENTS.md
 
 ### 标准 Worktree
 
-标准服务至少有一个模块。每个模块指定 `baseRemote`、基础 Ref、`uatRef` 和 Tag 子开关；基础远程与 UAT 目标引用相互独立。`uatRef` 统一使用 `<remote>/<branch>` 格式，例如 `origin/release/test`：
+标准服务至少有一个模块。每个模块指定 `baseRemote`、基础 Ref、Tag 模式和 Tag 子开关。合并模式的 `tagTargetRef` 使用 `<remote>/<branch>` 格式，例如 `origin/release/test`：
 
-- 不同基础 Ref 分别创建 Worktree；
-- 相同基础 Ref 只创建一个 Worktree，具体模块的修改边界写入组级 `AGENTS.md`；
+- 每个模块都创建独立 Worktree，即使多个模块使用相同基础 Ref；
 - 单模块保留用户输入的任务分支名；
-- 多模块按基础 Ref 自动添加后缀，例如 `feature/ABC-master`、`feature/ABC-development`。
+- 多模块按模块名自动添加后缀，例如 `feature/ABC-api`、`feature/ABC-jobs/nightly`；创建页可以分别覆盖每个模块的基础分支和目标分支；
+- 模块名只允许英文字母、数字、`-`、`_`、`/`，忽略大小写后不能重复；目录名会将 `/` 转为 `-`，转换后也不能冲突。
 
-创建前会执行 `fetch --prune --tags`，并从最新的 `refs/remotes/<remote>/<branch>` 创建 Worktree；不会切换或移动用户本地 `master`。标准服务创建 Worktree 后按服务配置执行 Bootstrap。
+创建前会执行 `fetch --prune --no-tags <remote>`，并从最新的 `refs/remotes/<remote>/<branch>` 创建 Worktree；不会切换或移动用户本地 `master`。普通任务创建不受本地同名 Tag 冲突影响。标准服务创建 Worktree 后按服务配置执行 Bootstrap。
+
+`allowTemporaryDevelopmentToolSelection` 默认关闭。关闭时，任务工具栏和工作区行只用各自默认开发工具打开；开启后才显示临时 IDE 下拉。该开关不会让 AWM 在任务创建完成后自动打开服务。`hiddenTaskDetailBranches` 只过滤任务详情头部的实际分支汇总，使用区分大小写的完整名称匹配；工作区行和分支信息仍完整展示。
 
 ### 独立克隆
 
-独立克隆服务必须保存默认远程分支，创建任务时可以覆盖。它从 `origin` 完整克隆并直接切到该分支，不创建额外 Feature 分支或 Linked Worktree，也不执行 Bootstrap。归档和删除仍会进行 Git 安全检查。
+独立克隆服务必须保存默认远程分支，创建任务时可以覆盖。它从 `origin` 完整克隆并直接切到该分支，不创建额外 Feature 分支或 Linked Worktree；创建与恢复后执行 Bootstrap。归档和删除仍会进行 Git 安全检查。
 
-## UAT Tag 开关
+## Tag 开关与模式
 
 有效 Tag 入口需要同时满足：
 
-1. 任务所属组的 `uatTagEnabled` 已开启；
-2. 标准模块或独立克隆模块的 `uatTagEnabled` 已开启。
+1. 任务所属组的 `tagEnabled` 已开启；
+2. 标准模块或独立克隆模块的 `tagEnabled` 已开启。
 
-独立克隆启用后，以任务中实际克隆的分支参与 UAT，而不是重新派生 Feature 分支。
+`MERGE_TO_TARGET_BRANCH` 会把当前分支安全合并并推送到 `tagTargetRef` 后，在目标提交上创建 Tag。`CURRENT_BRANCH` 不需要目标分支，会先把当前分支非强制推送到任务记录的 `pushRemote`，再直接在当前 HEAD 创建 Tag。独立克隆始终使用任务中实际克隆的分支。
 
 ## 三级 AGENTS.md
 
@@ -178,11 +189,11 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema `"0.6.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.6.x 不读取或迁移 0.5.x 的配置和任务清单。
+`agent-workspace.json` 使用严格字符串 schema `"0.7.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.7.x 不读取或迁移 0.6.x 的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "0.6.0",
+  "schemaVersion": "0.7.0",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {

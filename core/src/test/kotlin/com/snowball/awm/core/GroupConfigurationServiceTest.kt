@@ -64,20 +64,20 @@ class GroupConfigurationServiceTest {
     }
 
     @Test
-    fun `new service starts with IDE recommendation while later saved choice remains authoritative`() {
-        val repository = InMemoryConfigurationRepository(AppConfig())
+    fun `new service starts with global default development tool while later saved choice remains authoritative`() {
+        val repository = InMemoryConfigurationRepository(AppConfig(defaultDevelopmentTool = DevelopmentToolType.WEBSTORM))
         val service = GroupConfigurationService(
             repository,
             StubRepositoryInspector(),
-            ideRecommendation = IdeRecommendationService { IdeType.WEBSTORM },
+            developmentToolRecommendation = DevelopmentToolRecommendationService { DevelopmentToolType.WEBSTORM },
         )
 
         val added = service.addRepository(DEFAULT_GROUP_ID, Path.of("C:/repo-web"))
             .group(DEFAULT_GROUP_ID).services.single()
-        assertEquals(IdeType.WEBSTORM, added.ideType)
+        assertEquals(DevelopmentToolType.WEBSTORM, added.developmentTool)
 
-        service.updateService(DEFAULT_GROUP_ID, added.copy(ideType = IdeType.IDEA))
-        assertEquals(IdeType.IDEA, repository.load().group(DEFAULT_GROUP_ID).services.single().ideType)
+        service.updateService(DEFAULT_GROUP_ID, added.copy(developmentTool = DevelopmentToolType.INTELLIJ_IDEA))
+        assertEquals(DevelopmentToolType.INTELLIJ_IDEA, repository.load().group(DEFAULT_GROUP_ID).services.single().developmentTool)
     }
 
     @Test
