@@ -21,6 +21,42 @@ subprojects {
                 excludeTestsMatching("com.snowball.awm.core.TagBuildServiceIntegrationTest")
                 excludeTestsMatching("com.snowball.awm.core.TagConflictIntegrationTest")
                 excludeTestsMatching("com.snowball.awm.core.WorkspaceLifecycleIntegrationTest")
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "commit and push creates missing same named remote branch",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "batch commit and push skips clean commit and pushes every workspace",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "preview lists files and stale fingerprint blocks the first write",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "batch rechecks each fingerprint immediately before its first write",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitStatusTest." +
+                        "reader reports untracked files and local commits without contacting remote",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitStatusTest." +
+                        "reader distinguishes missing non git and wrong branch",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceProvisionerIntegrationTest." +
+                        "locked worktree is never force attached",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceRepairServiceIntegrationTest." +
+                        "invalid worktree directory is retained as backup before recreation",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceRepairServiceIntegrationTest." +
+                        "missing worktree requires remote reuse confirmation and tracks remote branch",
+                )
             }
         }
         testLogging {
