@@ -101,7 +101,7 @@ class GroupConfigurationServiceTest {
         assertTrue(result.skipped.any { "不是 Git 仓库" in it.reason })
         assertTrue(result.skipped.any { "重复" in it.reason })
         assertEquals(1, repository.saveCount)
-        assertEquals(WorkspaceStrategy.STANDARD_WORKTREE, repository.load().groups.single().services.first().strategy)
+        assertEquals(WorkspaceStrategy.STANDARD_WORKTREE, repository.load().groups.single().services.first().modules.single().strategy)
     }
 
     @Test

@@ -77,4 +77,28 @@ class TaskBranchCatalogTest {
         assertEquals(2, candidate.matchedWorkspaceCount)
         assertEquals(2, candidate.totalWorkspaceCount)
     }
+
+    @Test
+    fun `mixed service candidate keeps worktree suffix from the complete module plan`() = runBlocking {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("mixed"))
+        GitTestSupport.run(seed, "switch", "-c", "feature/mixed-api", "master")
+        GitTestSupport.run(seed, "push", "origin", "feature/mixed-api")
+        GitTestSupport.run(seed, "switch", "master")
+        val common = GitTestSupport.run(seed, "rev-parse", "--git-common-dir")
+        val repository = RepositoryConfig("repo", "repo", seed.toString(), seed.resolve(common).normalize().toString(), remote.toString())
+        val service = GroupServiceConfig(
+            id = "service",
+            repositoryId = repository.id,
+            displayName = "Service",
+            modules = listOf(
+                ServiceModuleConfig("api", name = "api", baseRef = "origin/master"),
+                ServiceModuleConfig("docs", name = "docs", baseRef = "origin/master", strategy = WorkspaceStrategy.INDEPENDENT_CLONE),
+            ),
+        )
+        val config = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("default", "Default", services = listOf(service))))
+
+        val result = GitTaskBranchCatalog().list(config, "default", setOf("service"))
+
+        assertEquals(listOf("feature/mixed"), result.candidates.map(TaskBranchCandidate::branch))
+    }
 }

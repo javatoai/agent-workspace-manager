@@ -131,14 +131,14 @@ class ConfigStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
-        assertEquals("0.7.0", store.load().schemaVersion)
+        assertEquals("0.8.0", store.load().schemaVersion)
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
     }
 
     @Test
-    fun `legacy auto open field is ignored and never mapped to temporary tool selection`() {
+    fun `legacy auto open field from 0_7 is rejected without rewrite`() {
         val paths = ApplicationPaths(temporary.resolve("legacy-auto-open"))
         Files.createDirectories(paths.home)
         Files.writeString(
@@ -152,13 +152,8 @@ class ConfigStoreTest {
         )
         val store = ConfigStore(paths)
 
-        val loaded = store.load()
-        assertEquals(false, loaded.allowTemporaryDevelopmentToolSelection)
-
-        store.save(loaded)
-        val saved = Files.readString(paths.config)
-        assertFalse(saved.contains("autoOpenServicesAfterTaskCreation"))
-        assertTrue(saved.contains("allowTemporaryDevelopmentToolSelection"))
+        assertFailsWith<UnsupportedConfigVersionException> { store.load() }
+        assertTrue(Files.readString(paths.config).contains("autoOpenServicesAfterTaskCreation"))
     }
 
     @Test
@@ -213,12 +208,12 @@ class ConfigStoreTest {
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.7.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"0.8.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.7.9", compatible.schemaVersion)
+        assertEquals("0.8.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)
@@ -258,9 +253,9 @@ class ConfigStoreTest {
         val original = """{"schemaVersion":"0.7.0","groups":[{"id":"default","name":"默认组","services":[{"id":"source","repositoryId":"repo","displayName":"source","strategy":"SOURCE_REPOSITORY"}]}]}"""
         Files.writeString(paths.config, original)
 
-        val error = assertThrows(IllegalStateException::class.java) { ConfigStore(paths).load() }
+        val error = assertThrows(UnsupportedConfigVersionException::class.java) { ConfigStore(paths).load() }
 
-        assertTrue(error.message.orEmpty().contains("不再支持原仓库分支"))
+        assertTrue(error.message.orEmpty().contains("版本不受支持"))
         assertEquals(original, Files.readString(paths.config))
     }
 
@@ -296,22 +291,8 @@ class ConfigStoreTest {
             }""".trimIndent(),
         )
 
-        val store = ConfigStore(paths)
-        val loaded = store.load()
-        val module = loaded.groups.single().services.single().modules.single()
-        assertTrue(loaded.groups.single().tagEnabled)
-        assertEquals("origin/release/test", module.tagTargetRef)
-        assertEquals("Tag", module.tagMessagePrefix)
-
-        store.save(loaded)
-        val saved = Files.readString(paths.config)
-        assertFalse(saved.contains("uatTagEnabled"))
-        assertFalse(saved.contains("uatRef"))
-        assertFalse(saved.contains("initialUatTag"))
-        assertFalse(saved.contains("initialTag"))
-        assertFalse(saved.contains("platforms"))
-        assertTrue(saved.contains("tagEnabled"))
-        assertTrue(saved.contains("tagTargetRef"))
+        assertFailsWith<UnsupportedConfigVersionException> { ConfigStore(paths).load() }
+        assertTrue(Files.readString(paths.config).contains("uatTagEnabled"))
     }
 
 }

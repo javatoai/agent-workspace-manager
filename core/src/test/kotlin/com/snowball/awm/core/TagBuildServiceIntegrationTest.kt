@@ -56,6 +56,8 @@ class TagBuildServiceIntegrationTest {
                         branch = "feature/TAG-1",
                         health = WorkspaceHealth.READY,
                         groupServiceId = "operation-center",
+                        tagEnabled = true,
+                        tagTargetRef = "origin/release/test",
                     ),
                 ),
             ),
@@ -161,6 +163,8 @@ Builder: ${System.getProperty("user.name")}
                         branch = "feature/TAG-PARTIAL",
                         health = WorkspaceHealth.READY,
                         groupServiceId = "operation-center",
+                        tagEnabled = true,
+                        tagTargetRef = "origin/release/test",
                     ),
                 ),
             ),
@@ -262,6 +266,9 @@ Builder: ${System.getProperty("user.name")}
                         health = WorkspaceHealth.READY,
                         groupServiceId = "api",
                         pushRemote = "origin",
+                        tagEnabled = true,
+                        tagMode = TagBuildMode.CURRENT_BRANCH,
+                        tagTargetRef = null,
                     ),
                 ),
             ),
@@ -305,6 +312,74 @@ Builder: ${System.getProperty("user.name")}
         assertEquals(sourceSha, GitTestSupport.run(repository, "ls-remote", "origin", "refs/heads/feature/TAG-DIRECT").substringBefore('\t'))
         assertTrue(GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1").isNotBlank())
         assertTrue(!Files.exists(temporary.resolve("direct-app-home").resolve("temp").resolve("tag-build")))
+    }
+
+    @Test
+    fun `already merged protected target allows tag only delivery`() {
+        val root = temporary.resolve("tag-only-protected-target")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
+        val repository = GitTestSupport.clone(remote, root.resolve("repository"))
+        val repositoryInfo = GitRepositoryInspector().inspect(repository)
+        val taskDirectory = root.resolve("tasks/TAG-ONLY")
+        val worktree = taskDirectory.resolve("service")
+        Files.createDirectories(taskDirectory)
+        GitClient().addWorktree(repository, worktree, "feature/tag-only", "origin/master")
+        val now = Instant.now().toString()
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TAG-ONLY",
+                taskDirectoryName = "TAG-ONLY",
+                featureBranch = "feature/tag-only",
+                createdAt = now,
+                updatedAt = now,
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = repositoryInfo.id,
+                        serviceName = "service",
+                        repositoryPath = repository.toString(),
+                        worktreePath = worktree.toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/tag-only",
+                        health = WorkspaceHealth.READY,
+                        groupServiceId = "service",
+                        moduleId = "default",
+                        moduleName = "default",
+                        baseRef = "origin/master",
+                        targetBranch = "feature/tag-only",
+                        tagEnabled = true,
+                        tagMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+                        tagTargetRef = "origin/master",
+                    ),
+                ),
+            ),
+        )
+        val config = AppConfig(
+            taskRoot = root.resolve("tasks").toString(),
+            repositories = listOf(repositoryInfo),
+            groups = listOf(
+                GroupConfig(
+                    DEFAULT_GROUP_ID,
+                    DEFAULT_GROUP_NAME,
+                    services = listOf(
+                        GroupServiceConfig.standard("service", repositoryInfo.id, "service").copy(
+                            modules = listOf(ServiceModuleConfig("default", tagTargetRef = "origin/master")),
+                        ),
+                    ),
+                ),
+            ),
+            blockedGitWriteBranches = listOf("master"),
+        )
+        val builder = TagBuildService(paths = ApplicationPaths(root.resolve("app-home")))
+
+        val preview = builder.preflight(config, taskDirectory, "service:default")
+        val result = builder.build(config, taskDirectory, "service:default")
+
+        assertEquals(MergeMode.ALREADY_MERGED, preview.mergeMode)
+        assertEquals(TagOperationState.SUCCESS, result.state, result.message)
+        assertTrue(GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1").isNotBlank())
     }
 
     private fun createAnnotatedTag(repository: Path, tag: String, timestamp: String) {

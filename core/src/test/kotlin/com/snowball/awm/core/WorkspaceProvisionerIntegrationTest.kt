@@ -13,6 +13,68 @@ class WorkspaceProvisionerIntegrationTest {
     lateinit var temporary: Path
 
     @Test
+    fun `worktree reuse inspection includes the configured base remote`() {
+        val (origin, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("base-remote-origin"))
+        val (upstream, upstreamSeed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("base-remote-upstream"))
+        val targetBranch = "feature/existing-upstream"
+        GitTestSupport.run(upstreamSeed, "switch", "-c", targetBranch)
+        GitTestSupport.run(upstreamSeed, "push", "-u", "origin", targetBranch)
+        val repositoryPath = GitTestSupport.clone(origin, temporary.resolve("base-remote-source"))
+        GitTestSupport.run(repositoryPath, "remote", "add", "upstream", upstream.toString())
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig(
+            id = "base-remote-service",
+            repositoryId = repository.id,
+            displayName = "base-remote-service",
+            modules = listOf(
+                ServiceModuleConfig(
+                    id = "default",
+                    baseRef = "upstream/master",
+                    baseRemote = "upstream",
+                    tagEnabled = false,
+                    tagTargetRef = null,
+                ),
+            ),
+        )
+
+        val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, targetBranch).single()
+
+        assertEquals(listOf("upstream/$targetBranch"), conflict.remoteRefs)
+    }
+
+    @Test
+    fun `disabled tag does not require or fetch a tag target remote`() {
+        val (origin, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("disabled-tag-origin"))
+        val repositoryPath = GitTestSupport.clone(origin, temporary.resolve("disabled-tag-source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig(
+            id = "disabled-tag-service",
+            repositoryId = repository.id,
+            displayName = "disabled-tag-service",
+            modules = listOf(
+                ServiceModuleConfig(
+                    id = "default",
+                    baseRef = "origin/master",
+                    baseRemote = "origin",
+                    tagEnabled = false,
+                    tagTargetRef = null,
+                ),
+            ),
+        )
+
+        assertTrue(WorkspaceBranchReuseInspector().inspect(repository, service, "feature/new").isEmpty())
+    }
+
+    @Test
+    fun `local repository remote catalog returns configured remote names`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("remote-catalog"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("remote-catalog/source"))
+        GitTestSupport.run(repositoryPath, "remote", "add", "upstream", remote.toString())
+
+        assertEquals(listOf("origin", "upstream"), GitRepositoryRemoteCatalog().list(repositoryPath))
+    }
+
+    @Test
     fun `ordinary workspace provisioning ignores conflicting local and remote tags`() {
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("tag-conflict-create"))
         GitTestSupport.run(seed, "tag", "same-tag")
@@ -128,9 +190,7 @@ class WorkspaceProvisionerIntegrationTest {
             id = "service-clone",
             repositoryId = repository.id,
             displayName = "复杂单仓",
-            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            modules = emptyList(),
-            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", tagEnabled = true)),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = true)),
         )
 
         val workspace = IndependentCloneProvisioner().provision(
@@ -149,6 +209,270 @@ class WorkspaceProvisionerIntegrationTest {
     }
 
     @Test
+    fun `clone strategy uses the selected source remote but names it origin in the new clone`() {
+        val root = temporary.resolve("clone-selected-source")
+        val (originRemote, _) = GitTestSupport.createRemoteWithSeed(root.resolve("origin"))
+        val (upstreamRemote, _) = GitTestSupport.createRemoteWithSeed(root.resolve("upstream"))
+        val source = GitTestSupport.clone(originRemote, root.resolve("source"))
+        GitTestSupport.run(source, "remote", "add", "upstream", upstreamRemote.toString())
+        val repository = GitRepositoryInspector().inspect(source)
+        val module = ServiceModuleConfig(
+            id = "clone",
+            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+            baseRef = "upstream/master",
+            baseRemote = "upstream",
+            tagEnabled = false,
+        )
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+
+        val workspace = IndependentCloneProvisioner().provision(
+            WorkspaceProvisionRequest(root.resolve("task"), repository, service),
+        ).single()
+        val target = Path.of(workspace.worktreePath)
+
+        assertEquals("upstream/master", workspace.baseRef)
+        assertEquals(upstreamRemote.toString(), workspace.originUrl)
+        assertEquals("origin", workspace.pushRemote)
+        assertEquals(upstreamRemote.toString(), GitClient().remoteUrl(target, "origin"))
+        assertEquals("master", GitClient().currentBranch(target))
+    }
+
+    @Test
+    fun `clone module creates an unpushed target from its base when target is absent`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("clone-target-new"))
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("clone-target-new/source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+
+        val workspace = IndependentCloneProvisioner().provision(
+            WorkspaceProvisionRequest(
+                temporary.resolve("clone-target-new/task"),
+                repository,
+                service,
+                moduleBranches = mapOf("clone" to "feature/new-clone"),
+            ),
+        ).single()
+
+        val target = Path.of(workspace.worktreePath)
+        assertEquals("feature/new-clone", GitClient().currentBranch(target))
+        assertThrows(IllegalStateException::class.java) {
+            GitTestSupport.run(target, "config", "branch.feature/new-clone.remote")
+        }
+    }
+
+    @Test
+    fun `failed clone initialization removes the clone directory created by this request`() {
+        val root = temporary.resolve("clone-bootstrap-rollback")
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig(
+            id = "clone",
+            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+            baseRef = "origin/master",
+            tagEnabled = false,
+        )
+        val service = GroupServiceConfig(
+            id = "service-clone",
+            repositoryId = repository.id,
+            displayName = "Clone",
+            modules = listOf(module),
+            bootstrap = BootstrapConfig(commands = listOf(BootstrapCommand("invalid", "git", timeoutSeconds = 0))),
+        )
+        val taskDirectory = root.resolve("task")
+        val target = taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(service, module))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            IndependentCloneProvisioner().provision(
+                WorkspaceProvisionRequest(taskDirectory, repository, service),
+            )
+        }
+
+        assertTrue(!Files.exists(target), "failed clone must be rolled back immediately")
+    }
+
+    @Test
+    fun `mixed provisioning resolves multi module default targets before splitting requests`() {
+        val root = temporary.resolve("mixed-default-targets")
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig(
+            id = "mixed-service",
+            repositoryId = repository.id,
+            displayName = "Mixed",
+            modules = listOf(
+                ServiceModuleConfig("api", name = "default", tagEnabled = false),
+                ServiceModuleConfig("web", name = "web", tagEnabled = false),
+            ),
+        )
+
+        val workspaces = WorkspaceProvisioningService().provision(
+            WorkspaceProvisionRequest(
+                taskDirectory = root.resolve("task"),
+                repository = repository,
+                service = service,
+                requestedFeatureBranch = "feature/mixed",
+            ),
+        )
+
+        assertEquals(listOf("feature/mixed-default", "feature/mixed-web"), workspaces.map(ServiceWorkspace::branch))
+        assertEquals(listOf("default", "web"), workspaces.map(ServiceWorkspace::moduleName))
+    }
+
+    @Test
+    fun `clone module requires confirmation before tracking an existing remote target`() {
+        val root = temporary.resolve("clone-target-existing")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        GitTestSupport.run(seed, "switch", "-c", "feature/shared")
+        GitTestSupport.run(seed, "push", "-u", "origin", "feature/shared")
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+        val request = WorkspaceProvisionRequest(
+            root.resolve("task"), repository, service,
+            moduleBranches = mapOf("clone" to "feature/shared"),
+        )
+        val conflict = WorkspaceBranchReuseInspector().inspect(
+            repository,
+            service,
+            requestedFeatureBranch = "",
+            moduleBranches = request.moduleBranches,
+        ).single()
+
+        assertThrows(IllegalArgumentException::class.java) { IndependentCloneProvisioner().provision(request) }
+        val workspace = IndependentCloneProvisioner().provision(
+            request.copy(confirmedBranchReuseKeys = setOf(conflict.key)),
+        ).single()
+
+        assertEquals("feature/shared", workspace.branch)
+        assertEquals("origin", GitTestSupport.run(Path.of(workspace.worktreePath), "config", "branch.feature/shared.remote"))
+    }
+
+    @Test
+    fun `confirmed clone target deletion fails instead of creating a different branch history`() {
+        val root = temporary.resolve("clone-target-race")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        GitTestSupport.run(seed, "switch", "-c", "feature/shared")
+        GitTestSupport.run(seed, "push", "-u", "origin", "feature/shared")
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+        val request = WorkspaceProvisionRequest(root.resolve("task"), repository, service, moduleBranches = mapOf("clone" to "feature/shared"))
+        val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, "", request.moduleBranches).single()
+        GitTestSupport.run(seed, "push", "origin", "--delete", "feature/shared")
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            IndependentCloneProvisioner().provision(request.copy(confirmedBranchReuseKeys = setOf(conflict.key)))
+        }
+
+        assertTrue(error.message.orEmpty().contains("状态已变化"))
+        assertTrue(!Files.exists(root.resolve("task").resolve(WorkspaceLayout.moduleDirectoryName(service, module))))
+    }
+
+    @Test
+    fun `clone target race never deletes a directory created by another process`() {
+        val root = temporary.resolve("clone-target-directory-race")
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+        val taskDirectory = root.resolve("task")
+        val target = taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(service, module))
+        val marker = target.resolve("owned-by-external.txt")
+        val delegate = ProcessCommandRunner()
+        val injected = java.util.concurrent.atomic.AtomicBoolean()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: java.time.Duration, environment: Map<String, String>): CommandResult {
+                if ("clone" in command && injected.compareAndSet(false, true)) {
+                    Files.createDirectories(target)
+                    Files.writeString(marker, "external")
+                }
+                return delegate.run(command, workingDirectory, timeout, environment)
+            }
+        }
+
+        assertThrows(Exception::class.java) {
+            IndependentCloneProvisioner(GitClient(runner)).provision(
+                WorkspaceProvisionRequest(taskDirectory, repository, service, moduleBranches = mapOf("clone" to "")),
+            )
+        }
+
+        assertEquals("external", Files.readString(marker))
+    }
+
+    @Test
+    fun `clone rollback refuses a target directory replaced after provisioning`() {
+        val root = temporary.resolve("clone-target-replaced-before-rollback")
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+        val request = WorkspaceProvisionRequest(root.resolve("task"), repository, service, moduleBranches = mapOf("clone" to ""))
+        val provisioner = IndependentCloneProvisioner()
+        val workspaces = provisioner.provision(request)
+        val target = Path.of(workspaces.single().worktreePath)
+        Files.move(target, target.resolveSibling("original-clone"))
+        Files.createDirectories(target)
+        val marker = target.resolve("owned-by-external.txt")
+        Files.writeString(marker, "external")
+
+        assertThrows(IllegalArgumentException::class.java) { provisioner.rollback(request, workspaces) }
+
+        assertEquals("external", Files.readString(marker))
+    }
+
+    @Test
+    fun `confirmed clone target movement requires a new confirmation`() {
+        val root = temporary.resolve("clone-target-moved")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        GitTestSupport.run(seed, "switch", "-c", "feature/shared")
+        GitTestSupport.run(seed, "push", "-u", "origin", "feature/shared")
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+        val request = WorkspaceProvisionRequest(root.resolve("task"), repository, service, moduleBranches = mapOf("clone" to "feature/shared"))
+        val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, "", request.moduleBranches).single()
+        Files.writeString(seed.resolve("moved.txt"), "moved")
+        GitTestSupport.run(seed, "add", "moved.txt")
+        GitTestSupport.run(seed, "commit", "-m", "move shared")
+        GitTestSupport.run(seed, "push", "origin", "feature/shared")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            IndependentCloneProvisioner().provision(request.copy(confirmedBranchReuseKeys = setOf(conflict.key)))
+        }
+    }
+
+    @Test
+    fun `confirmed remote worktree target movement requires a new confirmation`() {
+        val root = temporary.resolve("worktree-target-moved")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        val branch = "feature/shared"
+        GitTestSupport.run(seed, "switch", "-c", branch)
+        GitTestSupport.run(seed, "push", "-u", "origin", branch)
+        val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
+        val repository = GitRepositoryInspector().inspect(repositoryPath)
+        val service = GroupServiceConfig.standard("service", repository.id, "Service")
+        val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single()
+        Files.writeString(seed.resolve("moved.txt"), "moved")
+        GitTestSupport.run(seed, "add", "moved.txt")
+        GitTestSupport.run(seed, "commit", "-m", "move shared")
+        GitTestSupport.run(seed, "push", "origin", branch)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            StandardWorktreeProvisioner().provision(
+                WorkspaceProvisionRequest(root.resolve("task"), repository, service, branch, setOf(conflict.key)),
+            )
+        }
+    }
+
+    @Test
     fun `standard strategy fetches and uses latest remote base without moving local master`() {
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("latest-base"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("latest-base").resolve("service"))
@@ -162,7 +486,7 @@ class WorkspaceProvisionerIntegrationTest {
             id = "latest-service",
             repositoryId = repository.id,
             displayName = "latest",
-            baseRef = "master",
+            baseRef = "origin/master",
         )
 
         val workspace = StandardWorktreeProvisioner().provision(
@@ -235,7 +559,7 @@ class WorkspaceProvisionerIntegrationTest {
         val repository = GitRepositoryInspector().inspect(repositoryPath)
         val branch = "feature/reuse-local"
         GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
-        val service = GroupServiceConfig.standard("reuse-local", repository.id, "reuse-local", baseRef = "master")
+        val service = GroupServiceConfig.standard("reuse-local", repository.id, "reuse-local", baseRef = "origin/master")
         val provisioner = StandardWorktreeProvisioner()
 
         assertThrows(Throwable::class.java) {
@@ -269,7 +593,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
         val git = GitClient()
         git.addExistingWorktree(repositoryPath, temporary.resolve("reuse-occupied").resolve("existing"), branch)
-        val service = GroupServiceConfig.standard("reuse-occupied", repository.id, "reuse-occupied", baseRef = "master")
+        val service = GroupServiceConfig.standard("reuse-occupied", repository.id, "reuse-occupied", baseRef = "origin/master")
 
         val workspace = StandardWorktreeProvisioner().provision(
             WorkspaceProvisionRequest(
@@ -299,7 +623,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitClient().addExistingWorktree(repositoryPath, stale, branch)
         Files.walk(stale).use { it.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
 
-        val service = GroupServiceConfig.standard("reuse-stale", repository.id, "reuse-stale", baseRef = "master")
+        val service = GroupServiceConfig.standard("reuse-stale", repository.id, "reuse-stale", baseRef = "origin/master")
         val conflicts = WorkspaceBranchReuseInspector().inspect(repository, service, branch)
 
         assertEquals(listOf(branch), conflicts.map { it.key.branch })
@@ -317,7 +641,7 @@ class WorkspaceProvisionerIntegrationTest {
         val locked = temporary.resolve("reuse-locked").resolve("locked-worktree")
         GitClient().addExistingWorktree(repositoryPath, locked, branch)
         GitTestSupport.run(repositoryPath, "worktree", "lock", "--reason", "protected", locked.toString())
-        val service = GroupServiceConfig.standard("reuse-locked", repository.id, "reuse-locked", baseRef = "master")
+        val service = GroupServiceConfig.standard("reuse-locked", repository.id, "reuse-locked", baseRef = "origin/master")
 
         val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single()
         assertEquals(listOf(locked.toString()), conflict.lockedWorktreePaths)
@@ -341,7 +665,7 @@ class WorkspaceProvisionerIntegrationTest {
         val repository = GitRepositoryInspector().inspect(repositoryPath)
         val branch = "feature/reuse-changed"
         GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
-        val service = GroupServiceConfig.standard("reuse-changed", repository.id, "reuse-changed", baseRef = "master")
+        val service = GroupServiceConfig.standard("reuse-changed", repository.id, "reuse-changed", baseRef = "origin/master")
         val confirmation = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single().key
         GitClient().addExistingWorktree(repositoryPath, temporary.resolve("reuse-changed").resolve("other"), branch)
 
@@ -366,7 +690,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(seed, "push", "-u", "origin", branch)
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-remote").resolve("service"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val service = GroupServiceConfig.standard("reuse-remote", repository.id, "reuse-remote", baseRef = "master")
+        val service = GroupServiceConfig.standard("reuse-remote", repository.id, "reuse-remote", baseRef = "origin/master")
 
         val workspace = StandardWorktreeProvisioner().provision(
             WorkspaceProvisionRequest(

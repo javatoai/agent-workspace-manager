@@ -79,7 +79,7 @@ class GitTaskBranchCatalog(private val git: GitClient = GitClient()) : TaskBranc
         val failures = mutableListOf<String>()
         var totalWorkspaceCount = 0
         val contexts = mutableListOf<TaskBranchQueryContext>()
-        group.services.filter { it.id in serviceIds && it.enabled && it.strategy != WorkspaceStrategy.INDEPENDENT_CLONE }
+        group.services.filter { it.id in serviceIds && it.enabled }
             .forEach { service ->
                 val repository = repositories[service.repositoryId]
                 if (repository == null) {
@@ -87,7 +87,8 @@ class GitTaskBranchCatalog(private val git: GitClient = GitClient()) : TaskBranc
                     return@forEach
                 }
                 val root = Path.of(repository.rootPath).toAbsolutePath().normalize()
-                val physicalModules = service.modules
+                val physicalModules = service.modules.filter { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }
+                if (physicalModules.isEmpty()) return@forEach
                 totalWorkspaceCount += physicalModules.size
                 val derived = TaskBranchNaming.derive("__awm_candidate__", service.modules)
                 physicalModules.forEach { module ->
@@ -99,7 +100,7 @@ class GitTaskBranchCatalog(private val git: GitClient = GitClient()) : TaskBranc
                         remote = module.baseRemote,
                         workspaceKey = workspaceKey,
                         suffix = suffix,
-                        singlePhysicalModule = physicalModules.size == 1,
+                        singlePhysicalModule = service.modules.size == 1,
                     )
                 }
             }

@@ -61,11 +61,11 @@ class ConfigurationInteractionPolicyTest {
 
         store.save(expected)
 
-        assertEquals("0.7.0", expected.schemaVersion)
+        assertEquals("0.8.0", expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
         assertTrue("\"tagTargetRef\"" in json)
-        assertTrue("\"schemaVersion\": \"0.7.0\"" in json)
+        assertTrue("\"schemaVersion\": \"0.8.0\"" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
     }
@@ -77,9 +77,7 @@ class ConfigurationInteractionPolicyTest {
             id = "clone",
             repositoryId = "repo2",
             displayName = "Clone",
-            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            modules = emptyList(),
-            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/main")),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/main")),
         )
         val repositories = listOf(
             RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git"),
@@ -91,11 +89,11 @@ class ConfigurationInteractionPolicyTest {
         assertFalse(TagNavigationPolicy.isVisible(base.copy(groups = listOf(base.groups.single().copy(tagEnabled = false)))))
         val childrenOff = base.copy(groups = listOf(base.groups.single().copy(services = listOf(
             standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }),
-            clone.copy(cloneModules = clone.cloneModules.map { it.copy(tagEnabled = false) }),
+            clone.copy(modules = clone.modules.map { it.copy(tagEnabled = false) }),
         ))))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff))
         assertTrue(TagNavigationPolicy.isVisible(childrenOff.copy(groups = listOf(childrenOff.groups.single().copy(
-            services = listOf(standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }), clone.copy(cloneModules = clone.cloneModules.map { it.copy(tagEnabled = true) })),
+            services = listOf(standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }), clone.copy(modules = clone.modules.map { it.copy(tagEnabled = true) })),
         )))))
     }
 

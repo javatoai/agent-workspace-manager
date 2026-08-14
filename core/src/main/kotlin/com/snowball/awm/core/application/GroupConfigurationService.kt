@@ -108,12 +108,14 @@ class GroupConfigurationService(
                     repositoryId = repository.id,
                     displayName = repository.name,
                     developmentTool = config.defaultDevelopmentTool,
-                    strategy = strategy,
-                    modules = emptyList(),
-                    cloneModules = listOf(IndependentCloneModuleConfig(
+                    modules = listOf(ServiceModuleConfig(
                         id = "clone-default",
-                        branch = repository.defaultRemoteBranch?.let { "origin/$it" }
+                        name = "default",
+                        strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                        baseRef = repository.defaultRemoteBranch?.let { "origin/$it" }
                             ?: throw IllegalArgumentException("无法确定 origin 的默认远程分支，请先设置 origin/HEAD"),
+                        baseRemote = "origin",
+                        tagEnabled = false,
                     )),
                 )
             }

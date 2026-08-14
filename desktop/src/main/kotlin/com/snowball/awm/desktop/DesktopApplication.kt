@@ -34,12 +34,15 @@ import com.snowball.awm.core.GitRepositoryInspector
 import com.snowball.awm.core.GroupConfigurationService
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.GitRemoteBranchCatalog
+import com.snowball.awm.core.GitRepositoryRemoteCatalog
 import com.snowball.awm.core.ManifestStore
 import com.snowball.awm.core.ModuleBaseOverride
+import com.snowball.awm.core.TaskServiceSelection
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RepositoryOperationLock
 import com.snowball.awm.core.RemoteBranchCatalog
+import com.snowball.awm.core.RepositoryRemoteCatalog
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.ServiceWorkspace
@@ -175,6 +178,7 @@ class DesktopApplication(
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
     private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(),
+    private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(),
     private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(),
     private val meegleCliService: MeegleCliService = ProcessMeegleCliService(),
     private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(),
@@ -272,6 +276,7 @@ class DesktopApplication(
             groups = groupConfigurations,
             pathPicker = nativePathPicker,
             branchCatalog = remoteBranchCatalog,
+            remoteCatalog = repositoryRemoteCatalog,
             meegleProjectCatalog = meegleProjectCatalog,
             meegleCliService = meegleCliService,
             localGitInspector = localGitInspector,
@@ -471,6 +476,8 @@ class DesktopApplication(
     fun loadRemoteBranches(repositoryId: String, remote: String = "origin", force: Boolean = false) =
         settingsController.loadRemoteBranches(repositoryId, remote, force)
     fun remoteBranchState(repositoryId: String, remote: String) = settingsController.remoteBranchState(repositoryId, remote)
+    fun loadRepositoryRemotes(repositoryId: String, force: Boolean = false) = settingsController.loadRepositoryRemotes(repositoryId, force)
+    fun repositoryRemotesState(repositoryId: String) = settingsController.repositoryRemotesState(repositoryId)
     val meegleProjectCatalogState: MeegleProjectCatalogState get() = settingsController.state.meegleProjects
     val meegleCliState: MeegleCliState get() = settingsController.state.meegleCli
     val localGitSettingsState: LocalGitSettingsState get() = settingsController.state.localGit
@@ -503,7 +510,7 @@ class DesktopApplication(
         serviceIds: Set<String>,
         requirementLink: String,
         notes: String,
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
     ): String = agentInstructionsController.preview(
         folderName,
         branch,
@@ -511,7 +518,7 @@ class DesktopApplication(
         serviceIds,
         requirementLink,
         notes,
-        baseOverrides,
+        serviceSelections,
     )
     fun createTask(
         folderName: String,
@@ -522,7 +529,7 @@ class DesktopApplication(
         notes: String,
         workspaceToolIds: List<String> = emptyList(),
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
         onCompleted: () -> Unit = {},
     ) = taskController.create(
         folderName,
@@ -533,7 +540,7 @@ class DesktopApplication(
         notes,
         workspaceToolIds,
         confirmedBranchReuseKeys,
-        baseOverrides,
+        serviceSelections,
         onCompleted,
     )
 
@@ -563,9 +570,9 @@ class DesktopApplication(
         task: TaskManifest,
         serviceIds: List<String>,
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
         onCompleted: () -> Unit = {},
-    ) = taskController.addServices(task, serviceIds, confirmedBranchReuseKeys, baseOverrides, onCompleted)
+    ) = taskController.addServices(task, serviceIds, confirmedBranchReuseKeys, serviceSelections, onCompleted)
 
     fun retryFailedServices(task: TaskManifest, serviceIds: List<String>? = null) = taskController.retry(task, serviceIds)
 
@@ -697,7 +704,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.7.x 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.8.x 任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(

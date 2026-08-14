@@ -115,7 +115,6 @@ import com.snowball.awm.core.BootstrapConfig
 import com.snowball.awm.core.BootstrapPresets
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
-import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
 import com.snowball.awm.core.RemoteBranchRef
@@ -139,6 +138,7 @@ import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitIssue
 import com.snowball.awm.core.WorkspaceRepairConfirmation
 import com.snowball.awm.core.WorkspaceRepairPreview
+import com.snowball.awm.core.WorkspaceModuleRemovalPreview
 import com.snowball.awm.core.WorkspaceGitBatchMode
 import com.snowball.awm.core.WorkspaceGitBatchResult
 import com.snowball.awm.core.WorkspaceGitStepState
@@ -321,6 +321,9 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
     var lastBatchGitMode by remember(task.folderName) { mutableStateOf(WorkspaceGitBatchMode.PUSH) }
     var batchGitInitialSelection by remember(task.folderName) { mutableStateOf<Set<String>?>(null) }
     var batchGitResult by remember(task.folderName) { mutableStateOf<WorkspaceGitBatchResult?>(null) }
+    var addModuleServiceId by remember(task.folderName) { mutableStateOf<String?>(null) }
+    var removalPreview by remember(task.folderName) { mutableStateOf<WorkspaceModuleRemovalPreview?>(null) }
+    var removalChecking by remember(task.folderName) { mutableStateOf(false) }
     val group = controller.config.groups.firstOrNull { it.id == task.groupId }
     val tagWorkspaces = task.services.filter { controller.canBuildTag(task, it) }
     val physicalWorkspaces = controller.physicalWorkspaces(task)
@@ -358,6 +361,8 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
                     }
                 }
                 GitActionIconGroup(
+                    // Selection and the core batch preflight enforce write protection per selected
+                    // workspace. A protected workspace must not prevent choosing other workspaces.
                     enabled = !controller.busy && physicalWorkspaces.isNotEmpty(),
                     scopeLabel = "全部工作区",
                     loading = controller.busy && controller.activeOperation?.contains("全部工作区") == true,
@@ -404,7 +409,19 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
                     color = if (abnormalWorkspaces.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            (if (showOnlyAbnormal) abnormalWorkspaces else physicalWorkspaces).forEach { WorkspaceCard(controller, task, it) }
+            val firstWorkspaceByService = physicalWorkspaces.groupBy(ServiceWorkspace::groupServiceId).mapValues { it.value.first() }
+            (if (showOnlyAbnormal) abnormalWorkspaces else physicalWorkspaces).forEach { workspace ->
+                WorkspaceCard(
+                    controller,
+                    task,
+                    workspace,
+                    showAddModule = firstWorkspaceByService[workspace.groupServiceId] == workspace,
+                    onAddModule = { addModuleServiceId = workspace.groupServiceId },
+                    onDeleteModule = {
+                        removalChecking = controller.taskController.inspectModuleRemoval(task, workspace, { removalPreview = it }, { removalChecking = false })
+                    },
+                )
+            }
             if (failedTools.isNotEmpty()) {
                 SectionHeader("工作区工具打开失败", "任务创建不受影响，可单独重试失败工具")
                 failedTools.forEach { launch ->
@@ -457,8 +474,24 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
         controller.clearDeleteRisk(task)
         confirmDelete = false
     }
-    if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids, reuseKeys, baseOverrides ->
-        controller.addServices(task, ids, reuseKeys, baseOverrides) { showAddServices = false }
+    if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids, reuseKeys, selections ->
+        controller.addServices(task, ids, reuseKeys, selections) { showAddServices = false }
+    }
+    addModuleServiceId?.let { serviceId ->
+        group?.services?.firstOrNull { it.id == serviceId }?.let { service ->
+            AddTaskModuleDialog(controller, task, service, onDismiss = { addModuleServiceId = null })
+        }
+    }
+    removalPreview?.let { preview ->
+        WorkspaceModuleRemovalDialog(
+            preview,
+            onDismiss = { removalPreview = null },
+            onConfirm = { acknowledge ->
+                controller.taskController.removeModule(task, preview, acknowledge) { _ ->
+                    removalPreview = null
+                }
+            },
+        )
     }
     if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
         controller.deliveryController.buildBatch(task, selected) { showBatchTag = false }
@@ -618,7 +651,14 @@ internal fun workspaceBranchRowAllocation(
 }
 
 @Composable
-private fun WorkspaceCard(controller: DesktopApplication, task: TaskManifest, workspace: ServiceWorkspace) {
+private fun WorkspaceCard(
+    controller: DesktopApplication,
+    task: TaskManifest,
+    workspace: ServiceWorkspace,
+    showAddModule: Boolean,
+    onAddModule: () -> Unit,
+    onDeleteModule: () -> Unit,
+) {
     val health = controller.gitHealth(workspace)
     val displayedBranch = health?.actualBranch?.takeIf(String::isNotBlank) ?: workspace.branch
     val branchVerified = !health?.actualBranch.isNullOrBlank()
@@ -661,6 +701,10 @@ private fun WorkspaceCard(controller: DesktopApplication, task: TaskManifest, wo
                 onToolMenuChange = { toolMenu = it },
                 onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
                 onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
+                showAddModule = showAddModule,
+                onAddModule = onAddModule,
+                canDeleteModule = task.services.size > 1,
+                onDeleteModule = onDeleteModule,
                 modifier = Modifier.padding(top = 1.dp),
             )
         }
@@ -780,6 +824,13 @@ private fun WorkspaceCardSummary(
         if (workspace.warnings.isNotEmpty()) {
             Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
         }
+        if (controller.config.blockedGitWriteBranches.any { it.equals(displayedBranch, ignoreCase = true) }) {
+            Text(
+                "Git 写保护：分支 $displayedBranch 禁止 Commit、Push 和 Commit & Push",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
@@ -834,8 +885,14 @@ private fun WorkspaceCardActions(
     onToolMenuChange: (Boolean) -> Unit,
     onCommit: () -> Unit,
     onCommitAndPush: () -> Unit,
+    showAddModule: Boolean,
+    onAddModule: () -> Unit,
+    canDeleteModule: Boolean,
+    onDeleteModule: () -> Unit,
     modifier: Modifier,
 ) {
+    val actualBranch = controller.workspaceGitHealth[controller.workspaceKey(workspace)]?.actualBranch ?: workspace.branch
+    val writeBlocked = controller.config.blockedGitWriteBranches.any { it.equals(actualBranch, ignoreCase = true) }
     Row(
         modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -853,7 +910,7 @@ private fun WorkspaceCardActions(
             }
         }
         GitActionIconGroup(
-            enabled = !controller.busy,
+            enabled = !controller.busy && !writeBlocked,
             scopeLabel = workspace.moduleName.ifBlank { workspace.serviceName },
             loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true,
             onCommit = onCommit,
@@ -865,6 +922,14 @@ private fun WorkspaceCardActions(
                 ActionIconButton("构建 Tag", { controller.deliveryController.build(task, workspace) }, Modifier.size(34.dp), enabled = !controller.busy, loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true && controller.activeOperation?.contains("Tag") == true) {
                     Icon(Icons.Outlined.Sell, "Tag", Modifier.size(18.dp))
                 }
+            }
+        }
+        IconActionGroup {
+            if (showAddModule) ActionIconButton("为服务添加模块", onAddModule, Modifier.size(34.dp), enabled = !controller.busy) {
+                Icon(Icons.Outlined.Add, "添加模块", Modifier.size(18.dp))
+            }
+            ActionIconButton("删除当前模块", onDeleteModule, Modifier.size(34.dp), enabled = canDeleteModule && !controller.busy) {
+                Icon(Icons.Outlined.Delete, "删除模块", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
             }
         }
         IconActionGroup {
@@ -951,6 +1016,52 @@ private fun GitActionIconGroup(
             Icon(Icons.Outlined.CloudUpload, "推送", Modifier.size(18.dp))
         }
     }
+}
+
+@Composable
+private fun WorkspaceModuleRemovalDialog(
+    preview: WorkspaceModuleRemovalPreview,
+    onDismiss: () -> Unit,
+    onConfirm: (Boolean) -> Unit,
+) {
+    var acknowledged by remember(preview.fingerprint) { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("删除模块 ${preview.moduleName}") },
+        text = {
+            Column(Modifier.widthIn(min = 600.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (preview.pathMissing) "工作区目录已缺失，将只清理任务记录。" else "工作区将先移动到同级临时备份；任务清单和 AGENTS.md 更新成功后才永久清理。")
+                SelectionContainer {
+                    Text(
+                        buildString {
+                            appendLine("路径：${preview.workspacePath}")
+                            appendLine("分支：${preview.branch}")
+                            appendLine("基础分支：${preview.baseRef.orEmpty()}")
+                            appendLine("相对基础分支：ahead ${preview.commitsAheadOfBase} / behind ${preview.commitsBehindBase}")
+                            appendLine("未推送提交：${preview.unpushedCommits}")
+                            if (preview.changedFiles.isNotEmpty()) {
+                                appendLine("未提交文件：")
+                                preview.changedFiles.forEach { appendLine("  $it") }
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (preview.requiresRiskConfirmation) {
+                    Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(10.dp)) {
+                        Row(Modifier.fillMaxWidth().clickable { acknowledged = !acknowledged }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(acknowledged, { acknowledged = it })
+                            Text("我确认未提交文件会永久丢失，并接受提交差异及未推送提交不再保留在该工作区中的风险。", color = MaterialTheme.colorScheme.onErrorContainer)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(acknowledged) }, enabled = !preview.requiresRiskConfirmation || acknowledged) { Text("删除模块") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 internal enum class BatchCommitDisposition {

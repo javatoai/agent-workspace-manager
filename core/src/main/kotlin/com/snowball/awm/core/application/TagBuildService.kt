@@ -117,7 +117,9 @@ class TagBuildService(
         val worktree = validated.worktree
 
         withRepositoryLock(repository) {
-            preflightUnlocked(service, manifest, workspace, repository, worktree)
+            preflightUnlocked(service, manifest, workspace, repository, worktree).also { preview ->
+                requireTagBranchesAllowed(config, service, preview)
+            }
         }
     }
 
@@ -171,6 +173,7 @@ class TagBuildService(
         return withRepositoryLock(repository) {
             try {
                 val preview = preflightUnlocked(service, manifest, workspace, validated.repository, validated.worktree)
+                requireTagBranchesAllowed(config, service, preview)
                 operation = transition(
                     taskDirectory,
                     operation,
@@ -397,6 +400,16 @@ class TagBuildService(
             diffStat = git.run(repository, "diff", "--stat", targetSha, sourceSha).stdout.trim(),
             estimatedTag = nextTag(repository, targetSha),
         )
+    }
+
+    private fun requireTagBranchesAllowed(config: AppConfig, service: EffectiveTagTarget, preview: TagPreflight) {
+        val policy = GitWritePolicy(config.blockedGitWriteBranches)
+        if (preview.sourceSync.pushRequired || service.mode == TagBuildMode.CURRENT_BRANCH) {
+            policy.requireAllowed(preview.sourceBranch, "Tag 流程推送源分支")
+        }
+        if (service.mode == TagBuildMode.MERGE_TO_TARGET_BRANCH && preview.mergeMode != MergeMode.ALREADY_MERGED) {
+            policy.requireAllowed(requireNotNull(service.targetBranch), "Tag 流程合并并推送目标分支")
+        }
     }
 
     private fun resolveWorkspace(manifest: TaskManifest, selection: String): ServiceWorkspace? {

@@ -104,8 +104,15 @@ class WorkspaceGitOperationService(
             fingerprint = fingerprint(branch, head, upstream, porcelain),
         )
     }
-    fun commit(workspace: ServiceWorkspace, message: String, expectedFingerprint: String? = null): WorkspaceGitOperationResult =
-        withRepositoryLock(workspace) { commitUnlocked(workspace, message, expectedFingerprint) }
+    fun commit(
+        workspace: ServiceWorkspace,
+        message: String,
+        expectedFingerprint: String? = null,
+        blockedBranches: Collection<String> = listOf("master", "main"),
+    ): WorkspaceGitOperationResult = withRepositoryLock(workspace) {
+        requireWriteAllowed(workspace, blockedBranches, "提交")
+        commitUnlocked(workspace, message, expectedFingerprint)
+    }
 
     private fun commitUnlocked(workspace: ServiceWorkspace, message: String, expectedFingerprint: String? = null): WorkspaceGitOperationResult {
         expectedFingerprint?.let { expected ->
@@ -119,10 +126,18 @@ class WorkspaceGitOperationService(
         return WorkspaceGitOperationResult("已提交 ${workspace.branch}")
     }
 
-    fun push(workspace: ServiceWorkspace): WorkspaceGitOperationResult =
-        withRepositoryLock(workspace) { pushUnlocked(workspace) }
+    fun push(
+        workspace: ServiceWorkspace,
+        blockedBranches: Collection<String> = listOf("master", "main"),
+    ): WorkspaceGitOperationResult = withRepositoryLock(workspace) {
+        pushUnlocked(workspace, blockedBranches)
+    }
 
-    private fun pushUnlocked(workspace: ServiceWorkspace): WorkspaceGitOperationResult {
+    private fun pushUnlocked(
+        workspace: ServiceWorkspace,
+        blockedBranches: Collection<String>,
+    ): WorkspaceGitOperationResult {
+        requireWriteAllowed(workspace, blockedBranches, "推送")
         val target = validate(workspace)
         val plan = resolvePushPlan(workspace, target)
         val command = WorkspacePushCommand.build(plan.remote, plan.branch, plan.setUpstream)
@@ -130,10 +145,16 @@ class WorkspaceGitOperationService(
         return WorkspaceGitOperationResult("已推送 ${plan.remote}/${plan.branch}")
     }
 
-    fun commitAndPush(workspace: ServiceWorkspace, message: String, expectedFingerprint: String? = null): WorkspaceGitOperationResult =
+    fun commitAndPush(
+        workspace: ServiceWorkspace,
+        message: String,
+        expectedFingerprint: String? = null,
+        blockedBranches: Collection<String> = listOf("master", "main"),
+    ): WorkspaceGitOperationResult =
         withRepositoryLock(workspace) {
+            requireWriteAllowed(workspace, blockedBranches, "提交和推送")
             commitUnlocked(workspace, message, expectedFingerprint)
-            pushUnlocked(workspace)
+            pushUnlocked(workspace, blockedBranches)
         }
 
     /**
@@ -145,10 +166,19 @@ class WorkspaceGitOperationService(
         mode: WorkspaceGitBatchMode,
         commitMessages: Map<String, String> = emptyMap(),
         expectedFingerprints: Map<String, String> = emptyMap(),
+        blockedBranches: Collection<String> = listOf("master", "main"),
     ): WorkspaceGitBatchResult {
         val unique = workspaces.distinctBy(::workspacePathKey)
         val preflights = unique.map { workspace ->
             val changePreview = preview(workspace)
+            GitWritePolicy(blockedBranches).requireAllowed(
+                changePreview.branch,
+                when (mode) {
+                    WorkspaceGitBatchMode.COMMIT -> "提交"
+                    WorkspaceGitBatchMode.PUSH -> "推送"
+                    WorkspaceGitBatchMode.COMMIT_AND_PUSH -> "提交和推送"
+                },
+            )
             expectedFingerprints[workspacePathKey(workspace)]?.let { expected ->
                 require(changePreview.fingerprint == expected) { "工作区状态已变化，请重新预览后确认：${workspace.operationName()}" }
             }
@@ -164,7 +194,12 @@ class WorkspaceGitOperationService(
         }
 
         return WorkspaceGitBatchResult(preflights.map { preflight ->
-            executeBatchItem(preflight, mode, commitMessages[workspacePathKey(preflight.workspace)].orEmpty())
+            executeBatchItem(
+                preflight,
+                mode,
+                commitMessages[workspacePathKey(preflight.workspace)].orEmpty(),
+                blockedBranches,
+            )
         })
     }
 
@@ -172,11 +207,66 @@ class WorkspaceGitOperationService(
         preflight: WorkspaceGitPreflight,
         mode: WorkspaceGitBatchMode,
         commitMessage: String,
+        blockedBranches: Collection<String>,
     ): WorkspaceGitBatchItemResult = withRepositoryLock(preflight.workspace) {
         val workspace = preflight.workspace
         var commitState = WorkspaceGitStepState.NOT_RUN
         var pushState = WorkspaceGitStepState.NOT_RUN
         val messages = mutableListOf<String>()
+
+        val writePolicyFailure = runCatching {
+            requireWriteAllowed(
+                workspace,
+                blockedBranches,
+                when (mode) {
+                    WorkspaceGitBatchMode.COMMIT -> "提交"
+                    WorkspaceGitBatchMode.PUSH -> "推送"
+                    WorkspaceGitBatchMode.COMMIT_AND_PUSH -> "提交和推送"
+                },
+            )
+        }.exceptionOrNull()
+        if (writePolicyFailure != null) {
+            when (mode) {
+                WorkspaceGitBatchMode.COMMIT,
+                WorkspaceGitBatchMode.COMMIT_AND_PUSH,
+                -> commitState = WorkspaceGitStepState.FAILED
+                WorkspaceGitBatchMode.PUSH -> pushState = WorkspaceGitStepState.FAILED
+            }
+            return@withRepositoryLock WorkspaceGitBatchItemResult(
+                workspacePath = workspacePathKey(workspace),
+                serviceName = workspace.moduleName.ifBlank { workspace.serviceName },
+                branch = workspace.branch,
+                commitState = commitState,
+                pushState = pushState,
+                message = writePolicyFailure.message ?: "Git 写保护检查失败",
+            )
+        }
+
+        if (mode == WorkspaceGitBatchMode.PUSH || mode == WorkspaceGitBatchMode.COMMIT_AND_PUSH && !preflight.hasChanges) {
+            if (mode == WorkspaceGitBatchMode.COMMIT_AND_PUSH) commitState = WorkspaceGitStepState.SKIPPED
+            val currentFingerprint = runCatching { preview(workspace).fingerprint }.getOrElse { error ->
+                pushState = WorkspaceGitStepState.FAILED
+                return@withRepositoryLock WorkspaceGitBatchItemResult(
+                    workspacePath = workspacePathKey(workspace),
+                    serviceName = workspace.moduleName.ifBlank { workspace.serviceName },
+                    branch = workspace.branch,
+                    commitState = commitState,
+                    pushState = pushState,
+                    message = error.message ?: "工作区状态复核失败",
+                )
+            }
+            if (currentFingerprint != preflight.fingerprint) {
+                pushState = WorkspaceGitStepState.FAILED
+                return@withRepositoryLock WorkspaceGitBatchItemResult(
+                    workspacePath = workspacePathKey(workspace),
+                    serviceName = workspace.moduleName.ifBlank { workspace.serviceName },
+                    branch = workspace.branch,
+                    commitState = commitState,
+                    pushState = pushState,
+                    message = "工作区状态已变化，请重新预览后确认：${workspace.operationName()}",
+                )
+            }
+        }
 
         if (mode != WorkspaceGitBatchMode.PUSH) {
             if (!preflight.hasChanges) {
@@ -195,7 +285,7 @@ class WorkspaceGitOperationService(
         val shouldPush = mode == WorkspaceGitBatchMode.PUSH ||
             mode == WorkspaceGitBatchMode.COMMIT_AND_PUSH && commitState != WorkspaceGitStepState.FAILED
         if (shouldPush) {
-            runCatching { pushUnlocked(workspace) }
+            runCatching { pushUnlocked(workspace, blockedBranches) }
                 .onSuccess { pushState = WorkspaceGitStepState.SUCCESS; messages += it.message }
                 .onFailure { error ->
                     pushState = WorkspaceGitStepState.FAILED
@@ -236,6 +326,12 @@ class WorkspaceGitOperationService(
         require(git.run(target, "config", "user.name", check = false).stdout.isNotBlank()) { "Git user.name 未配置" }
         require(git.run(target, "config", "user.email", check = false).stdout.isNotBlank()) { "Git user.email 未配置" }
         return target
+    }
+
+    private fun requireWriteAllowed(workspace: ServiceWorkspace, blockedBranches: Collection<String>, operation: String) {
+        val target = validate(workspace)
+        val actual = requireNotNull(git.currentBranch(target)) { "Detached HEAD 不能执行 Git 操作" }
+        GitWritePolicy(blockedBranches).requireAllowed(actual, operation)
     }
 
     private data class PushPlan(

@@ -99,13 +99,13 @@ import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.snowball.awm.core.AgentConflictResolution
+import com.snowball.awm.core.AddTaskModulesRequest
 import com.snowball.awm.core.BootstrapConfig
 import com.snowball.awm.core.BootstrapPresets
 import com.snowball.awm.core.BranchReuseConflict
 import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
-import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
 import com.snowball.awm.core.RemoteBranchRef
@@ -128,6 +128,10 @@ import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.ModuleBaseOverride
+import com.snowball.awm.core.TaskModuleSelection
+import com.snowball.awm.core.TaskModuleSource
+import com.snowball.awm.core.TaskServiceSelection
+import com.snowball.awm.core.TagBuildMode
 import com.snowball.awm.core.isHttpUrl
 import com.snowball.awm.core.selectionKey
 import com.snowball.awm.desktop.generated.resources.Res
@@ -142,12 +146,24 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.util.UUID
 
+private fun <T> List<T>.replaceAt(index: Int, value: T): List<T> = mapIndexed { current, existing ->
+    if (current == index) value else existing
+}
+
+internal fun duplicateCloneTargets(modules: List<TaskModuleUiDraft>): List<String> = modules
+    .filter { it.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }
+    .map { it.targetBranch.trim() }
+    .filter(String::isNotBlank)
+    .groupBy(String::lowercase)
+    .filterValues { it.size > 1 }
+    .values
+    .map { it.first() }
 
 @Composable
 internal fun CreateTaskDialog(
     controller: DesktopApplication,
     onDismiss: () -> Unit,
-    onCreate: (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>, List<ModuleBaseOverride>) -> Unit,
+    onCreate: (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>, List<TaskServiceSelection>) -> Unit,
 ) {
     val initialGroup = controller.config.groups.first()
     var draft by remember {
@@ -166,10 +182,15 @@ internal fun CreateTaskDialog(
     var branchConflicts by remember { mutableStateOf<List<BranchReuseConflict>?>(null) }
     val baseOverrideValues = remember(groupId) { mutableStateMapOf<String, String>() }
     val targetBranchValues = remember(groupId) { mutableStateMapOf<String, String>() }
+    val moduleDraftsByService = remember(groupId) { mutableStateMapOf<String, List<TaskModuleUiDraft>>() }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
     fun effectiveBaseOverrides(): List<ModuleBaseOverride> = group.services.filter { it.id in selected }.flatMap { service ->
         taskModuleOverrides(service, draft.branch, baseOverrideValues, targetBranchValues)
+    }
+    fun effectiveSelections(): List<TaskServiceSelection> = group.services.filter { it.id in selected }.map { service ->
+        val modules = moduleDraftsByService[service.id] ?: configuredTaskModuleDrafts(service, draft.branch)
+        TaskServiceSelection(service.id, retargetUntouchedModules(modules, draft.branch).map(TaskModuleUiDraft::toSelection))
     }
     val taskNameMissing = draft.taskName.isBlank()
     // An untouched create form is incomplete rather than erroneous. Reserve the
@@ -188,8 +209,7 @@ internal fun CreateTaskDialog(
         selected,
         draft.requirementLink,
         notes,
-        baseOverrideValues.toMap(),
-        targetBranchValues.toMap(),
+        moduleDraftsByService.toMap(),
     ) {
         controller.previewAgents(
             draft.taskName,
@@ -198,13 +218,18 @@ internal fun CreateTaskDialog(
             selected,
             draft.requirementLink,
             notes,
-            effectiveBaseOverrides(),
+            effectiveSelections(),
         )
     }
     LaunchedEffect(draft.requirementLink) {
         val requestedLink = draft.requirementLink
         controller.requestRequirementMetadata(requestedLink) { metadata ->
             draft = draft.applyMetadata(requestedLink, metadata)
+        }
+    }
+    LaunchedEffect(draft.branch) {
+        moduleDraftsByService.keys.toList().forEach { serviceId ->
+            moduleDraftsByService[serviceId] = retargetUntouchedModules(moduleDraftsByService[serviceId].orEmpty(), draft.branch)
         }
     }
     LaunchedEffect(Unit) { controller.requirementController.loadCandidates() }
@@ -367,8 +392,16 @@ internal fun CreateTaskDialog(
                         }
                         visibleServices.forEach { service ->
                             val checked = service.id in selected
+                            fun toggleService() {
+                                if (checked) {
+                                    selected = selected - service.id
+                                } else {
+                                    selected = selected + service.id
+                                    moduleDraftsByService.putIfAbsent(service.id, configuredTaskModuleDrafts(service, draft.branch))
+                                }
+                            }
                             OutlinedCard(
-                                Modifier.fillMaxWidth().clickable { selected = if (checked) selected - service.id else selected + service.id },
+                                Modifier.fillMaxWidth().clickable { toggleService() },
                                 colors = CardDefaults.outlinedCardColors(
                                     containerColor = if (checked) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surface,
                                 ),
@@ -376,60 +409,110 @@ internal fun CreateTaskDialog(
                             ) {
                                 Column(Modifier.padding(11.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Checkbox(checked, { selected = if (checked) selected - service.id else selected + service.id })
+                                        Checkbox(checked, { toggleService() })
                                         Column(Modifier.weight(1f)) {
                                             Text(service.displayName, style = MaterialTheme.typography.titleSmall)
                                             Text(
-                                                when (service.strategy) {
-                                                    WorkspaceStrategy.STANDARD_WORKTREE -> if (service.modules.size > 1) "${service.modules.size} 个模块 · ${service.strategy.displayName}" else service.strategy.displayName
-                                                    WorkspaceStrategy.INDEPENDENT_CLONE -> "${service.cloneModules.size} 个固定分支模块 · ${service.strategy.displayName}"
-                                                },
+                                                "${service.modules.count { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }} 个 Worktree · ${service.modules.count { it.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }} 个克隆",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
                                         }
                                     }
                                     if (checked) {
-                                        val serviceModules = if (service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
-                                            service.cloneModules.map { module ->
-                                                TaskModuleBranchOption(
-                                                    id = module.id,
-                                                    name = module.name.ifBlank { module.id },
-                                                    defaultRef = module.branch,
-                                                    remote = runCatching { RemoteBranchRef.parse(module.branch).remote }.getOrDefault("origin"),
+                                        val serviceModules = moduleDraftsByService[service.id] ?: configuredTaskModuleDrafts(service, draft.branch)
+                                        serviceModules.forEachIndexed { index, module ->
+                                            OutlinedCard(Modifier.fillMaxWidth().padding(start = 42.dp, top = 7.dp)) {
+                                                Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                                        OutlinedTextField(
+                                                            module.name,
+                                                            { value ->
+                                                                val changed = serviceModules.replaceAt(index, module.copy(name = value))
+                                                                moduleDraftsByService[service.id] = retargetUntouchedModules(changed, draft.branch)
+                                                            },
+                                                            Modifier.weight(1f),
+                                                            label = { Text("模块名") },
+                                                            singleLine = true,
+                                                        )
+                                                        WorkspaceStrategy.entries.forEach { strategy ->
+                                                            FilterChip(
+                                                                selected = module.strategy == strategy,
+                                                                onClick = {
+                                                                    moduleDraftsByService[service.id] = serviceModules.replaceAt(
+                                                                        index,
+                                                                        module.copy(
+                                                                            strategy = strategy,
+                                                                            baseRef = normalizeBaseRefForStrategy(strategy, module.baseRef),
+                                                                            baseRemote = module.baseRemote,
+                                                                        ),
+                                                                    )
+                                                                },
+                                                                label = { Text(strategy.displayName) },
+                                                            )
+                                                        }
+                                                        ActionIconButton("删除模块", {
+                                                            val changed = serviceModules.filterIndexed { itemIndex, _ -> itemIndex != index }
+                                                            if (changed.isNotEmpty()) moduleDraftsByService[service.id] = retargetUntouchedModules(changed, draft.branch)
+                                                        }, enabled = serviceModules.size > 1) { Icon(Icons.Outlined.Delete, null) }
+                                                    }
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    RemoteNamePicker(
+                                                        value = module.baseRemote,
+                                                        repositoryId = service.repositoryId,
+                                                        controller = controller,
+                                                        onSelected = { remote ->
+                                                            val branch = module.baseRef.substringAfter('/', module.baseRef)
+                                                            moduleDraftsByService[service.id] = serviceModules.replaceAt(index, module.copy(baseRemote = remote, baseRef = "$remote/$branch"))
+                                                        },
+                                                        modifier = Modifier.width(180.dp),
+                                                    )
+                                                    RemoteBranchPicker(
+                                                        value = module.baseRef,
+                                                        onValueChange = { value -> moduleDraftsByService[service.id] = serviceModules.replaceAt(index, module.copy(baseRef = value)) },
+                                                        label = "${module.name} · 本次基础分支",
+                                                        repositoryId = service.repositoryId,
+                                                        controller = controller,
+                                                        modifier = Modifier.weight(1f),
+                                                        remote = module.baseRemote,
+                                                    )
+                                                }
+                                                TaskTargetBranchField(
+                                                    value = module.targetBranch,
+                                                    onValueChange = { value ->
+                                                        moduleDraftsByService[service.id] = serviceModules.replaceAt(index, module.copy(targetBranch = value, targetEdited = true))
+                                                    },
+                                                    label = if (module.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "目标分支（必填）" else "目标分支（可空，空则直接检出基础分支）",
+                                                    modifier = Modifier.fillMaxWidth(),
                                                 )
                                             }
-                                        } else service.modules.map { module ->
-                                            TaskModuleBranchOption(
-                                                id = module.id,
-                                                name = module.name.ifBlank { module.id },
-                                                defaultRef = module.baseRef,
-                                                remote = module.baseRemote,
+                                            }
+                                        }
+                                        duplicateCloneTargets(serviceModules).takeIf { it.isNotEmpty() }?.let { duplicates ->
+                                            Text(
+                                                "共享远程分支风险：多个克隆模块使用相同目标分支 ${duplicates.joinToString()}；请勿并行推送不兼容提交。",
+                                                Modifier.padding(start = 42.dp, top = 7.dp),
+                                                color = WarningAmber,
+                                                style = MaterialTheme.typography.bodySmall,
                                             )
                                         }
-                                        serviceModules.forEach { module ->
-                                            val key = "${service.id}::${module.id}"
-                                            RemoteBranchPicker(
-                                                value = baseOverrideValues[key] ?: module.defaultRef,
-                                                onValueChange = { baseOverrideValues[key] = it },
-                                                label = "${module.name} · 本次基础分支",
-                                                repositoryId = service.repositoryId,
-                                                controller = controller,
-                                                modifier = Modifier.fillMaxWidth().padding(start = 42.dp, top = 6.dp),
-                                                remote = module.remote,
-                                            )
-                                            if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
-                                                val defaultTarget = defaultTaskModuleTargetBranch(draft.branch, service, module.id)
-                                                TaskTargetBranchField(
-                                                    value = targetBranchValues[key] ?: defaultTarget,
-                                                    onValueChange = { value ->
-                                                        if (value == defaultTarget) targetBranchValues.remove(key)
-                                                        else targetBranchValues[key] = value
-                                                    },
-                                                    label = "${module.name} · 本次目标分支",
-                                                    modifier = Modifier.fillMaxWidth().padding(start = 42.dp, top = 6.dp),
+                                        FlowRow(Modifier.padding(start = 42.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(onClick = {
+                                                val added = serviceModules + TaskModuleUiDraft(
+                                                    id = "module-${UUID.randomUUID()}", name = "module-${serviceModules.size + 1}",
+                                                    strategy = WorkspaceStrategy.STANDARD_WORKTREE, baseRef = "origin/master", baseRemote = "origin",
+                                                    targetBranch = "", source = TaskModuleSource.TEMPORARY,
                                                 )
-                                            }
+                                                moduleDraftsByService[service.id] = retargetUntouchedModules(added, draft.branch)
+                                            }) { Text("添加 Worktree") }
+                                            OutlinedButton(onClick = {
+                                                val added = serviceModules + TaskModuleUiDraft(
+                                                    id = "clone-${UUID.randomUUID()}", name = "clone-${serviceModules.size + 1}",
+                                                    strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", baseRemote = "origin",
+                                                    targetBranch = "", source = TaskModuleSource.TEMPORARY,
+                                                )
+                                                moduleDraftsByService[service.id] = retargetUntouchedModules(added, draft.branch)
+                                            }) { Text("添加克隆") }
                                         }
                                     }
                                 }
@@ -503,7 +586,7 @@ internal fun CreateTaskDialog(
                                     serviceIds = selected.toList(),
                                     link = draft.requirementLink,
                                     notes = notes,
-                                    baseOverrides = effectiveBaseOverrides(),
+                                    serviceSelections = effectiveSelections(),
                                     onResolved = { conflicts ->
                                         if (conflicts.isEmpty()) {
                                             onCreate(
@@ -515,7 +598,7 @@ internal fun CreateTaskDialog(
                                                 notes,
                                                 availableTools,
                                                 emptySet(),
-                                                effectiveBaseOverrides(),
+                                                effectiveSelections(),
                                             )
                                         } else {
                                             branchConflicts = conflicts
@@ -557,7 +640,7 @@ internal fun CreateTaskDialog(
                     notes,
                     availableTools,
                     keys,
-                    effectiveBaseOverrides(),
+                    effectiveSelections(),
                 )
             },
         )
@@ -586,7 +669,60 @@ private data class TaskModuleBranchOption(
     val name: String,
     val defaultRef: String,
     val remote: String,
+    val strategy: WorkspaceStrategy,
 )
+
+internal data class TaskModuleUiDraft(
+    val id: String,
+    val name: String,
+    val strategy: WorkspaceStrategy,
+    val baseRef: String,
+    val baseRemote: String,
+    val targetBranch: String,
+    val targetEdited: Boolean = false,
+    val source: TaskModuleSource = TaskModuleSource.CONFIGURED,
+    val tagEnabled: Boolean = false,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    val tagTargetRef: String? = "origin/release/test",
+    val tagMessagePrefix: String = "Tag",
+) {
+    fun toSelection(): TaskModuleSelection = TaskModuleSelection(
+        id = id,
+        name = name,
+        strategy = strategy,
+        baseRef = normalizeBaseRefForStrategy(strategy, baseRef),
+        baseRemote = baseRemote,
+        targetBranch = targetBranch.trim().takeIf(String::isNotBlank),
+        source = source,
+        tagEnabled = tagEnabled,
+        tagMode = tagMode,
+        tagTargetRef = tagTargetRef,
+        tagMessagePrefix = tagMessagePrefix,
+    )
+}
+
+private fun configuredTaskModuleDrafts(service: GroupServiceConfig, taskBranch: String): List<TaskModuleUiDraft> =
+    service.modules.map { module ->
+        TaskModuleUiDraft(
+            id = module.id,
+            name = module.name,
+            strategy = module.strategy,
+            baseRef = module.baseRef,
+            baseRemote = module.baseRemote,
+            targetBranch = defaultTaskModuleTargetBranch(taskBranch, service, module.id),
+            tagEnabled = module.tagEnabled,
+            tagMode = module.tagMode,
+            tagTargetRef = module.tagTargetRef,
+            tagMessagePrefix = module.tagMessagePrefix,
+        )
+    }
+
+private fun retargetUntouchedModules(modules: List<TaskModuleUiDraft>, taskBranch: String): List<TaskModuleUiDraft> =
+    modules.map { module ->
+        if (module.targetEdited) module else module.copy(
+            targetBranch = if (modules.size == 1) taskBranch else "$taskBranch-${module.name.trim().ifBlank { module.id }}",
+        )
+    }
 
 internal fun defaultTaskModuleTargetBranch(
     taskBranch: String,
@@ -610,27 +746,15 @@ internal fun taskModuleOverrides(
     targetOverrides: Map<String, String>,
 ): List<ModuleBaseOverride> {
     val keyPrefix = "${service.id}::"
-    return when (service.strategy) {
-        WorkspaceStrategy.STANDARD_WORKTREE -> {
-            val targetDefaults = taskModuleTargetBranchDefaults(taskBranch, service)
-            service.modules.map { module ->
-                val key = "$keyPrefix${module.id}"
-                ModuleBaseOverride(
-                    serviceId = service.id,
-                    moduleId = module.id,
-                    baseRef = baseOverrides[key] ?: module.baseRef,
-                    targetBranch = targetOverrides[key] ?: targetDefaults.getValue(module.id),
-                )
-            }
-        }
-        WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.map { module ->
+    val targetDefaults = taskModuleTargetBranchDefaults(taskBranch, service)
+    return service.modules.map { module ->
             val key = "$keyPrefix${module.id}"
             ModuleBaseOverride(
                 serviceId = service.id,
                 moduleId = module.id,
-                baseRef = baseOverrides[key] ?: module.branch,
+                baseRef = baseOverrides[key] ?: module.baseRef,
+                targetBranch = (targetOverrides[key] ?: targetDefaults.getValue(module.id)).takeIf(String::isNotBlank),
             )
-        }
     }
 }
 
@@ -757,16 +881,18 @@ internal fun AddTaskServicesDialog(
     controller: DesktopApplication,
     task: TaskManifest,
     onDismiss: () -> Unit,
-    onAdd: (List<String>, Set<BranchReuseKey>, List<ModuleBaseOverride>) -> Unit,
+    onAdd: (List<String>, Set<BranchReuseKey>, List<TaskServiceSelection>) -> Unit,
 ) {
     val services = controller.addableServices(task)
     var selected by remember(task.folderName) { mutableStateOf<Set<String>>(emptySet()) }
     var checkingBranchReuse by remember(task.folderName) { mutableStateOf(false) }
     var branchConflicts by remember(task.folderName) { mutableStateOf<List<BranchReuseConflict>?>(null) }
-    val baseOverrideValues = remember(task.folderName) { mutableStateMapOf<String, String>() }
-    val targetBranchValues = remember(task.folderName) { mutableStateMapOf<String, String>() }
-    fun effectiveBaseOverrides(): List<ModuleBaseOverride> = services.filter { it.id in selected }.flatMap { service ->
-        taskModuleOverrides(service, task.featureBranch, baseOverrideValues, targetBranchValues)
+    val moduleDraftsByService = remember(task.folderName) { mutableStateMapOf<String, List<TaskModuleUiDraft>>() }
+    fun effectiveSelections(): List<TaskServiceSelection> = services.filter { it.id in selected }.map { service ->
+        TaskServiceSelection(
+            service.id,
+            (moduleDraftsByService[service.id] ?: configuredTaskModuleDrafts(service, task.featureBranch)).map(TaskModuleUiDraft::toSelection),
+        )
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -776,59 +902,103 @@ internal fun AddTaskServicesDialog(
                 Text("新增服务沿用任务分支：${task.featureBranch}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 services.forEach { service ->
                     val checked = service.id in selected
+                    fun toggleService() {
+                        if (checked) selected = selected - service.id else {
+                            selected = selected + service.id
+                            moduleDraftsByService.putIfAbsent(service.id, configuredTaskModuleDrafts(service, task.featureBranch))
+                        }
+                    }
                     OutlinedCard(
-                        Modifier.fillMaxWidth().clickable { selected = if (checked) selected - service.id else selected + service.id },
+                        Modifier.fillMaxWidth().clickable { toggleService() },
                         colors = CardDefaults.outlinedCardColors(containerColor = if (checked) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface),
                     ) {
                         Column(Modifier.fillMaxWidth().padding(11.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked, { selected = if (checked) selected - service.id else selected + service.id })
+                                Checkbox(checked, { toggleService() })
                                 Column(Modifier.weight(1f)) {
                                     Text(service.displayName, fontWeight = FontWeight.SemiBold)
-                                    Text(service.strategy.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("${service.modules.size} 个模块", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                             if (checked) {
-                                val moduleRefs = if (service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
-                                    service.cloneModules.map { module ->
-                                        TaskModuleBranchOption(
-                                            id = module.id,
-                                            name = module.name.ifBlank { module.id },
-                                            defaultRef = module.branch,
-                                            remote = runCatching { RemoteBranchRef.parse(module.branch).remote }.getOrDefault("origin"),
+                                val moduleRefs = moduleDraftsByService[service.id] ?: configuredTaskModuleDrafts(service, task.featureBranch)
+                                moduleRefs.forEachIndexed { index, module ->
+                                    OutlinedCard(Modifier.fillMaxWidth().padding(start = 42.dp, top = 6.dp)) {
+                                        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                OutlinedTextField(module.name, { value ->
+                                                    moduleDraftsByService[service.id] = retargetUntouchedModules(moduleRefs.replaceAt(index, module.copy(name = value)), task.featureBranch)
+                                                }, Modifier.weight(1f), label = { Text("模块名") }, singleLine = true)
+                                                WorkspaceStrategy.entries.forEach { strategy ->
+                                                    FilterChip(module.strategy == strategy, {
+                                                        moduleDraftsByService[service.id] = moduleRefs.replaceAt(
+                                                            index,
+                                                            module.copy(
+                                                                strategy = strategy,
+                                                                baseRef = normalizeBaseRefForStrategy(strategy, module.baseRef),
+                                                                baseRemote = module.baseRemote,
+                                                            ),
+                                                        )
+                                                    }, label = { Text(strategy.displayName) })
+                                                }
+                                                ActionIconButton("删除模块", {
+                                                    val changed = moduleRefs.filterIndexed { itemIndex, _ -> itemIndex != index }
+                                                    if (changed.isNotEmpty()) moduleDraftsByService[service.id] = retargetUntouchedModules(changed, task.featureBranch)
+                                                }, enabled = moduleRefs.size > 1) { Icon(Icons.Outlined.Delete, null) }
+                                            }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            RemoteNamePicker(
+                                                value = module.baseRemote,
+                                                repositoryId = service.repositoryId,
+                                                controller = controller,
+                                                onSelected = { remote ->
+                                                    val branch = module.baseRef.substringAfter('/', module.baseRef)
+                                                    moduleDraftsByService[service.id] = moduleRefs.replaceAt(index, module.copy(baseRemote = remote, baseRef = "$remote/$branch"))
+                                                },
+                                                modifier = Modifier.width(180.dp),
+                                            )
+                                            RemoteBranchPicker(
+                                                value = module.baseRef,
+                                                onValueChange = { value -> moduleDraftsByService[service.id] = moduleRefs.replaceAt(index, module.copy(baseRef = value)) },
+                                                label = "${module.name} · 本次基础分支",
+                                                repositoryId = service.repositoryId,
+                                                controller = controller,
+                                                modifier = Modifier.weight(1f),
+                                                remote = module.baseRemote,
+                                            )
+                                        }
+                                        TaskTargetBranchField(
+                                            value = module.targetBranch,
+                                            onValueChange = { value ->
+                                                moduleDraftsByService[service.id] = moduleRefs.replaceAt(index, module.copy(targetBranch = value, targetEdited = true))
+                                            },
+                                            label = if (module.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "目标分支（必填）" else "目标分支（可空）",
+                                            modifier = Modifier.fillMaxWidth(),
                                         )
                                     }
-                                } else service.modules.map { module ->
-                                    TaskModuleBranchOption(
-                                        id = module.id,
-                                        name = module.name.ifBlank { module.id },
-                                        defaultRef = module.baseRef,
-                                        remote = module.baseRemote,
+                                    }
+                                }
+                                duplicateCloneTargets(moduleRefs).takeIf { it.isNotEmpty() }?.let { duplicates ->
+                                    Text(
+                                        "共享远程分支风险：多个克隆模块使用相同目标分支 ${duplicates.joinToString()}；请勿并行推送不兼容提交。",
+                                        Modifier.padding(start = 42.dp, top = 7.dp),
+                                        color = WarningAmber,
+                                        style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
-                                moduleRefs.forEach { module ->
-                                    val key = "${service.id}::${module.id}"
-                                    RemoteBranchPicker(
-                                        value = baseOverrideValues[key] ?: module.defaultRef,
-                                        onValueChange = { baseOverrideValues[key] = it },
-                                        label = "${module.name} · 本次基础分支",
-                                        repositoryId = service.repositoryId,
-                                        controller = controller,
-                                        modifier = Modifier.fillMaxWidth().padding(start = 42.dp, top = 6.dp),
-                                        remote = module.remote,
-                                    )
-                                    if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
-                                        val defaultTarget = defaultTaskModuleTargetBranch(task.featureBranch, service, module.id)
-                                        TaskTargetBranchField(
-                                            value = targetBranchValues[key] ?: defaultTarget,
-                                            onValueChange = { value ->
-                                                if (value == defaultTarget) targetBranchValues.remove(key)
-                                                else targetBranchValues[key] = value
-                                            },
-                                            label = "${module.name} · 本次目标分支",
-                                            modifier = Modifier.fillMaxWidth().padding(start = 42.dp, top = 6.dp),
-                                        )
-                                    }
+                                FlowRow(Modifier.padding(start = 42.dp, top = 7.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = {
+                                        moduleDraftsByService[service.id] = retargetUntouchedModules(moduleRefs + TaskModuleUiDraft(
+                                            id = "module-${UUID.randomUUID()}", name = "module-${moduleRefs.size + 1}", strategy = WorkspaceStrategy.STANDARD_WORKTREE,
+                                            baseRef = "origin/master", baseRemote = "origin", targetBranch = "", source = TaskModuleSource.TEMPORARY,
+                                        ), task.featureBranch)
+                                    }) { Text("添加 Worktree") }
+                                    OutlinedButton(onClick = {
+                                        moduleDraftsByService[service.id] = retargetUntouchedModules(moduleRefs + TaskModuleUiDraft(
+                                            id = "clone-${UUID.randomUUID()}", name = "clone-${moduleRefs.size + 1}", strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                                            baseRef = "origin/master", baseRemote = "origin", targetBranch = "", source = TaskModuleSource.TEMPORARY,
+                                        ), task.featureBranch)
+                                    }) { Text("添加克隆") }
                                 }
                             }
                         }
@@ -842,10 +1012,10 @@ internal fun AddTaskServicesDialog(
                     checkingBranchReuse = controller.taskController.inspectAddServicesBranchReuse(
                         task = task,
                         serviceIds = selected.toList(),
-                        baseOverrides = effectiveBaseOverrides(),
+                        serviceSelections = effectiveSelections(),
                         onResolved = { conflicts ->
                             if (conflicts.isEmpty()) {
-                                onAdd(selected.toList(), emptySet(), effectiveBaseOverrides())
+                                onAdd(selected.toList(), emptySet(), effectiveSelections())
                             } else {
                                 branchConflicts = conflicts
                             }
@@ -864,8 +1034,140 @@ internal fun AddTaskServicesDialog(
             onDismiss = { branchConflicts = null },
             onConfirm = { keys ->
                 branchConflicts = null
-                onAdd(selected.toList(), keys, effectiveBaseOverrides())
+                onAdd(selected.toList(), keys, effectiveSelections())
             },
         )
+    }
+}
+
+@Composable
+internal fun AddTaskModuleDialog(
+    controller: DesktopApplication,
+    task: TaskManifest,
+    service: GroupServiceConfig,
+    onDismiss: () -> Unit,
+) {
+    val existingIds = task.services.filter { it.groupServiceId == service.id }.map { it.moduleId.lowercase() }.toSet()
+    val availableConfigured = service.modules.filter { it.id.lowercase() !in existingIds }
+    fun addedTarget(moduleName: String) = "${task.featureBranch}-${moduleName.trim()}"
+    fun configuredDraft(configured: ServiceModuleConfig) =
+        configuredTaskModuleDrafts(service.copy(modules = listOf(configured)), task.featureBranch)
+            .single()
+            .copy(targetBranch = addedTarget(configured.name))
+    var module by remember(service.id) {
+        mutableStateOf(
+            availableConfigured.firstOrNull()?.let(::configuredDraft)
+                ?: TaskModuleUiDraft(
+                    id = "module-${UUID.randomUUID()}", name = "module", strategy = WorkspaceStrategy.STANDARD_WORKTREE,
+                    baseRef = "origin/master", baseRemote = "origin", targetBranch = addedTarget("module"),
+                    source = TaskModuleSource.TEMPORARY,
+                ),
+        )
+    }
+    var checking by remember { mutableStateOf(false) }
+    var conflicts by remember { mutableStateOf<List<BranchReuseConflict>?>(null) }
+    fun request(keys: Set<BranchReuseKey> = emptySet()) = AddTaskModulesRequest(service.id, listOf(module.toSelection()), keys)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("为 ${service.displayName} 添加模块") },
+        text = {
+            Column(Modifier.widthIn(min = 620.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (availableConfigured.isNotEmpty()) {
+                    Text("服务配置中尚未使用的模块", style = MaterialTheme.typography.titleSmall)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        availableConfigured.forEach { configured ->
+                            FilterChip(
+                                selected = module.source == TaskModuleSource.CONFIGURED && module.id == configured.id,
+                                onClick = { module = configuredDraft(configured) },
+                                label = { Text(configured.name) },
+                            )
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        module = TaskModuleUiDraft(
+                            id = "module-${UUID.randomUUID()}", name = "module", strategy = WorkspaceStrategy.STANDARD_WORKTREE,
+                            baseRef = "origin/master", baseRemote = "origin", targetBranch = addedTarget("module"),
+                            source = TaskModuleSource.TEMPORARY,
+                        )
+                    }) { Text("临时 Worktree") }
+                    OutlinedButton(onClick = {
+                        module = TaskModuleUiDraft(
+                            id = "clone-${UUID.randomUUID()}", name = "clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                            baseRef = "origin/master", baseRemote = "origin", targetBranch = addedTarget("clone"),
+                            source = TaskModuleSource.TEMPORARY,
+                        )
+                    }) { Text("临时克隆") }
+                }
+                OutlinedTextField(module.name, { value ->
+                    module = module.copy(
+                        name = value,
+                        targetBranch = if (module.targetEdited) module.targetBranch else addedTarget(value),
+                    )
+                }, Modifier.fillMaxWidth(), label = { Text("模块名") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WorkspaceStrategy.entries.forEach { strategy ->
+                        FilterChip(module.strategy == strategy, {
+                            module = module.copy(
+                                strategy = strategy,
+                                baseRef = normalizeBaseRefForStrategy(strategy, module.baseRef),
+                                baseRemote = module.baseRemote,
+                            )
+                        }, label = { Text(strategy.displayName) })
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RemoteNamePicker(
+                        value = module.baseRemote,
+                        repositoryId = service.repositoryId,
+                        controller = controller,
+                        onSelected = { remote ->
+                            val branch = module.baseRef.substringAfter('/', module.baseRef)
+                            module = module.copy(baseRemote = remote, baseRef = "$remote/$branch")
+                        },
+                        modifier = Modifier.width(180.dp),
+                    )
+                    RemoteBranchPicker(module.baseRef, { module = module.copy(baseRef = it) }, "基础分支", service.repositoryId, controller, Modifier.weight(1f), remote = module.baseRemote)
+                }
+                TaskTargetBranchField(
+                    module.targetBranch,
+                    { module = module.copy(targetBranch = it, targetEdited = true) },
+                    if (module.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "目标分支（必填）" else "目标分支（可空）",
+                    Modifier.fillMaxWidth(),
+                )
+                if (
+                    module.strategy == WorkspaceStrategy.INDEPENDENT_CLONE &&
+                    module.targetBranch.isNotBlank() &&
+                    task.services.any { existing ->
+                        existing.strategy == WorkspaceStrategy.INDEPENDENT_CLONE &&
+                            existing.targetBranch?.equals(module.targetBranch, ignoreCase = true) == true
+                    }
+                ) {
+                    Text(
+                        "共享远程分支风险：任务中已有克隆模块使用该目标分支；请勿并行推送不兼容提交。",
+                        color = WarningAmber,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (module.source == TaskModuleSource.TEMPORARY) Text("临时模块默认关闭 Tag；添加后行为会写入任务快照。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                checking = controller.taskController.inspectAddModulesBranchReuse(task, request(), { found ->
+                    if (found.isEmpty()) controller.taskController.addModules(task, request()) { onDismiss() } else conflicts = found
+                }, { checking = false })
+            }, enabled = !checking && module.name.isNotBlank() && module.baseRef.isNotBlank() && (module.strategy != WorkspaceStrategy.STANDARD_WORKTREE || module.targetBranch.isNotBlank())) {
+                Text("检查并添加")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+    conflicts?.let { found ->
+        BranchReuseConfirmationDialog(found, { conflicts = null }) { keys ->
+            conflicts = null
+            controller.taskController.addModules(task, request(keys)) { onDismiss() }
+        }
     }
 }

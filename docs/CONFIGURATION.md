@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.7.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.8.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.7.0 的 `config.json` 使用严格字符串 schema `"0.7.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.8.0 的 `config.json` 使用严格字符串 schema `"0.8.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.7.0",
+  "schemaVersion": "0.8.0",
   "taskRoot": "Q:\\tasks",
   "developmentTools": [
     { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
@@ -26,6 +26,7 @@ agents/groups/<groupId>/AGENTS.md
   "defaultDevelopmentTool": "INTELLIJ_IDEA",
   "allowTemporaryDevelopmentToolSelection": false,
   "hiddenTaskDetailBranches": ["master", "develop"],
+  "blockedGitWriteBranches": ["master", "main"],
   "terminalExecutable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
   "repositories": [
     {
@@ -53,20 +54,30 @@ agents/groups/<groupId>/AGENTS.md
           "enabled": true,
           "developmentTool": "INTELLIJ_IDEA",
           "commitMessageTemplate": "feat: {num} 完成开发",
-          "strategy": "STANDARD_WORKTREE",
           "modules": [
             {
               "id": "default",
               "name": "default",
+              "strategy": "STANDARD_WORKTREE",
               "baseRef": "origin/master",
               "baseRemote": "origin",
               "tagEnabled": true,
               "tagMode": "MERGE_TO_TARGET_BRANCH",
               "tagTargetRef": "origin/release/test",
               "tagMessagePrefix": "Tag"
+            },
+            {
+              "id": "reporting",
+              "name": "reporting",
+              "strategy": "INDEPENDENT_CLONE",
+              "baseRef": "origin/develop",
+              "baseRemote": "origin",
+              "tagEnabled": false,
+              "tagMode": "CURRENT_BRANCH",
+              "tagTargetRef": null,
+              "tagMessagePrefix": "Tag"
             }
           ],
-          "cloneModules": [],
           "bootstrap": {
             "copyRules": [],
             "commands": []
@@ -79,14 +90,16 @@ agents/groups/<groupId>/AGENTS.md
 }
 ```
 
-独立克隆服务将 `modules` 设为空，并配置一个或多个固定克隆模块：
+工作区策略属于模块而不是服务。同一服务的 `modules` 可以同时包含 Worktree 与独立克隆模块：
 
 ```json
-"cloneModules": [
+"modules": [
   {
     "id": "feign-master",
     "name": "主线客户端",
-    "branch": "origin/master",
+    "strategy": "STANDARD_WORKTREE",
+    "baseRef": "origin/master",
+    "baseRemote": "origin",
     "tagEnabled": true,
     "tagMode": "MERGE_TO_TARGET_BRANCH",
     "tagTargetRef": "origin/release/test",
@@ -95,7 +108,9 @@ agents/groups/<groupId>/AGENTS.md
   {
     "id": "feign-development",
     "name": "开发客户端",
-    "branch": "origin/development",
+    "strategy": "INDEPENDENT_CLONE",
+    "baseRef": "origin/development",
+    "baseRemote": "origin",
     "tagEnabled": false,
     "tagMode": "CURRENT_BRANCH",
     "tagTargetRef": null,
@@ -104,7 +119,7 @@ agents/groups/<groupId>/AGENTS.md
 ]
 ```
 
-每个独立克隆模块都会在任务目录下获得独立的物理克隆目录；同一服务内模块 ID 和固定分支均不可重复。
+每个模块都会使用稳定的 `服务名-模块名` 目录。模块 ID、名称和目录名忽略大小写不得重复；独立克隆模块可以选择原仓库的任意远程作为来源，基础 Ref 使用 `<来源 remote>/<branch>` 格式。新建 clone 会将所选来源 URL 命名为自身的 `origin`，因此后续 Push、恢复和 Git 操作仍统一使用 `origin`。
 
 未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。旧 TaskWT 用户目录与任务文件不会被读取、迁移或删除。
 
@@ -149,7 +164,7 @@ agents/groups/<groupId>/AGENTS.md
 
 ### 独立克隆
 
-独立克隆服务必须保存默认远程分支，创建任务时可以覆盖。它从 `origin` 完整克隆并直接切到该分支，不创建额外 Feature 分支或 Linked Worktree；创建与恢复后执行 Bootstrap。归档和删除仍会进行 Git 安全检查。
+独立克隆服务必须保存默认来源远程和基础分支，创建任务时可以覆盖。它从所选来源远程的 URL 完整克隆，并在新目录中将该来源命名为 `origin`；随后直接切到该分支，不创建额外 Feature 分支或 Linked Worktree。创建与恢复后执行 Bootstrap，归档和删除仍会进行 Git 安全检查。
 
 ## Tag 开关与模式
 
@@ -185,19 +200,25 @@ agents/groups/<groupId>/AGENTS.md
 
 ## Bootstrap
 
-Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对路径，禁止绝对路径、`..`、`.git` 和符号链接穿越。命令按声明顺序运行，单步失败会记录警告并继续后续步骤，最终工作区标记为 `READY_WITH_WARNINGS`。
+Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立克隆模块执行。复制规则必须使用明确的相对路径，禁止绝对路径、`..`、`.git` 和符号链接穿越。命令按声明顺序运行，单步失败会记录警告并继续后续步骤，最终工作区标记为 `READY_WITH_WARNINGS`。
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema `"0.7.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.7.x 不读取或迁移 0.6.x 的配置和任务清单。
+`agent-workspace.json` 使用严格字符串 schema `"0.8.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.8.x 不读取或迁移 0.7.x 的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "0.7.0",
+  "schemaVersion": "0.8.0",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {
       "serviceName": "order-service",
+      "moduleId": "default",
+      "moduleName": "default",
+      "strategy": "STANDARD_WORKTREE",
+      "moduleSource": "CONFIGURED",
+      "baseRef": "origin/master",
+      "targetBranch": "feature/123-default",
       "health": "READY",
       "branchCreatedByTask": false,
       "forceWorktreeAttach": true
@@ -215,6 +236,8 @@ Bootstrap 仅适用于标准 Worktree。复制规则必须使用明确的相对�
 ```
 
 `lifecycleStatus` 只表示任务属于活跃还是已归档；每个服务的 `health` 只表示工作区是否可用。任务整体健康度由服务动态聚合，不会作为第三个状态字段写入 JSON。`branchCreatedByTask` 标记本次任务是否创建了本地分支，失败回滚只会删除该类分支；`forceWorktreeAttach` 标记恢复时是否需要以 `git worktree add --force` 再次附加已被其他 Worktree 检出的分支。
+
+`blockedGitWriteBranches` 按完整本地分支名忽略大小写匹配，默认保护 `master`、`main`，不支持通配符。受保护分支仍可作为基础分支被检出，但 AWM 会在任何写入前阻止 Commit、Push、Commit & Push，以及需要写入该分支的 Tag 流程。
 
 未注册的工具 ID 会原样保留在配置中并在界面显示为“当前不可用”。Core 只认识通用工具 ID 和执行结果，不依赖 Codex、Claude、Cursor 的 URI 或命令。
 

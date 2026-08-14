@@ -295,6 +295,10 @@ class GitClient(
         run(repository, *args.toTypedArray(), timeout = Duration.ofMinutes(5))
     }
 
+    fun moveWorktree(repository: Path, source: Path, target: Path) {
+        run(repository, "worktree", "move", source.toString(), target.toString(), timeout = Duration.ofMinutes(5))
+    }
+
     fun status(repository: Path): RepositoryStatus {
         val lines = run(repository, "status", "--porcelain=v1", "--untracked-files=all").stdout.lines()
         val staged = lines.any { it.length >= 2 && it[0] != ' ' && it[0] != '?' }
@@ -344,6 +348,8 @@ class GitClient(
             gitDirectory.resolve("rebase-apply").toFile().exists() -> "rebase"
             gitDirectory.resolve("CHERRY_PICK_HEAD").toFile().exists() -> "cherry-pick"
             gitDirectory.resolve("REVERT_HEAD").toFile().exists() -> "revert"
+            gitDirectory.resolve("BISECT_LOG").toFile().exists() -> "bisect"
+            gitDirectory.resolve("BISECT_START").toFile().exists() -> "bisect"
             else -> null
         }
     }

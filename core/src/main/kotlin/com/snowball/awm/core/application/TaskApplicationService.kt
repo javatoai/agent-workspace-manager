@@ -10,18 +10,77 @@ data class CreateGroupedTaskRequest(
     val folderName: String,
     val featureBranch: String,
     val groupId: String,
-    val serviceIds: List<String>,
+    val serviceIds: List<String> = emptyList(),
     val requirementLink: String = "",
     val taskNotes: String = "",
     val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
     val baseOverrides: List<ModuleBaseOverride> = emptyList(),
+    val serviceSelections: List<TaskServiceSelection> = emptyList(),
 )
 
 data class AddGroupedTaskServicesRequest(
-    val serviceIds: List<String>,
+    val serviceIds: List<String> = emptyList(),
     val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
     val baseOverrides: List<ModuleBaseOverride> = emptyList(),
+    val serviceSelections: List<TaskServiceSelection> = emptyList(),
 )
+
+data class AddTaskModulesRequest(
+    val serviceId: String,
+    val modules: List<TaskModuleSelection>,
+    val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
+)
+
+data class TaskServiceSelection(
+    val serviceId: String,
+    val modules: List<TaskModuleSelection>,
+) {
+    init {
+        require(serviceId.isNotBlank()) { "服务 ID 不能为空" }
+        require(modules.isNotEmpty()) { "服务至少需要一个任务模块" }
+    }
+}
+
+data class TaskModuleSelection(
+    val id: String,
+    val name: String,
+    val strategy: WorkspaceStrategy,
+    val baseRef: String,
+    val baseRemote: String = "origin",
+    val targetBranch: String? = null,
+    val source: TaskModuleSource = TaskModuleSource.CONFIGURED,
+    val tagEnabled: Boolean = false,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    val tagTargetRef: String? = "origin/release/test",
+    val tagMessagePrefix: String = "Tag",
+) {
+    fun toConfig(): ServiceModuleConfig = ServiceModuleConfig(
+        id = id,
+        name = name,
+        strategy = strategy,
+        baseRef = baseRef,
+        baseRemote = baseRemote,
+        tagEnabled = tagEnabled && source == TaskModuleSource.CONFIGURED,
+        tagMode = tagMode,
+        tagTargetRef = tagTargetRef,
+        tagMessagePrefix = tagMessagePrefix,
+    )
+
+    companion object {
+        fun configured(module: ServiceModuleConfig, targetBranch: String?): TaskModuleSelection = TaskModuleSelection(
+            id = module.id,
+            name = module.name,
+            strategy = module.strategy,
+            baseRef = module.baseRef,
+            baseRemote = module.baseRemote,
+            targetBranch = targetBranch,
+            tagEnabled = module.tagEnabled,
+            tagMode = module.tagMode,
+            tagTargetRef = module.tagTargetRef,
+            tagMessagePrefix = module.tagMessagePrefix,
+        )
+    }
+}
 
 data class ModuleBaseOverride(
     val serviceId: String,
@@ -38,6 +97,7 @@ data class ModuleBaseOverride(
 private data class EffectiveServiceConfiguration(
     val service: GroupServiceConfig,
     val moduleBranches: Map<String, String>,
+    val moduleSources: Map<String, TaskModuleSource>,
 )
 
 data class StartupSnapshot(
@@ -75,8 +135,19 @@ class TaskApplicationService(
     private val branchValidator: BranchReferenceValidator = GitBranchReferenceValidator(),
     private val branchReuseInspector: WorkspaceBranchReuseInspector = WorkspaceBranchReuseInspector(),
     private val repairs: WorkspaceRepairService = WorkspaceRepairService(manifests, agentDocuments, operationLock),
+    private val moduleRemoval: WorkspaceModuleRemovalService = WorkspaceModuleRemovalService(manifests, agentDocuments, operationLock),
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    fun inspectModuleRemoval(config: AppConfig, taskDirectory: Path, workspacePath: String): WorkspaceModuleRemovalPreview =
+        moduleRemoval.inspect(config, taskDirectory, workspacePath)
+
+    fun removeModule(
+        config: AppConfig,
+        taskDirectory: Path,
+        preview: WorkspaceModuleRemovalPreview,
+        confirmation: WorkspaceModuleRemovalConfirmation,
+    ): WorkspaceModuleRemovalResult = moduleRemoval.remove(config, taskDirectory, preview, confirmation)
+
     fun inspectWorkspaceRepair(config: AppConfig, taskDirectory: Path, workspacePath: String): WorkspaceRepairPreview =
         repairs.inspect(config, taskDirectory, workspacePath)
 
@@ -90,11 +161,14 @@ class TaskApplicationService(
     /** Finds branch reuse decisions needed before task-directory creation begins. */
     fun inspectCreateBranchReuse(config: AppConfig, request: CreateGroupedTaskRequest): List<BranchReuseConflict> {
         val group = config.group(request.groupId)
-        val services = request.serviceIds.map { id ->
-            group.services.firstOrNull { it.id == id && it.enabled }
-                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$id")
-        }
-        return inspectBranchReuse(config, applyModuleOverrides(services, request.baseOverrides, request.featureBranch))
+        val taskRoot = config.taskRoot?.let(Path::of) ?: error("尚未配置任务根目录")
+        val folderName = TaskNaming.requireValidDirectoryName(request.folderName)
+        val resolved = resolveSelections(group, request.serviceIds, request.serviceSelections, request.baseOverrides, request.featureBranch)
+        requireUniqueWorkspacePaths(taskRoot.resolve(folderName), emptyList(), resolved)
+        return inspectBranchReuse(
+            config,
+            resolved,
+        )
     }
 
     /** Finds branch reuse decisions for the same branch used by an existing task. */
@@ -106,12 +180,13 @@ class TaskApplicationService(
         val manifest = manifests.load(taskDirectory)
         val group = config.group(manifest.groupId)
         val existingIds = manifest.services.map(ServiceWorkspace::groupServiceId).toSet()
-        val services = request.serviceIds.map { id ->
+        val requestedIds = request.serviceSelections.map(TaskServiceSelection::serviceId).ifEmpty { request.serviceIds }
+        requestedIds.forEach { id ->
             require(id !in existingIds) { "服务已在任务中：$id" }
-            group.services.firstOrNull { it.id == id && it.enabled }
-                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$id")
         }
-        inspectBranchReuse(config, applyModuleOverrides(services, request.baseOverrides, manifest.featureBranch))
+        val resolved = resolveSelections(group, request.serviceIds, request.serviceSelections, request.baseOverrides, manifest.featureBranch)
+        requireUniqueWorkspacePaths(taskDirectory, manifest.services, resolved)
+        inspectBranchReuse(config, resolved)
     }
 
     private fun inspectBranchReuse(
@@ -156,14 +231,16 @@ class TaskApplicationService(
             "任务分支仍包含未解析的 {num}"
         }
         require(branchValidator.isValid(featureBranch)) { "任务分支不是合法的 Git 分支名：$featureBranch" }
-        require(request.serviceIds.isNotEmpty()) { "至少选择一个服务" }
-        require(request.serviceIds.distinct().size == request.serviceIds.size) { "服务不能重复选择" }
         val group = config.group(request.groupId)
-        val services = applyModuleOverrides(request.serviceIds.map { id ->
-            group.services.firstOrNull { it.id == id && it.enabled }
-                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$id")
-        }, request.baseOverrides, featureBranch)
+        val services = resolveSelections(
+            group,
+            request.serviceIds,
+            request.serviceSelections,
+            request.baseOverrides,
+            featureBranch,
+        )
         val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        requireUniqueWorkspacePaths(taskDirectory, emptyList(), services)
         val taskDirectoryName = folderName
         taskRoot.toAbsolutePath().normalize().let { normalizedRoot ->
             Files.createDirectories(normalizedRoot)
@@ -188,6 +265,7 @@ class TaskApplicationService(
                         requestedFeatureBranch = featureBranch,
                         confirmedBranchReuseKeys = request.confirmedBranchReuseKeys,
                         moduleBranches = effective.moduleBranches,
+                        moduleSources = effective.moduleSources,
                     ),
                 )
             }
@@ -234,8 +312,20 @@ class TaskApplicationService(
                         cleanup.exceptionOrNull(),
                     ).apply { addSuppressed(error) }
                 }
+                Files.deleteIfExists(taskDirectory.resolve(ManifestStore.FILE_NAME))
+                Files.deleteIfExists(taskDirectory.resolve("AGENTS.md"))
             }
-            if (taskDirectory.exists()) deleteRecursively(taskDirectory)
+            if (taskDirectory.exists()) {
+                val remaining = Files.list(taskDirectory).use { it.toList() }
+                if (remaining.isEmpty()) {
+                    Files.deleteIfExists(taskDirectory)
+                } else {
+                    throw IllegalStateException(
+                        "任务创建失败且目录中仍有未能安全归属的内容；已保留现场供人工检查：$taskDirectory",
+                        error,
+                    )
+                }
+            }
             throw error
         }
     }
@@ -255,8 +345,23 @@ class TaskApplicationService(
             .asReversed()
             .forEach { workspaces ->
                 val workspace = workspaces.first()
-                val service = group.services.firstOrNull { it.id == workspace.groupServiceId }
+                val configuredService = group.services.firstOrNull { it.id == workspace.groupServiceId }
                     ?: error("回滚服务配置不存在：${workspace.groupServiceId}")
+                val service = configuredService.copy(modules = workspaces.map { item ->
+                    val base = item.baseRef ?: error("回滚模块缺少基础分支快照：${item.moduleName}")
+                    val parsed = RemoteBranchRef.parse(base)
+                    ServiceModuleConfig(
+                        id = item.moduleId,
+                        name = item.moduleName,
+                        strategy = item.strategy,
+                        baseRef = base,
+                        baseRemote = parsed.remote,
+                        tagEnabled = item.tagEnabled,
+                        tagMode = item.tagMode,
+                        tagTargetRef = item.tagTargetRef,
+                        tagMessagePrefix = item.tagMessagePrefix,
+                    )
+                })
                 val repository = repositories[workspace.repositoryId]
                     ?: error("回滚仓库配置不存在：${workspace.repositoryId}")
                 provisioning.rollback(
@@ -265,6 +370,8 @@ class TaskApplicationService(
                         repository = repository,
                         service = service,
                         requestedFeatureBranch = manifest.featureBranch,
+                        moduleBranches = workspaces.associate { it.moduleId to it.targetBranch.orEmpty() },
+                        moduleSources = workspaces.associate { it.moduleId to it.moduleSource },
                     ),
                     workspaces,
                 )
@@ -283,16 +390,19 @@ class TaskApplicationService(
         request: AddGroupedTaskServicesRequest,
     ): TaskManifest = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)
-        require(request.serviceIds.isNotEmpty()) { "至少选择一个服务" }
-        require(request.serviceIds.distinct().size == request.serviceIds.size) { "服务不能重复选择" }
         val group = config.group(manifest.groupId)
         val existingIds = manifest.services.map(ServiceWorkspace::groupServiceId).toSet()
-        val services = applyModuleOverrides(request.serviceIds.map { serviceId ->
-            require(serviceId !in existingIds) { "服务已在任务中：$serviceId" }
-            group.services.firstOrNull { it.id == serviceId && it.enabled }
-                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$serviceId")
-        }, request.baseOverrides, manifest.featureBranch)
+        val requestedIds = request.serviceSelections.map(TaskServiceSelection::serviceId).ifEmpty { request.serviceIds }
+        requestedIds.forEach { require(it !in existingIds) { "服务已在任务中：$it" } }
+        val services = resolveSelections(
+            group,
+            request.serviceIds,
+            request.serviceSelections,
+            request.baseOverrides,
+            manifest.featureBranch,
+        )
         val repositories = config.repositories.associateBy(RepositoryConfig::id)
+        requireUniqueWorkspacePaths(taskDirectory, manifest.services, services)
         val created = mutableListOf<Pair<WorkspaceProvisionRequest, List<ServiceWorkspace>>>()
         var manifestCommitted = false
         try {
@@ -307,6 +417,7 @@ class TaskApplicationService(
                     requestedFeatureBranch = manifest.featureBranch,
                     confirmedBranchReuseKeys = request.confirmedBranchReuseKeys,
                     moduleBranches = effective.moduleBranches,
+                    moduleSources = effective.moduleSources,
                 )
                 created += provisionRequest to provisioning.provision(provisionRequest)
             }
@@ -349,6 +460,118 @@ class TaskApplicationService(
         }
     }
 
+    fun inspectAddModulesBranchReuse(
+        config: AppConfig,
+        taskDirectory: Path,
+        request: AddTaskModulesRequest,
+    ): List<BranchReuseConflict> = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        val group = config.group(manifest.groupId)
+        val configuredService = group.services.firstOrNull { it.id == request.serviceId && it.enabled }
+            ?: error("组 ${group.name} 中不存在或未启用服务：${request.serviceId}")
+        requireNewModules(manifest, taskDirectory, configuredService, request.modules)
+        inspectBranchReuse(
+            config,
+            resolveSelections(
+                group,
+                emptyList(),
+                listOf(TaskServiceSelection(request.serviceId, request.modules)),
+                emptyList(),
+                manifest.featureBranch,
+            ),
+        )
+    }
+
+    fun addModules(
+        config: AppConfig,
+        taskDirectory: Path,
+        request: AddTaskModulesRequest,
+    ): TaskManifest = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        val group = config.group(manifest.groupId)
+        val configuredService = group.services.firstOrNull { it.id == request.serviceId && it.enabled }
+            ?: error("组 ${group.name} 中不存在或未启用服务：${request.serviceId}")
+        requireNewModules(manifest, taskDirectory, configuredService, request.modules)
+        val effective = resolveSelections(
+            group,
+            emptyList(),
+            listOf(TaskServiceSelection(request.serviceId, request.modules)),
+            emptyList(),
+            manifest.featureBranch,
+        ).single()
+        val repository = config.repositories.firstOrNull { it.id == effective.service.repositoryId }
+            ?: error("服务 ${effective.service.displayName} 的仓库配置不存在")
+        val provisionRequest = WorkspaceProvisionRequest(
+            taskDirectory = taskDirectory,
+            repository = repository,
+            service = effective.service,
+            requestedFeatureBranch = manifest.featureBranch,
+            confirmedBranchReuseKeys = request.confirmedBranchReuseKeys,
+            moduleBranches = effective.moduleBranches,
+            moduleSources = effective.moduleSources,
+            moduleDisplayNames = effective.service.modules.associate { module ->
+                module.id to StandardWorktreeModuleNaming.effectiveName(module)
+            },
+        )
+        val added = provisioning.provision(provisionRequest)
+        try {
+            val updated = manifest.copy(
+                updatedAt = AwmTime.format(Instant.now(clock)),
+                services = manifest.services + added,
+            )
+            manifests.save(taskDirectory, updated)
+            agentDocuments.writeTaskDocument(taskDirectory, updated, config.repositories.map(RepositoryConfig::toInfo))
+            updated
+        } catch (error: Throwable) {
+            runCatching { provisioning.rollback(provisionRequest, added) }.onFailure(error::addSuppressed)
+            runCatching {
+                manifests.save(taskDirectory, manifest)
+                agentDocuments.writeTaskDocument(taskDirectory, manifest, config.repositories.map(RepositoryConfig::toInfo))
+            }.onFailure(error::addSuppressed)
+            throw error
+        }
+    }
+
+    private fun requireNewModules(
+        manifest: TaskManifest,
+        taskDirectory: Path,
+        configuredService: GroupServiceConfig,
+        modules: List<TaskModuleSelection>,
+    ) {
+        require(modules.isNotEmpty()) { "至少添加一个模块" }
+        val existingWorkspaces = manifest.services.filter { it.groupServiceId == configuredService.id }
+        val existing = existingWorkspaces.map { it.moduleId.lowercase() }.toSet()
+        require(modules.none { it.id.lowercase() in existing }) { "任务中已存在同名模块" }
+        require(modules.map { it.id.lowercase() }.distinct().size == modules.size) { "新增模块 ID 不能重复（忽略大小写）" }
+        val existingNames = existingWorkspaces.map(ServiceWorkspace::moduleName).map(String::lowercase).toSet()
+        val newConfigs = modules.map(TaskModuleSelection::toConfig)
+        val newNames = newConfigs.map(StandardWorktreeModuleNaming::effectiveName)
+        require(newNames.none { it.lowercase() in existingNames }) { "新增模块名称不能与任务中已有模块重复（忽略大小写）" }
+        require(newNames.map(String::lowercase).distinct().size == newNames.size) { "新增模块名称不能重复（忽略大小写）" }
+        val existingPaths = manifest.services.map {
+            Path.of(it.worktreePath).toAbsolutePath().normalize().toString().lowercase()
+        }.toSet()
+        val plannedPaths = newConfigs.map { module ->
+            taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(configuredService, module))
+                .toAbsolutePath().normalize().toString().lowercase()
+        }
+        require(plannedPaths.none(existingPaths::contains)) { "新增模块目录不能与任务中已有模块重复" }
+        require(plannedPaths.distinct().size == plannedPaths.size) { "新增模块名称转换为目录后不能重复" }
+        val existingWorktreeTargets = manifest.services
+            .filter {
+                it.strategy == WorkspaceStrategy.STANDARD_WORKTREE &&
+                    it.repositoryId == configuredService.repositoryId
+            }
+            .map { (it.targetBranch ?: it.branch).lowercase() }
+            .toSet()
+        require(
+            modules.none { module ->
+                module.strategy == WorkspaceStrategy.STANDARD_WORKTREE &&
+                    module.targetBranch?.trim()?.lowercase() in existingWorktreeTargets
+            },
+        ) { "新增 Worktree 模块的目标分支不能与任务中已有 Worktree 模块重复" }
+    }
+
     /** Re-provisions complete failed service entries while keeping successful workspaces untouched. */
     fun retryFailedServices(
         config: AppConfig,
@@ -372,32 +595,31 @@ class TaskApplicationService(
                 val configuredService = group.services.firstOrNull { it.id == serviceId }
                     ?: error("失败服务已不在组配置中：$serviceId")
                 val recorded = manifest.services.filter { it.groupServiceId == serviceId }
-                val recordedByModule = recorded.filter { it.moduleId.isNotBlank() }.associateBy(ServiceWorkspace::moduleId)
-                val service = when (configuredService.strategy) {
-                    WorkspaceStrategy.STANDARD_WORKTREE -> configuredService.copy(
-                        modules = configuredService.modules.map { module ->
-                            recordedByModule[module.id]?.baseRef?.takeIf(String::isNotBlank)?.let { module.copy(baseRef = it) }
-                                ?: module
-                        },
+                val service = configuredService.copy(modules = recorded.map { workspace ->
+                    val base = workspace.baseRef ?: error("失败模块缺少基础分支快照：${workspace.moduleName}")
+                    val parsed = RemoteBranchRef.parse(base)
+                    ServiceModuleConfig(
+                        id = workspace.moduleId,
+                        name = workspace.moduleName,
+                        strategy = workspace.strategy,
+                        baseRef = base,
+                        baseRemote = parsed.remote,
+                        tagEnabled = workspace.tagEnabled,
+                        tagMode = workspace.tagMode,
+                        tagTargetRef = workspace.tagTargetRef,
+                        tagMessagePrefix = workspace.tagMessagePrefix,
                     )
-                    WorkspaceStrategy.INDEPENDENT_CLONE -> configuredService.copy(
-                        cloneModules = configuredService.cloneModules.map { module ->
-                            recordedByModule[module.id]?.baseRef?.takeIf(String::isNotBlank)?.let { module.copy(branch = it) }
-                                ?: module
-                        },
-                    )
-                }
+                })
                 val repository = repositories[service.repositoryId]
                     ?: error("服务 ${service.displayName} 的仓库配置不存在")
-                val recordedBranches = if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
-                    recordedByModule.mapValues { it.value.branch }
-                } else emptyMap()
+                val recordedBranches = recorded.associate { workspace -> workspace.moduleId to workspace.targetBranch.orEmpty() }
                 val provisionRequest = WorkspaceProvisionRequest(
                     taskDirectory = taskDirectory,
                     repository = repository,
                     service = service,
                     requestedFeatureBranch = manifest.featureBranch,
                     moduleBranches = recordedBranches,
+                    moduleSources = recorded.associate { it.moduleId to it.moduleSource },
                 )
                 created += provisionRequest to provisioning.provision(provisionRequest)
             }
@@ -500,8 +722,10 @@ class TaskApplicationService(
             "存在无法安全验证的工作区，请先修复其 Git 身份或路径后再删除任务"
         }
         if (risks.isNotEmpty() && !forceDiscard) error("存在未提交改动，请确认强制丢弃后再删除")
-        lifecycle.removeAll(config, taskDirectory, manifest, forceDiscard)
-        deleteRecursively(taskDirectory)
+        val removal = lifecycle.removeAll(config, taskDirectory, manifest, forceDiscard)
+        if (removal.retainedBackupPaths.isNotEmpty()) {
+            error("任务已删除，但部分工作区备份清理失败，已保留：${removal.retainedBackupPaths.joinToString()}")
+        }
     }
 
     private fun compensationFailure(message: String, primary: Throwable, compensation: Throwable): Throwable =
@@ -509,67 +733,123 @@ class TaskApplicationService(
 
     private fun deleteRecursively(path: Path) {
         if (!path.exists()) return
-        Files.walk(path).use { entries ->
-            entries.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-        }
+        val entries = Files.walk(path).use { it.sorted(Comparator.reverseOrder()).toList() }
+        entries.forEach(Files::deleteIfExists)
     }
 
-    private fun applyBaseOverrides(services: List<GroupServiceConfig>, overrides: List<ModuleBaseOverride>): List<GroupServiceConfig> {
-        require(overrides.map { it.serviceId to it.moduleId }.distinct().size == overrides.size) { "基础分支覆盖项不能重复" }
-        val serviceIds = services.map(GroupServiceConfig::id).toSet()
-        require(overrides.all { it.serviceId in serviceIds }) { "基础分支覆盖引用了未选择的服务" }
-        return services.map { service ->
-            val byModule = overrides.filter { it.serviceId == service.id }.associateBy(ModuleBaseOverride::moduleId)
-            when (service.strategy) {
-                WorkspaceStrategy.STANDARD_WORKTREE -> {
-                    require(byModule.keys.all { id -> service.modules.any { it.id == id } }) { "基础分支覆盖引用了不存在的模块" }
-                    service.copy(modules = service.modules.map { module ->
-                        byModule[module.id]?.let { override ->
-                            val remote = RemoteBranchRef.parse(override.baseRef)
-                            module.copy(baseRef = override.baseRef, baseRemote = remote.remote)
-                        } ?: module
-                    })
-                }
-                WorkspaceStrategy.INDEPENDENT_CLONE -> {
-                    require(byModule.keys.all { id -> service.cloneModules.any { it.id == id } }) { "基础分支覆盖引用了不存在的克隆模块" }
-                    service.copy(cloneModules = service.cloneModules.map { module ->
-                        byModule[module.id]?.let { override -> module.copy(branch = override.baseRef) } ?: module
-                    })
-                }
-            }
-        }
-    }
-
-    private fun applyModuleOverrides(
-        services: List<GroupServiceConfig>,
-        overrides: List<ModuleBaseOverride>,
+    private fun resolveSelections(
+        group: GroupConfig,
+        legacyServiceIds: List<String>,
+        selections: List<TaskServiceSelection>,
+        legacyOverrides: List<ModuleBaseOverride>,
         requestedFeatureBranch: String,
     ): List<EffectiveServiceConfiguration> {
-        val adjusted = applyBaseOverrides(services, overrides)
-        return adjusted.map { service ->
-            val serviceOverrides = overrides.filter { it.serviceId == service.id }
-            when (service.strategy) {
-                WorkspaceStrategy.STANDARD_WORKTREE -> {
-                    val explicitBranches = serviceOverrides.mapNotNull { override ->
-                        override.targetBranch?.trim()?.let { override.moduleId to it }
-                    }.toMap()
-                    val branches = TaskBranchNaming.resolve(requestedFeatureBranch.trim(), service.modules, explicitBranches)
-                    branches.forEach { (moduleId, branch) ->
-                        require(branch.none(Char::isWhitespace)) { "模块 $moduleId 创建后分支不能包含空格：$branch" }
-                        require(!BranchPrefixResolver.containsUnresolvedPlaceholder(branch)) {
-                            "模块 $moduleId 创建后分支仍包含未解析的 {num}"
-                        }
-                        require(branchValidator.isValid(branch)) { "模块 $moduleId 创建后分支不是合法的 Git 分支名：$branch" }
-                    }
-                    val duplicates = branches.values.groupBy(String::lowercase).filterValues { it.size > 1 }.keys
-                    require(duplicates.isEmpty()) { "同一仓库的模块创建后分支不能重复：${duplicates.joinToString()}" }
-                    EffectiveServiceConfiguration(service, branches)
-                }
-                WorkspaceStrategy.INDEPENDENT_CLONE -> {
-                    require(serviceOverrides.none { it.targetBranch != null }) { "独立克隆模块不支持创建后分支" }
-                    EffectiveServiceConfiguration(service, emptyMap())
-                }
+        val effectiveSelections = if (selections.isNotEmpty()) {
+            require(legacyServiceIds.isEmpty() || legacyServiceIds.toSet() == selections.map(TaskServiceSelection::serviceId).toSet()) {
+                "服务选择与模块选择不一致"
             }
+            selections
+        } else {
+            require(legacyServiceIds.isNotEmpty()) { "至少选择一个服务" }
+            require(legacyOverrides.map { it.serviceId to it.moduleId }.distinct().size == legacyOverrides.size) {
+                "基础分支覆盖项不能重复"
+            }
+            legacyServiceIds.map { serviceId ->
+                val service = group.services.firstOrNull { it.id == serviceId && it.enabled }
+                    ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$serviceId")
+                val byModule = legacyOverrides.filter { it.serviceId == serviceId }.associateBy(ModuleBaseOverride::moduleId)
+                require(byModule.keys.all { id -> service.modules.any { it.id == id } }) { "基础分支覆盖引用了不存在的模块" }
+                TaskServiceSelection(serviceId, service.modules.map { module ->
+                    val override = byModule[module.id]
+                    val baseRef = override?.baseRef ?: module.baseRef
+                    val remote = override?.let { RemoteBranchRef.parse(baseRef).remote } ?: module.baseRemote
+                    val target = override?.targetBranch ?: defaultSelectionTarget(requestedFeatureBranch, service.modules, module)
+                    TaskModuleSelection.configured(module.copy(baseRef = baseRef, baseRemote = remote), target)
+                })
+            }
+        }
+        require(effectiveSelections.map(TaskServiceSelection::serviceId).distinct().size == effectiveSelections.size) {
+            "服务不能重复选择"
+        }
+        return effectiveSelections.map { selection ->
+            val configured = group.services.firstOrNull { it.id == selection.serviceId && it.enabled }
+                ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：${selection.serviceId}")
+            val modules = selection.modules.map(TaskModuleSelection::toConfig)
+            StandardWorktreeModuleNaming.requireValid(modules)
+            require(modules.map { it.id.lowercase() }.distinct().size == modules.size) { "模块 ID 不能重复（忽略大小写）" }
+            val branches = selection.modules.associate { selected ->
+                val target = selected.targetBranch?.trim().orEmpty()
+                if (selected.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
+                    require(target.isNotBlank()) { "Worktree 模块目标分支不能为空：${selected.name}" }
+                }
+                if (target.isNotBlank()) validateTargetBranch(selected.id, target)
+                selected.id to target
+            }
+            val worktreeTargets = selection.modules
+                .filter { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }
+                .mapNotNull { branches[it.id]?.takeIf(String::isNotBlank) }
+            require(worktreeTargets.map(String::lowercase).distinct().size == worktreeTargets.size) {
+                "同一服务的 Worktree 模块目标分支不能重复"
+            }
+            EffectiveServiceConfiguration(
+                service = configured.copy(modules = modules),
+                moduleBranches = branches,
+                moduleSources = selection.modules.associate { it.id to it.source },
+            )
+        }
+    }
+
+    private fun defaultSelectionTarget(
+        requestedFeatureBranch: String,
+        modules: List<ServiceModuleConfig>,
+        module: ServiceModuleConfig,
+    ): String = if (modules.size == 1) requestedFeatureBranch.trim() else "$requestedFeatureBranch-${StandardWorktreeModuleNaming.effectiveName(module)}"
+
+    private fun validateTargetBranch(moduleId: String, branch: String) {
+        require(branch.none(Char::isWhitespace)) { "模块 $moduleId 目标分支不能包含空格：$branch" }
+        require(!BranchPrefixResolver.containsUnresolvedPlaceholder(branch)) { "模块 $moduleId 目标分支仍包含未解析的 {num}" }
+        require(branchValidator.isValid(branch)) { "模块 $moduleId 目标分支不是合法的 Git 分支名：$branch" }
+    }
+
+    private fun requireUniqueWorkspacePaths(
+        taskDirectory: Path,
+        existing: List<ServiceWorkspace>,
+        services: List<EffectiveServiceConfiguration>,
+    ) {
+        val existingPaths = existing.map {
+            Path.of(it.worktreePath).toAbsolutePath().normalize().toString().lowercase()
+        }
+        val plannedPaths = services.flatMap { effective ->
+            effective.service.modules.map { module ->
+                taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(effective.service, module))
+                    .toAbsolutePath().normalize().toString().lowercase()
+            }
+        }
+        val duplicates = (existingPaths + plannedPaths).groupingBy(String::lowercase).eachCount().filterValues { it > 1 }.keys
+        val existingTargets = existing
+            .filter { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }
+            .map { Triple(it.repositoryId, it.targetBranch ?: it.branch, it.moduleName) }
+        val plannedTargets = services.flatMap { effective ->
+            effective.service.modules.mapNotNull { module ->
+                if (module.strategy != WorkspaceStrategy.STANDARD_WORKTREE) return@mapNotNull null
+                Triple(
+                    effective.service.repositoryId,
+                    effective.moduleBranches[module.id].orEmpty(),
+                    StandardWorktreeModuleNaming.effectiveName(module),
+                )
+            }
+        }
+        val duplicateTargets = (existingTargets + plannedTargets)
+            .groupBy { (repositoryId, branch, _) -> repositoryId.lowercase() to branch.lowercase() }
+            .filterValues { it.size > 1 }
+            .values
+        require(duplicateTargets.isEmpty()) {
+            "同一仓库的 Worktree 模块目标分支不能重复：" + duplicateTargets.joinToString { entries ->
+                entries.joinToString { (_, branch, moduleName) -> "$moduleName ($branch)" }
+            }
+        }
+        require(duplicates.isEmpty()) {
+            "任务内工作区目录不能重复（忽略大小写）：${duplicates.joinToString()}"
         }
     }
 

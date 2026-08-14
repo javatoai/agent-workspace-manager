@@ -7,8 +7,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.7.0"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.7.0"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.8.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.8.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -117,6 +117,7 @@ data class ServiceModuleConfig(
     val name: String = "default",
     val baseRef: String = "origin/master",
     val baseRemote: String = "origin",
+    val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
     @JsonNames("uatTagEnabled")
     val tagEnabled: Boolean = true,
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
@@ -126,32 +127,13 @@ data class ServiceModuleConfig(
 ) {
     init {
         require(id.isNotBlank()) { "模块 ID 不能为空" }
-        if (tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
-            require(!tagTargetRef.isNullOrBlank()) { "合并到目标分支模式必须配置 Tag 目标分支" }
-            RemoteBranchRef.parse(tagTargetRef)
+        require(baseRef.isNotBlank()) { "模块基础分支不能为空" }
+        require(baseRemote.isNotBlank()) { "模块基础远程不能为空" }
+        val parsedBase = RemoteBranchRef.parse(baseRef)
+        require(parsedBase.remote == baseRemote) {
+            "基础分支远程必须与基础远程一致：${parsedBase.remote} != $baseRemote"
         }
-    }
-}
-
-/** One fixed-branch clone entry. Every entry receives its own physical clone. */
-@Serializable
-data class IndependentCloneModuleConfig(
-    val id: String,
-    val name: String = "",
-    val branch: String = "origin/master",
-    @JsonNames("uatTagEnabled")
-    val tagEnabled: Boolean = false,
-    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
-    @JsonNames("uatRef")
-    val tagTargetRef: String? = "origin/release/test",
-    val tagMessagePrefix: String = "Tag",
-) {
-    init {
-        require(id.isNotBlank()) { "独立克隆模块 ID 不能为空" }
-        require(RemoteBranchRef.parse(branch).remote == "origin") {
-            "独立克隆模块分支必须使用 origin/<branch> 格式"
-        }
-        if (tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+        if (tagEnabled && tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
             require(!tagTargetRef.isNullOrBlank()) { "合并到目标分支模式必须配置 Tag 目标分支" }
             RemoteBranchRef.parse(tagTargetRef)
         }
@@ -166,11 +148,9 @@ data class GroupServiceConfig(
     val displayName: String,
     val enabled: Boolean = true,
     val developmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
-    val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
     val modules: List<ServiceModuleConfig> = listOf(
         ServiceModuleConfig(id = "default"),
     ),
-    val cloneModules: List<IndependentCloneModuleConfig> = emptyList(),
     val bootstrap: BootstrapConfig = BootstrapConfig(),
     val commitMessageTemplate: String = "",
 ) {
@@ -179,20 +159,9 @@ data class GroupServiceConfig(
         require(TaskNaming.directoryName(id) == id) { "组内服务 ID 必须是安全且稳定的目录片段" }
         require(repositoryId.isNotBlank()) { "仓库 ID 不能为空" }
         require(displayName.isNotBlank()) { "服务名称不能为空" }
-        when (strategy) {
-            WorkspaceStrategy.STANDARD_WORKTREE -> {
-                require(modules.isNotEmpty()) { "标准 Worktree 服务至少需要一个模块" }
-                require(modules.map { it.id }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复" }
-                StandardWorktreeModuleNaming.requireValid(modules)
-            }
-            WorkspaceStrategy.INDEPENDENT_CLONE -> {
-                require(cloneModules.isNotEmpty()) { "独立克隆服务至少需要一个克隆模块" }
-                require(cloneModules.map { it.id }.distinct().size == cloneModules.size) { "独立克隆模块 ID 不能重复" }
-                require(cloneModules.map { it.branch.lowercase() }.distinct().size == cloneModules.size) {
-                    "独立克隆模块分支不能重复（忽略大小写）"
-                }
-            }
-        }
+        require(modules.isNotEmpty()) { "服务至少需要一个工作区模块" }
+        require(modules.map { it.id.lowercase() }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复（忽略大小写）" }
+        StandardWorktreeModuleNaming.requireValid(modules)
     }
 
     companion object {
@@ -239,7 +208,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.7.x is intentionally strict and contains no compatibility-only fields. */
+/** Version 0.8.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -256,6 +225,8 @@ data class AppConfig(
     val allowTemporaryDevelopmentToolSelection: Boolean = false,
     /** Exact, case-sensitive branch names hidden only from the task-detail header summary. */
     val hiddenTaskDetailBranches: List<String> = emptyList(),
+    /** Exact local branch names on which AWM refuses every commit or branch push. */
+    val blockedGitWriteBranches: List<String> = listOf("master", "main"),
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     /** Controls only opening the create-task dialog; it never runs at app startup. */
     val meegleAutoLoadRequirementLinks: Boolean = false,
@@ -279,19 +250,18 @@ data class AppConfig(
         require(hiddenTaskDetailBranches.distinct().size == hiddenTaskDetailBranches.size) {
             "任务详情分支白名单不能重复"
         }
+        require(blockedGitWriteBranches.all { it.isNotBlank() && it == it.trim() }) {
+            "Git 写保护分支不能包含空值或首尾空格"
+        }
+        require(blockedGitWriteBranches.map(String::lowercase).distinct().size == blockedGitWriteBranches.size) {
+            "Git 写保护分支不能重复（忽略大小写）"
+        }
         val repositoryById = repositories.associateBy(RepositoryConfig::id)
         groups.flatMap(GroupConfig::services).forEach { service ->
             val repository = repositoryById[service.repositoryId]
                 ?: throw IllegalArgumentException("服务 ${service.displayName} 引用了不存在的仓库：${service.repositoryId}")
-            if (service.strategy != WorkspaceStrategy.INDEPENDENT_CLONE) {
-                service.modules.forEach { module ->
-                    require(module.baseRef.isNotBlank()) { "模块基础分支不能为空" }
-                    require(module.baseRemote.isNotBlank()) { "模块基础远程不能为空" }
-                    module.tagTargetRef?.let(RemoteBranchRef::parse)
-                }
-            } else {
-                require(!repository.originUrl.isNullOrBlank()) { "独立克隆服务 ${service.displayName} 的仓库没有 origin" }
-                service.cloneModules.forEach { module -> module.tagTargetRef?.let(RemoteBranchRef::parse) }
+            service.modules.forEach { module ->
+                module.tagTargetRef?.let(RemoteBranchRef::parse)
             }
         }
     }
@@ -350,6 +320,12 @@ enum class WorkspaceHealth {
 }
 
 @Serializable
+enum class TaskModuleSource {
+    CONFIGURED,
+    TEMPORARY,
+}
+
+@Serializable
 data class ServiceWorkspace(
     val repositoryId: String,
     val serviceName: String,
@@ -363,10 +339,18 @@ data class ServiceWorkspace(
     val moduleId: String = "default",
     val moduleName: String = serviceName,
     val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
+    val moduleSource: TaskModuleSource = TaskModuleSource.CONFIGURED,
     /** Origin is persisted for independent-clone restore; credentials are rejected by repository inspection. */
     val originUrl: String? = null,
     /** Base ref is diagnostic metadata for a standard module and is never re-derived during restore. */
     val baseRef: String? = null,
+    /** Null means an independent clone works directly on its configured base branch. */
+    val targetBranch: String? = branch,
+    /** Immutable Tag behavior captured when the task module is created. */
+    val tagEnabled: Boolean = false,
+    val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    val tagTargetRef: String? = null,
+    val tagMessagePrefix: String = "Tag",
     /** True only when this request created the local branch and may remove it during a failed transaction. */
     val branchCreatedByTask: Boolean = false,
     /** Reuses a branch checked out by another worktree and therefore needs `worktree add --force` on restore. */

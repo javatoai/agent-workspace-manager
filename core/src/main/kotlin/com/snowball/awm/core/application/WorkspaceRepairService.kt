@@ -26,6 +26,7 @@ data class WorkspaceRepairPreview(
     val actualBranch: String? = null,
     val remote: String? = null,
     val remoteBranchExists: Boolean = false,
+    val remoteBranchSha: String? = null,
     val requiresRemoteReuseConfirmation: Boolean = false,
     val requiresSharedBranchConfirmation: Boolean = false,
     val occupiedWorktreePaths: List<String> = emptyList(),
@@ -89,11 +90,16 @@ class WorkspaceRepairService(
             }
             executeRepair(config, taskDirectory, manifest, workspace, current, repository)
         }
-        if (workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE || repository == null) {
+        if (repository == null) {
             execute()
         } else {
-            val repositoryPath = Path.of(repository.rootPath).toAbsolutePath().normalize()
-            repositoryLock.withLock(git.commonDirectory(repositoryPath).toAbsolutePath().normalize(), execute)
+            val target = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+            val lockRoot = if (workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE && Files.exists(target)) {
+                git.commonDirectory(target).toAbsolutePath().normalize()
+            } else {
+                Path.of(repository.gitCommonDirectory).toAbsolutePath().normalize()
+            }
+            repositoryLock.withLock(lockRoot, execute)
         }
     }
 
@@ -131,10 +137,11 @@ class WorkspaceRepairService(
             require(git.commonDirectory(repositoryPath).toAbsolutePath().normalize() == Path.of(repository.gitCommonDirectory).toAbsolutePath().normalize())
         }.getOrElse { return manual(workspace, health, "原仓库 Git 身份已失效，无法自动修复 Worktree") }
         val localExists = git.refExists(repositoryPath, "refs/heads/${workspace.branch}")
-        val remoteExists = remoteBranchExists(repositoryPath, workspace.pushRemote, workspace.branch)
+        val remoteSha = remoteBranchSha(repositoryPath, workspace.pushRemote, workspace.branch)
+        val remoteExists = remoteSha != null
         val occupied = if (localExists) git.worktrees(repositoryPath).filter { it.branch == workspace.branch && it.path.toAbsolutePath().normalize() != target } else emptyList()
         val locked = occupied.filter(WorktreeRecord::locked)
-        val fingerprint = fingerprint(workspace, health, target, localExists, remoteExists, occupied)
+        val fingerprint = fingerprint(workspace, health, target, localExists, remoteSha, occupied)
         if (locked.isNotEmpty()) return preview(
             workspace, health, WorkspaceRepairAction.MANUAL, false, fingerprint,
             message = "期望分支被锁定 Worktree 占用，请先执行 git worktree unlock",
@@ -151,6 +158,7 @@ class WorkspaceRepairService(
             return preview(
                 workspace, health, WorkspaceRepairAction.SWITCH_BRANCH, true, fingerprint,
                 remote = workspace.pushRemote, remoteExists = remoteExists,
+                remoteSha = remoteSha,
                 requireRemote = !localExists && remoteExists,
                 requireShared = occupied.isNotEmpty(), occupied = occupied,
                 steps = listOf("确认工作区干净", "切换到任务分支 ${workspace.branch}", "重新检查 Git 状态"),
@@ -170,6 +178,7 @@ class WorkspaceRepairService(
         return preview(
             workspace, health, action, true, fingerprint,
             remote = workspace.pushRemote, remoteExists = remoteExists,
+            remoteSha = remoteSha,
             requireRemote = !localExists && remoteExists,
             requireShared = occupied.isNotEmpty(), occupied = occupied,
             backupPath = backupPath, runsBootstrap = true,
@@ -195,9 +204,10 @@ class WorkspaceRepairService(
             ?: return manual(workspace, health, "独立克隆缺少 origin URL")
         val commandRoot = repository?.rootPath?.let(Path::of)?.toAbsolutePath()?.normalize()?.takeIf(Files::isDirectory)
             ?: target.parent
-        val remoteExists = remoteBranchExists(commandRoot, origin, workspace.branch)
+        val remoteSha = remoteBranchSha(commandRoot, origin, workspace.branch)
+        val remoteExists = remoteSha != null
         val localExists = Files.isDirectory(target) && runCatching { git.refExists(target, "refs/heads/${workspace.branch}") }.getOrDefault(false)
-        val fingerprint = fingerprint(workspace, health, target, localExists, remoteExists, emptyList())
+        val fingerprint = fingerprint(workspace, health, target, localExists, remoteSha, emptyList())
         if (health.issue == WorkspaceGitIssue.OPERATION_IN_PROGRESS || health.issue == WorkspaceGitIssue.INSPECTION_FAILED) {
             return preview(workspace, health, WorkspaceRepairAction.MANUAL, false, fingerprint, message = health.message ?: "无法自动修复")
         }
@@ -209,6 +219,7 @@ class WorkspaceRepairService(
             return preview(
                 workspace, health, WorkspaceRepairAction.SWITCH_BRANCH, true, fingerprint,
                 remote = workspace.pushRemote, remoteExists = remoteExists,
+                remoteSha = remoteSha,
                 requireRemote = !localExists && remoteExists,
                 steps = listOf("确认独立克隆工作区干净", "切换到 ${workspace.branch}", "重新检查 Git 状态"),
                 message = "将独立克隆切换回任务分支",
@@ -222,6 +233,7 @@ class WorkspaceRepairService(
         return preview(
             workspace, health, WorkspaceRepairAction.RECLONE, true, fingerprint,
             remote = origin, remoteExists = true, backupPath = backupPath, runsBootstrap = true,
+            remoteSha = remoteSha,
             steps = buildList {
                 if (invalidExisting) add("将失效目录备份到 $backupPath")
                 add("从远程重新克隆分支 ${workspace.branch}")
@@ -246,6 +258,7 @@ class WorkspaceRepairService(
         val backup = preview.backupPath?.let(Path::of)
         var backupMoved = false
         var workspaceCreated = false
+        var cloneOwnership: String? = null
         var previousBranch: String? = null
         var previousHead: String? = null
         var updatedManifest = false
@@ -270,6 +283,11 @@ class WorkspaceRepairService(
                         git.fetch(repositoryPath, workspace.pushRemote)
                         val local = git.refExists(repositoryPath, "refs/heads/${workspace.branch}")
                         val remote = git.refExists(repositoryPath, "refs/remotes/${workspace.pushRemote}/${workspace.branch}")
+                        if (!local && remote) {
+                            require(git.resolve(repositoryPath, "${workspace.pushRemote}/${workspace.branch}") == preview.remoteBranchSha) {
+                                "远程任务分支状态已变化，请重新预检"
+                            }
+                        }
                         when {
                             local -> git.addExistingWorktree(repositoryPath, target, workspace.branch, preview.requiresSharedBranchConfirmation)
                             remote -> git.addTrackedRemoteWorktree(repositoryPath, target, workspace.branch, workspace.pushRemote)
@@ -286,7 +304,15 @@ class WorkspaceRepairService(
                         git.fetch(target, workspace.pushRemote)
                         switchToExpected(target, workspace, false)
                     } else {
-                        git.cloneRepository(requireNotNull(workspace.originUrl), target, workspace.branch)
+                        cloneOwnership = IndependentCloneWorkspaceSafety.ownership(
+                            taskDirectory, workspace.repositoryId, workspace.groupServiceId, workspace.moduleId,
+                        )
+                        IndependentCloneWorkspaceSafety.cloneIntoPlace(taskDirectory, target, requireNotNull(cloneOwnership)) { staging ->
+                            git.cloneRepository(requireNotNull(workspace.originUrl), staging, workspace.branch)
+                            require(git.resolve(staging, "HEAD") == preview.remoteBranchSha) {
+                                "远程任务分支状态已变化，请重新预检"
+                            }
+                        }
                         workspaceCreated = true
                         val source = requireNotNull(repository).rootPath.let(Path::of).toAbsolutePath().normalize()
                         warnings = initialize(config, manifest, workspace, source, target)
@@ -332,7 +358,9 @@ class WorkspaceRepairService(
                         git.removeWorktree(repositoryPath, target, force = true)
                         git.pruneWorktrees(repositoryPath)
                     }
-                    WorkspaceStrategy.INDEPENDENT_CLONE -> deleteRecursively(target, taskDirectory)
+                    WorkspaceStrategy.INDEPENDENT_CLONE -> IndependentCloneWorkspaceSafety.deleteOwned(
+                        taskDirectory, target, requireNotNull(cloneOwnership),
+                    )
                 }
             }.onFailure(rollbackFailures::add)
             if (backupMoved && backup != null && Files.exists(backup) && !Files.exists(target)) runCatching { Files.move(backup, target) }.onFailure(rollbackFailures::add)
@@ -383,10 +411,11 @@ class WorkspaceRepairService(
         return target
     }
 
-    private fun remoteBranchExists(repository: Path, remote: String, branch: String): Boolean {
+    private fun remoteBranchSha(repository: Path, remote: String, branch: String): String? {
         val result = git.run(repository, "ls-remote", "--exit-code", "--heads", remote, "refs/heads/$branch", check = false)
-        if (result.succeeded) return true
-        if (result.exitCode == 2) return false
+        if (result.succeeded) return result.stdout.lineSequence().firstOrNull { it.isNotBlank() }
+            ?.substringBefore('\t')?.trim()?.ifBlank { null }
+        if (result.exitCode == 2) return null
         throw GitException("远程分支检查失败：$remote/$branch", result)
     }
 
@@ -399,6 +428,7 @@ class WorkspaceRepairService(
         message: String,
         remote: String? = null,
         remoteExists: Boolean = false,
+        remoteSha: String? = null,
         requireRemote: Boolean = false,
         requireShared: Boolean = false,
         occupied: List<WorktreeRecord> = emptyList(),
@@ -416,6 +446,7 @@ class WorkspaceRepairService(
         actualBranch = health.actualBranch,
         remote = remote,
         remoteBranchExists = remoteExists,
+        remoteBranchSha = remoteSha,
         requiresRemoteReuseConfirmation = requireRemote,
         requiresSharedBranchConfirmation = requireShared,
         occupiedWorktreePaths = occupied.map { it.path.toString() },
@@ -429,7 +460,7 @@ class WorkspaceRepairService(
 
     private fun manual(workspace: ServiceWorkspace, health: WorkspaceGitHealth, message: String): WorkspaceRepairPreview = preview(
         workspace, health, WorkspaceRepairAction.MANUAL, false,
-        fingerprint(workspace, health, Path.of(workspace.worktreePath), false, false, emptyList()),
+        fingerprint(workspace, health, Path.of(workspace.worktreePath), false, null, emptyList()),
         message,
     )
 
@@ -438,7 +469,7 @@ class WorkspaceRepairService(
         health: WorkspaceGitHealth,
         target: Path,
         localExists: Boolean,
-        remoteExists: Boolean,
+        remoteSha: String?,
         worktrees: List<WorktreeRecord>,
     ): String = listOf(
         "path=${target.toAbsolutePath().normalize()}",
@@ -447,7 +478,7 @@ class WorkspaceRepairService(
         "actual=${health.actualBranch.orEmpty()}",
         "expected=${workspace.branch}",
         "local=$localExists",
-        "remote=$remoteExists",
+        "remote=${remoteSha.orEmpty()}",
         "worktrees=${worktrees.sortedBy { it.path.toString() }.joinToString(",") { "${it.path}|${it.locked}" }}",
     ).joinToString(";")
 

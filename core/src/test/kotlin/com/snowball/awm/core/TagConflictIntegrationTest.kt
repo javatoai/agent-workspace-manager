@@ -59,6 +59,8 @@ class TagConflictIntegrationTest {
                         branch = "feature/CONFLICT-1",
                         health = WorkspaceHealth.READY,
                         groupServiceId = "conflict-service",
+                        tagEnabled = true,
+                        tagTargetRef = "origin/release/test",
                     ),
                 ),
             ),

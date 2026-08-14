@@ -116,7 +116,6 @@ import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
 import com.snowball.awm.core.DevelopmentToolConfig
 import com.snowball.awm.core.DevelopmentToolType
-import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
 import com.snowball.awm.core.RemoteBranchRef
@@ -169,7 +168,8 @@ internal fun ServicesScreen(controller: DesktopApplication) {
     }
     val group = controller.config.groups.firstOrNull { it.id == selectedGroupId } ?: return
     val serviceCount = group.services.size
-    val standardCount = group.services.count { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }
+    val standardCount = group.services.sumOf { service -> service.modules.count { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE } }
+    val cloneCount = group.services.sumOf { service -> service.modules.count { it.strategy == WorkspaceStrategy.INDEPENDENT_CLONE } }
     LazyColumn(
         Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -192,7 +192,7 @@ internal fun ServicesScreen(controller: DesktopApplication) {
                 MetricCard("当前组", group.name, "服务仓库", Modifier.weight(1f))
                 MetricCard("服务", serviceCount.toString(), "已配置仓库入口", Modifier.weight(1f))
                 MetricCard("Worktree", standardCount.toString(), "标准隔离工作区", Modifier.weight(1f))
-                MetricCard("独立克隆", (serviceCount - standardCount).toString(), "固定分支工作区", Modifier.weight(1f))
+                MetricCard("独立克隆", cloneCount.toString(), "克隆模块", Modifier.weight(1f))
             }
         }
         item(key = "group-${group.id}") {
@@ -268,7 +268,7 @@ private fun ServiceCard(
         Row(Modifier.padding(horizontal = 17.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
                 Icon(
-                    if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
+                    if (service.modules.any { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
                     null,
                     Modifier.padding(10.dp).size(21.dp),
                     tint = MaterialTheme.colorScheme.primary,
@@ -279,12 +279,12 @@ private fun ServiceCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(service.displayName, style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.width(8.dp))
-                    MetaPill(service.strategy.displayName)
+                    MetaPill("混合模块")
                     if (!service.enabled) { Spacer(Modifier.width(6.dp)); MetaPill("已停用") }
                 }
                 Spacer(Modifier.height(3.dp))
                 Text(repository?.rootPath ?: "仓库配置缺失", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (service.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "${service.modules.size} 个基础分支模块" else "${service.cloneModules.size} 个固定分支模块", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${service.modules.count { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }} 个 Worktree · ${service.modules.count { it.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }} 个克隆", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             ActionIconButton("上移服务", onUp, enabled = canMoveUp) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
             ActionIconButton("下移服务", onDown, enabled = canMoveDown) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
@@ -365,6 +365,10 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var hiddenTaskDetailBranches by remember(controller.config.hiddenTaskDetailBranches) {
         mutableStateOf(controller.config.hiddenTaskDetailBranches)
     }
+    var blockedGitBranchInput by remember { mutableStateOf("") }
+    var blockedGitWriteBranches by remember(controller.config.blockedGitWriteBranches) {
+        mutableStateOf(controller.config.blockedGitWriteBranches)
+    }
     val meegleProjects = remember(controller.config.meegleProjects) {
         mutableStateMapOf<Int, MeegleProjectConfig>().apply {
             controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) }
@@ -427,6 +431,13 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         hiddenTaskDetailBranches = updated
         controller.updateHiddenTaskDetailBranches(updated) {
             hiddenTaskDetailBranches = previous
+        }
+    }
+    fun saveBlockedGitBranches(updated: List<String>) {
+        val previous = blockedGitWriteBranches
+        blockedGitWriteBranches = updated
+        controller.settingsController.updateBlockedGitWriteBranches(updated) {
+            blockedGitWriteBranches = previous
         }
     }
 
@@ -746,6 +757,38 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             if (selectedSection == "git") item {
             SettingsCard("Git", "只读取本机 Git 可执行文件、版本、系统用户和全局配置。") {
                 val gitState = controller.localGitSettingsState
+                Text("分支写保护", style = MaterialTheme.typography.titleSmall)
+                Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的 Tag 流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        blockedGitBranchInput,
+                        { blockedGitBranchInput = it },
+                        Modifier.weight(1f),
+                        label = { Text("受保护分支") },
+                        placeholder = { Text("例如 master") },
+                        singleLine = true,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            saveBlockedGitBranches(blockedGitWriteBranches + blockedGitBranchInput.trim())
+                            blockedGitBranchInput = ""
+                        },
+                        enabled = blockedGitBranchInput.isNotBlank() && blockedGitWriteBranches.none { it.equals(blockedGitBranchInput.trim(), true) } && !saving("git-write-policy"),
+                    ) { Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("添加") }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    blockedGitWriteBranches.forEach { branch ->
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                            Row(Modifier.padding(start = 10.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(branch)
+                                ActionIconButton("删除写保护分支 $branch", { saveBlockedGitBranches(blockedGitWriteBranches - branch) }, Modifier.size(28.dp), enabled = !saving("git-write-policy")) {
+                                    Icon(Icons.Outlined.Delete, null, Modifier.size(15.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,

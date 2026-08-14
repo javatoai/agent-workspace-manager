@@ -112,7 +112,6 @@ import com.snowball.awm.core.BootstrapConfig
 import com.snowball.awm.core.BootstrapPresets
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.BranchPrefixResolver
-import com.snowball.awm.core.IndependentCloneModuleConfig
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RemoteBranchSearch
 import com.snowball.awm.core.RemoteBranchRef
@@ -175,7 +174,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.7.0",
+            title = "Agent Workspace Manager 0.8.0",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {
@@ -262,8 +261,8 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     }
 
     if (showCreate) {
-        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools, reuseKeys, baseOverrides ->
-            controller.taskController.create(name, branch, group, services, link, notes, tools, reuseKeys, baseOverrides) {
+        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools, reuseKeys, selections ->
+            controller.taskController.create(name, branch, group, services, link, notes, tools, reuseKeys, selections) {
                 showCreate = false
             }
         }
@@ -366,7 +365,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("AWM", style = MaterialTheme.typography.titleLarge)
-                    Text("Workspace studio · 0.7.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Workspace studio · 0.8.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.height(24.dp))

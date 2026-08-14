@@ -165,8 +165,8 @@ class WorkspaceRepairServiceIntegrationTest {
         val service = when (strategy) {
             WorkspaceStrategy.STANDARD_WORKTREE -> GroupServiceConfig.standard("service", "repo", "Service")
             WorkspaceStrategy.INDEPENDENT_CLONE -> GroupServiceConfig(
-                id = "service", repositoryId = "repo", displayName = "Service", strategy = strategy,
-                cloneModules = listOf(IndependentCloneModuleConfig("default", branch = "origin/master")),
+                id = "service", repositoryId = "repo", displayName = "Service",
+                modules = listOf(ServiceModuleConfig("default", strategy = strategy, baseRef = "origin/master")),
             )
         }
         val taskRoot = root.resolve("tasks")
@@ -203,12 +203,12 @@ class WorkspaceRepairServiceIntegrationTest {
         fun workspace(branch: String, path: Path) = ServiceWorkspace(
             repositoryId = repository.id,
             serviceName = service.displayName,
-            repositoryPath = if (service.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) path.toString() else repository.rootPath,
+            repositoryPath = if (service.modules.single().strategy == WorkspaceStrategy.INDEPENDENT_CLONE) path.toString() else repository.rootPath,
             worktreePath = path.toAbsolutePath().normalize().toString(),
             developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
             branch = branch,
             groupServiceId = service.id,
-            strategy = service.strategy,
+            strategy = service.modules.single().strategy,
             originUrl = repository.originUrl,
             baseRef = "origin/master",
             pushRemote = "origin",

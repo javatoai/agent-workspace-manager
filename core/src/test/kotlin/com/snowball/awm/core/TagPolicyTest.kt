@@ -21,13 +21,7 @@ class TagPolicyTest {
 
         assertEquals("release/test", TagPolicy.resolve(enabled, manifest, workspace.selectionKey).targetBranch)
         assertFailsWith<IllegalStateException> { TagPolicy.resolve(disabled, manifest, workspace.selectionKey) }
-        assertFailsWith<IllegalStateException> {
-            TagPolicy.resolve(
-                enabled.copy(groups = listOf(enabled.groups.single().copy(services = listOf(service.copy(modules = listOf(module.copy(tagEnabled = false))))))),
-                manifest,
-                workspace.selectionKey,
-            )
-        }
+        assertEquals("release/test", TagPolicy.resolve(enabled.copy(groups = listOf(enabled.groups.single().copy(services = listOf(service.copy(modules = listOf(module.copy(tagEnabled = false))))))), manifest, workspace.selectionKey).targetBranch)
     }
 
     @Test
@@ -36,13 +30,13 @@ class TagPolicyTest {
             id = "clone-a",
             repositoryId = "repo-a",
             displayName = "A clone",
-            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            modules = emptyList(),
-            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master", tagEnabled = true, tagTargetRef = "origin/uat/test")),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = true, tagTargetRef = "origin/uat/test")),
         )
         val workspace = workspace("repo-a", "clone-a", "clone").copy(
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
             branch = "release/fixed",
+            tagEnabled = true,
+            tagTargetRef = "origin/uat/test",
         )
         val manifest = manifest(workspace)
         val config = AppConfig(repositories = listOf(repository()), groups = listOf(GroupConfig("g", "G", true, listOf(service))))
@@ -64,6 +58,8 @@ private fun workspace(repositoryId: String, serviceId: String, moduleId: String)
     health = WorkspaceHealth.READY,
     groupServiceId = serviceId,
     moduleId = moduleId,
+    tagEnabled = true,
+    tagTargetRef = "origin/release/test",
 )
 
 private fun repository() = RepositoryConfig(

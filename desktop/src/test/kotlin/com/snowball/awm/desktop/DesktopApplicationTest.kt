@@ -9,7 +9,7 @@ import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.GroupServiceConfig
 import com.snowball.awm.core.GroupConfig
-import com.snowball.awm.core.IndependentCloneModuleConfig
+import com.snowball.awm.core.ServiceModuleConfig
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.TaskManifest
@@ -170,9 +170,14 @@ class DesktopApplicationTest {
             id = "clone",
             repositoryId = repository.id,
             displayName = "Clone",
-            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            modules = emptyList(),
-            cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/main")),
+            modules = listOf(
+                ServiceModuleConfig(
+                    id = "clone",
+                    strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                    baseRef = "origin/main",
+                    tagEnabled = false,
+                ),
+            ),
         )
         store.save(AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("g", "G", services = listOf(service)))))
         var requests = 0

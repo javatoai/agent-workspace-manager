@@ -23,41 +23,17 @@ object TagPolicy {
         val workspace = candidates.single()
         val group = config.group(manifest.groupId)
         check(group.tagEnabled) { "组 ${group.name} 已关闭 Tag" }
-        val service = group.services.firstOrNull { it.id == workspace.groupServiceId }
-            ?: error("组内服务配置不存在：${workspace.groupServiceId}")
-        return when (workspace.strategy) {
-            WorkspaceStrategy.STANDARD_WORKTREE -> {
-                val module = service.modules.firstOrNull { it.id == workspace.moduleId }
-                    ?: error("模块配置不存在：${workspace.moduleId}")
-                check(module.tagEnabled) { "模块 ${ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, service.modules.size)} 已关闭 Tag" }
-                val target = if (module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
-                    RemoteBranchRef.parse(requireNotNull(module.tagTargetRef))
-                } else null
-                EffectiveTagTarget(
-                    workspace,
-                    workspace.branch,
-                    target?.remote ?: workspace.pushRemote,
-                    target?.branch,
-                    module.tagMessagePrefix,
-                    module.tagMode,
-                )
-            }
-            WorkspaceStrategy.INDEPENDENT_CLONE -> {
-                val module = service.cloneModules.firstOrNull { it.id == workspace.moduleId }
-                    ?: error("独立克隆模块配置不存在：${workspace.moduleId}")
-                check(module.tagEnabled) { "模块 ${workspace.moduleName} 已关闭 Tag" }
-                val target = if (module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
-                    RemoteBranchRef.parse(requireNotNull(module.tagTargetRef))
-                } else null
-                EffectiveTagTarget(
-                    workspace,
-                    workspace.branch,
-                    target?.remote ?: workspace.pushRemote,
-                    target?.branch,
-                    module.tagMessagePrefix,
-                    module.tagMode,
-                )
-            }
-        }
+        check(workspace.tagEnabled) { "模块 ${workspace.moduleName} 已关闭 Tag" }
+        val target = if (workspace.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+            RemoteBranchRef.parse(requireNotNull(workspace.tagTargetRef))
+        } else null
+        return EffectiveTagTarget(
+            workspace,
+            workspace.branch,
+            target?.remote ?: workspace.pushRemote,
+            target?.branch,
+            workspace.tagMessagePrefix,
+            workspace.tagMode,
+        )
     }
 }

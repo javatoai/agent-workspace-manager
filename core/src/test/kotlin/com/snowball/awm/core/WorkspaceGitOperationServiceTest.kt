@@ -38,6 +38,34 @@ class WorkspaceGitOperationServiceTest {
         assertTrue(GitTestSupport.run(checkout, "ls-remote", "--heads", "origin", "refs/heads/feature/ops").contains("refs/heads/feature/ops"))
         assertEquals("origin/feature/ops", GitTestSupport.run(checkout, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"))
     }
+
+    @Test
+    fun `commit and push rechecks write policy immediately before push`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("git-policy-after-commit"))
+        val checkout = GitTestSupport.clone(remote, temporary.resolve("git-policy-after-commit/checkout"))
+        GitTestSupport.run(checkout, "switch", "-c", "feature/protected-after-commit")
+        Files.writeString(checkout.resolve("change.txt"), "change")
+        val workspace = workspace(checkout, remote, "feature/protected-after-commit", "service")
+        val blocked = mutableListOf<String>()
+        val delegate = ProcessCommandRunner()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                val result = delegate.run(command, workingDirectory, timeout, environment)
+                if (result.succeeded && "commit" in command) blocked += "feature/protected-after-commit"
+                return result
+            }
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            WorkspaceGitOperationService(GitClient(runner)).commitAndPush(
+                workspace,
+                "feat: policy changes after commit",
+                blockedBranches = blocked,
+            )
+        }
+
+        assertTrue(GitTestSupport.run(checkout, "ls-remote", "--heads", "origin", "refs/heads/feature/protected-after-commit").isBlank())
+    }
     @Test
     fun `commit template replaces requirement number and normalizes whitespace`() {
         assertEquals("feat: 7019951954 完成开发", CommitMessageTemplate.render("feat: {num}  完成开发", "https://project/detail/7019951954"))
@@ -218,6 +246,121 @@ class WorkspaceGitOperationServiceTest {
         assertTrue(result.items[1].message.contains("状态已变化"))
         assertEquals("1", GitTestSupport.run(checkoutB, "rev-list", "--count", "HEAD"))
         assertTrue(GitTestSupport.run(checkoutB, "status", "--porcelain").contains("late.txt"))
+    }
+
+    @Test
+    fun `batch rechecks write policy inside repository lock before writing`() {
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-policy-race"))
+        val checkout = GitTestSupport.clone(remote, temporary.resolve("batch-policy-race/checkout"))
+        GitTestSupport.run(checkout, "switch", "-c", "feature/protected")
+        Files.writeString(checkout.resolve("change.txt"), "change")
+        val workspace = workspace(checkout, remote, "feature/protected", "service")
+        val iterations = AtomicBoolean()
+        val policyChangesAfterPreflight = object : AbstractCollection<String>() {
+            override val size: Int get() = if (iterations.get()) 1 else 0
+            override fun iterator(): Iterator<String> =
+                if (iterations.compareAndSet(false, true)) emptyList<String>().iterator()
+                else listOf("feature/protected").iterator()
+        }
+
+        val result = WorkspaceGitOperationService().batch(
+            listOf(workspace),
+            WorkspaceGitBatchMode.COMMIT,
+            commitMessages = mapOf(WorkspaceGitOperationService.workspacePathKey(workspace) to "feat: blocked"),
+            blockedBranches = policyChangesAfterPreflight,
+        )
+
+        assertEquals(WorkspaceGitStepState.FAILED, result.items.single().commitState)
+        assertTrue(result.items.single().message.contains("Git 写保护"))
+        assertEquals("1", GitTestSupport.run(checkout, "rev-list", "--count", "HEAD"))
+        assertTrue(GitTestSupport.run(checkout, "status", "--porcelain").contains("change.txt"))
+    }
+
+    @Test
+    fun `batch push refuses a head changed after confirmation`() {
+        val (remoteA, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-push-race-a"))
+        val (remoteB, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-push-race-b"))
+        val checkoutA = GitTestSupport.clone(remoteA, temporary.resolve("batch-push-race-a/checkout"))
+        val checkoutB = GitTestSupport.clone(remoteB, temporary.resolve("batch-push-race-b/checkout"))
+        GitTestSupport.run(checkoutA, "switch", "-c", "feature/a")
+        GitTestSupport.run(checkoutB, "switch", "-c", "feature/b")
+        val workspaceA = workspace(checkoutA, remoteA, "feature/a", "service-a")
+        val workspaceB = workspace(checkoutB, remoteB, "feature/b", "service-b")
+        val delegate = ProcessCommandRunner()
+        val changedSecond = AtomicBoolean()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                if ("push" in command && checkoutA.toString() in command && changedSecond.compareAndSet(false, true)) {
+                    Files.writeString(checkoutB.resolve("late.txt"), "late")
+                    GitTestSupport.run(checkoutB, "add", "late.txt")
+                    GitTestSupport.run(checkoutB, "commit", "-m", "late external commit")
+                }
+                return delegate.run(command, workingDirectory, timeout, environment)
+            }
+        }
+        val service = WorkspaceGitOperationService(
+            git = GitClient(runner),
+            repositoryLock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("batch-push-race-home"))),
+        )
+        val previewA = service.preview(workspaceA)
+        val previewB = service.preview(workspaceB)
+
+        val result = service.batch(
+            listOf(workspaceA, workspaceB),
+            WorkspaceGitBatchMode.PUSH,
+            expectedFingerprints = mapOf(
+                WorkspaceGitOperationService.workspacePathKey(workspaceA) to previewA.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(workspaceB) to previewB.fingerprint,
+            ),
+        )
+
+        assertEquals(WorkspaceGitStepState.FAILED, result.items[1].pushState)
+        assertTrue(result.items[1].message.contains("状态已变化"))
+        assertTrue(GitTestSupport.run(checkoutB, "ls-remote", "--heads", "origin", "refs/heads/feature/b").isBlank())
+    }
+
+    @Test
+    fun `batch commit and push rechecks a clean workspace before push`() {
+        val (remoteA, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-clean-cp-race-a"))
+        val (remoteB, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-clean-cp-race-b"))
+        val checkoutA = GitTestSupport.clone(remoteA, temporary.resolve("batch-clean-cp-race-a/checkout"))
+        val checkoutB = GitTestSupport.clone(remoteB, temporary.resolve("batch-clean-cp-race-b/checkout"))
+        GitTestSupport.run(checkoutA, "switch", "-c", "feature/a")
+        GitTestSupport.run(checkoutB, "switch", "-c", "feature/b")
+        val workspaceA = workspace(checkoutA, remoteA, "feature/a", "service-a")
+        val workspaceB = workspace(checkoutB, remoteB, "feature/b", "service-b")
+        val delegate = ProcessCommandRunner()
+        val changedSecond = AtomicBoolean()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                if ("push" in command && checkoutA.toString() in command && changedSecond.compareAndSet(false, true)) {
+                    Files.writeString(checkoutB.resolve("late.txt"), "late")
+                    GitTestSupport.run(checkoutB, "add", "late.txt")
+                    GitTestSupport.run(checkoutB, "commit", "-m", "late external commit")
+                }
+                return delegate.run(command, workingDirectory, timeout, environment)
+            }
+        }
+        val service = WorkspaceGitOperationService(
+            git = GitClient(runner),
+            repositoryLock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("batch-clean-cp-race-home"))),
+        )
+        val previewA = service.preview(workspaceA)
+        val previewB = service.preview(workspaceB)
+
+        val result = service.batch(
+            listOf(workspaceA, workspaceB),
+            WorkspaceGitBatchMode.COMMIT_AND_PUSH,
+            expectedFingerprints = mapOf(
+                WorkspaceGitOperationService.workspacePathKey(workspaceA) to previewA.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(workspaceB) to previewB.fingerprint,
+            ),
+        )
+
+        assertEquals(WorkspaceGitStepState.SKIPPED, result.items[1].commitState)
+        assertEquals(WorkspaceGitStepState.FAILED, result.items[1].pushState)
+        assertTrue(result.items[1].message.contains("状态已变化"))
+        assertTrue(GitTestSupport.run(checkoutB, "ls-remote", "--heads", "origin", "refs/heads/feature/b").isBlank())
     }
 
     private fun workspace(path: Path, remote: Path, branch: String, service: String) = ServiceWorkspace(

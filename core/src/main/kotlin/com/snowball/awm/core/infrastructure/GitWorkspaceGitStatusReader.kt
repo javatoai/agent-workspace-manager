@@ -126,6 +126,8 @@ class GitWorkspaceGitStatusReader(
         Files.exists(gitDirectory.resolve("rebase-apply")) -> "rebase"
         Files.exists(gitDirectory.resolve("CHERRY_PICK_HEAD")) -> "cherry-pick"
         Files.exists(gitDirectory.resolve("REVERT_HEAD")) -> "revert"
+        Files.exists(gitDirectory.resolve("BISECT_LOG")) -> "bisect"
+        Files.exists(gitDirectory.resolve("BISECT_START")) -> "bisect"
         else -> null
     }
 }

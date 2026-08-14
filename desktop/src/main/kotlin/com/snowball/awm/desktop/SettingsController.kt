@@ -18,6 +18,8 @@ import com.snowball.awm.core.MeegleProjectSummary
 import com.snowball.awm.core.LocalGitEnvironmentInspector
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
 import com.snowball.awm.core.RemoteBranchCatalog
+import com.snowball.awm.core.RepositoryRemoteCatalog
+import com.snowball.awm.core.GitRepositoryRemoteCatalog
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.WorkspaceStrategy
@@ -35,6 +37,7 @@ import java.nio.file.Path
 data class SettingsUiState(
     val config: AppConfig,
     val remoteBranches: Map<String, RemoteBranchesState>,
+    val repositoryRemotes: Map<String, RepositoryRemotesState>,
     val repositoryAddResult: BatchRepositoryAddResult?,
     val pathPickerBusy: Boolean,
     val meegleProjects: MeegleProjectCatalogState,
@@ -66,6 +69,13 @@ sealed interface LocalGitSettingsState {
     data class Failed(val message: String) : LocalGitSettingsState
 }
 
+sealed interface RepositoryRemotesState {
+    data object Idle : RepositoryRemotesState
+    data object Loading : RepositoryRemotesState
+    data class Loaded(val remotes: List<String>) : RepositoryRemotesState
+    data class Failed(val message: String) : RepositoryRemotesState
+}
+
 /** Configuration and repository use cases with no dependency on DesktopApplication. */
 class SettingsController internal constructor(
     private val session: AppSessionStore,
@@ -73,6 +83,7 @@ class SettingsController internal constructor(
     private val groups: GroupConfigurationService,
     private val pathPicker: NativePathPicker,
     private val branchCatalog: RemoteBranchCatalog,
+    private val remoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(),
     private val meegleProjectCatalog: MeegleProjectCatalog,
     private val meegleCliService: MeegleCliService,
     private val localGitInspector: LocalGitEnvironmentInspector,
@@ -88,6 +99,7 @@ class SettingsController internal constructor(
 ) {
     private val remoteBranchJobs = mutableMapOf<String, Job>()
     private var remoteBranches by mutableStateOf<Map<String, RemoteBranchesState>>(emptyMap())
+    private var repositoryRemotes by mutableStateOf<Map<String, RepositoryRemotesState>>(emptyMap())
     private var repositoryAddResult by mutableStateOf<BatchRepositoryAddResult?>(null)
     private var pathPickerBusy by mutableStateOf(false)
     private var meegleProjects by mutableStateOf<MeegleProjectCatalogState>(MeegleProjectCatalogState.Idle)
@@ -98,7 +110,7 @@ class SettingsController internal constructor(
     private var saveStates by mutableStateOf<Map<String, SettingsSaveState>>(emptyMap())
 
     val state: SettingsUiState
-        get() = SettingsUiState(session.config, remoteBranches, repositoryAddResult, pathPickerBusy, meegleProjects, meegleCli, localGit, saveStates)
+        get() = SettingsUiState(session.config, remoteBranches, repositoryRemotes, repositoryAddResult, pathPickerBusy, meegleProjects, meegleCli, localGit, saveStates)
 
     fun saveState(key: String): SettingsSaveState = saveStates[key] ?: SettingsSaveState.IDLE
 
@@ -160,6 +172,18 @@ class SettingsController internal constructor(
         val normalized = branches.map(String::trim).filter(String::isNotEmpty)
         require(normalized.distinct().size == normalized.size) { "不展示分支名不能重复" }
         config.copy(hiddenTaskDetailBranches = normalized)
+    }
+
+    fun updateBlockedGitWriteBranches(branches: List<String>, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 Git 写保护分支…",
+        "Git 写保护已保存",
+        onFailure,
+        "git-write-policy",
+        settingsOperations,
+    ) { config ->
+        val normalized = branches.map(String::trim).filter(String::isNotEmpty)
+        require(normalized.map(String::lowercase).distinct().size == normalized.size) { "Git 写保护分支不能重复（忽略大小写）" }
+        config.copy(blockedGitWriteBranches = normalized)
     }
 
     fun refreshLocalGit(force: Boolean = false) {
@@ -264,6 +288,24 @@ class SettingsController internal constructor(
         }
         remoteBranchJobs[key] = job
     }
+
+    fun loadRepositoryRemotes(repositoryId: String, force: Boolean = false) {
+        if (!force && repositoryRemotes[repositoryId] is RepositoryRemotesState.Loading) return
+        if (!force && repositoryRemotes[repositoryId] is RepositoryRemotesState.Loaded) return
+        val repository = session.config.repositories.firstOrNull { it.id == repositoryId }
+            ?: return showError(IllegalArgumentException("找不到仓库：$repositoryId"))
+        repositoryRemotes = repositoryRemotes + (repositoryId to RepositoryRemotesState.Loading)
+        scope.launch {
+            val result = runCatching { runInterruptible(ioDispatcher) { remoteCatalog.list(Path.of(repository.rootPath)) } }
+            repositoryRemotes = repositoryRemotes + (repositoryId to result.fold(
+                onSuccess = RepositoryRemotesState::Loaded,
+                onFailure = { RepositoryRemotesState.Failed(it.message ?: "Git 远程加载失败") },
+            ))
+        }
+    }
+
+    fun repositoryRemotesState(repositoryId: String): RepositoryRemotesState =
+        repositoryRemotes[repositoryId] ?: RepositoryRemotesState.Idle
 
     fun cancelRemoteBranchLoads() {
         remoteBranchJobs.values.forEach(Job::cancel)

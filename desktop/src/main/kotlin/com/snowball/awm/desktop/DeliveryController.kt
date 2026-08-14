@@ -36,11 +36,10 @@ class DeliveryController internal constructor(
     fun canBuild(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
         val group = session.config.groups.firstOrNull { it.id == task.groupId } ?: return false
         if (!group.tagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
-        val service = group.services.firstOrNull { it.id == workspace.groupServiceId } ?: return false
-        return when (service.strategy) {
-            WorkspaceStrategy.STANDARD_WORKTREE -> service.modules.firstOrNull { it.id == workspace.moduleId }?.tagEnabled == true
-            WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.firstOrNull { it.id == workspace.moduleId }?.tagEnabled == true
-        }
+        if (!workspace.tagEnabled) return false
+        // The read-only Tag preflight determines whether a branch write is needed.
+        // Core policy enforcement runs after that preflight and before every write.
+        return true
     }
 
     fun build(task: TaskManifest, workspace: ServiceWorkspace): Boolean = operations.run(

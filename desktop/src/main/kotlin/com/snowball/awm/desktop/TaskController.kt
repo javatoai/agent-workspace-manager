@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.awm.core.AddGroupedTaskServicesRequest
+import com.snowball.awm.core.AddTaskModulesRequest
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.BranchReuseConflict
 import com.snowball.awm.core.BranchReuseKey
@@ -17,6 +18,7 @@ import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskApplicationService
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.TaskServiceSelection
 import com.snowball.awm.core.TaskBranchCatalog
 import com.snowball.awm.core.TaskBranchCatalogResult
 import com.snowball.awm.core.TaskBranchCatalogProgress
@@ -31,6 +33,9 @@ import com.snowball.awm.core.WorkspaceGitChangePreview
 import com.snowball.awm.core.WorkspaceRepairConfirmation
 import com.snowball.awm.core.WorkspaceRepairPreview
 import com.snowball.awm.core.WorkspaceRepairResult
+import com.snowball.awm.core.WorkspaceModuleRemovalConfirmation
+import com.snowball.awm.core.WorkspaceModuleRemovalPreview
+import com.snowball.awm.core.WorkspaceModuleRemovalResult
 import com.snowball.awm.core.CommitMessageTemplate
 import com.snowball.awm.core.EventSink
 import com.snowball.awm.core.NoOpEventSink
@@ -177,12 +182,12 @@ class TaskController internal constructor(
         notes: String,
         toolIds: List<String>,
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
         onCompleted: () -> Unit = {},
     ): Boolean = operations.run("正在创建任务…", "任务已创建", cancellable = true, block = {
         val created = tasks.create(
             session.config,
-            CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, confirmedBranchReuseKeys, baseOverrides),
+            CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, confirmedBranchReuseKeys, serviceSelections = serviceSelections),
         )
         workspaceTools.launch(taskDirectory(session.config, created), created, toolIds)
     }, onSuccess = { created ->
@@ -238,14 +243,14 @@ class TaskController internal constructor(
         task: TaskManifest,
         serviceIds: List<String>,
         confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
         onCompleted: () -> Unit = {},
     ): Boolean =
         operations.run("正在追加服务…", "服务已追加", cancellable = true, block = {
             tasks.addServices(
                 session.config,
                 taskDirectory(task),
-                AddGroupedTaskServicesRequest(serviceIds, confirmedBranchReuseKeys, baseOverrides),
+                AddGroupedTaskServicesRequest(serviceIds, confirmedBranchReuseKeys, serviceSelections = serviceSelections),
             )
         }, onSuccess = { reloadTasks(it.folderName); onCompleted() })
 
@@ -256,7 +261,7 @@ class TaskController internal constructor(
         serviceIds: List<String>,
         link: String,
         notes: String,
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
         onResolved: (List<BranchReuseConflict>) -> Unit,
         onFinished: () -> Unit,
     ): Boolean {
@@ -267,7 +272,7 @@ class TaskController internal constructor(
                 runCatching {
                     tasks.inspectCreateBranchReuse(
                         config,
-                        CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, baseOverrides = baseOverrides),
+                        CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, serviceSelections = serviceSelections),
                     )
                 }
             }
@@ -280,7 +285,7 @@ class TaskController internal constructor(
     fun inspectAddServicesBranchReuse(
         task: TaskManifest,
         serviceIds: List<String>,
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
         onResolved: (List<BranchReuseConflict>) -> Unit,
         onFinished: () -> Unit,
     ): Boolean {
@@ -290,7 +295,7 @@ class TaskController internal constructor(
         scope.launch {
             val result = withContext(ioDispatcher) {
                 runCatching {
-                    tasks.inspectAddServicesBranchReuse(config, directory, AddGroupedTaskServicesRequest(serviceIds, baseOverrides = baseOverrides))
+                    tasks.inspectAddServicesBranchReuse(config, directory, AddGroupedTaskServicesRequest(serviceIds, serviceSelections = serviceSelections))
                 }
             }
             result.onSuccess(onResolved).onFailure(onError)
@@ -298,6 +303,71 @@ class TaskController internal constructor(
         }
         return true
     }
+
+    fun inspectAddModulesBranchReuse(
+        task: TaskManifest,
+        request: AddTaskModulesRequest,
+        onResolved: (List<BranchReuseConflict>) -> Unit,
+        onFinished: () -> Unit,
+    ): Boolean {
+        if (isBusy()) return false
+        val config = session.config
+        val directory = taskDirectory(task)
+        scope.launch {
+            val result = withContext(ioDispatcher) { runCatching { tasks.inspectAddModulesBranchReuse(config, directory, request) } }
+            result.onSuccess(onResolved).onFailure(onError)
+            onFinished()
+        }
+        return true
+    }
+
+    fun addModules(task: TaskManifest, request: AddTaskModulesRequest, onCompleted: () -> Unit = {}): Boolean =
+        operations.run("正在添加模块…", "模块已添加", cancellable = true, block = {
+            tasks.addModules(session.config, taskDirectory(task), request)
+        }, onSuccess = { reloadTasks(it.folderName); onCompleted() })
+
+    fun inspectModuleRemoval(
+        task: TaskManifest,
+        workspace: ServiceWorkspace,
+        onResolved: (WorkspaceModuleRemovalPreview) -> Unit,
+        onFinished: () -> Unit,
+    ): Boolean {
+        if (isBusy()) return false
+        val config = session.config
+        val directory = taskDirectory(task)
+        scope.launch {
+            val result = withContext(ioDispatcher) {
+                runCatching { tasks.inspectModuleRemoval(config, directory, workspaceKey(workspace)) }
+            }
+            result.onSuccess(onResolved).onFailure(onError)
+            onFinished()
+        }
+        return true
+    }
+
+    fun removeModule(
+        task: TaskManifest,
+        preview: WorkspaceModuleRemovalPreview,
+        acknowledgeDataLoss: Boolean,
+        onCompleted: (WorkspaceModuleRemovalResult) -> Unit = {},
+    ): Boolean = operations.run("正在删除模块…", "模块已删除", block = {
+        tasks.removeModule(
+            session.config,
+            taskDirectory(task),
+            preview,
+            WorkspaceModuleRemovalConfirmation(preview.fingerprint, acknowledgeDataLoss),
+        )
+    }, onSuccess = { result ->
+        reloadTasks(result.manifest.folderName)
+        onCompleted(result)
+        result.cleanupError?.let { message ->
+            onError(
+                IllegalStateException(
+                    "$message\n模块已从任务中移除，但临时备份未能清理：${result.retainedBackupPath.orEmpty()}",
+                ),
+            )
+        }
+    })
 
     fun retry(task: TaskManifest, serviceIds: List<String>? = null): Boolean =
         operations.run("正在重试失败服务…", "失败服务已重试", cancellable = true, block = {
@@ -425,13 +495,14 @@ class TaskController internal constructor(
             if (pushAfter) "正在提交并推送 ${workspace.operationLabel()}…" else "正在提交 ${workspace.operationLabel()}…",
             if (pushAfter) "提交并推送完成" else "提交完成",
             block = {
-                if (pushAfter) gitOperations.commitAndPush(workspace, message, expectedFingerprint) else gitOperations.commit(workspace, message, expectedFingerprint)
+                if (pushAfter) gitOperations.commitAndPush(workspace, message, expectedFingerprint, session.config.blockedGitWriteBranches)
+                else gitOperations.commit(workspace, message, expectedFingerprint, session.config.blockedGitWriteBranches)
             },
             onSuccess = { refreshGitStatus() },
         )
 
     fun push(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
-        operations.run("正在推送 ${workspace.operationLabel()}…", "推送完成", block = { gitOperations.push(workspace) }, onSuccess = { refreshGitStatus() })
+        operations.run("正在推送 ${workspace.operationLabel()}…", "推送完成", block = { gitOperations.push(workspace, session.config.blockedGitWriteBranches) }, onSuccess = { refreshGitStatus() })
 
     fun physicalWorkspaces(task: TaskManifest): List<ServiceWorkspace> =
         task.services.distinctBy(WorkspaceGitOperationService::workspacePathKey)
@@ -475,6 +546,7 @@ class TaskController internal constructor(
                 mode,
                 commitMessages.filterKeys(selectedWorkspaceKeys::contains),
                 expectedFingerprints.filterKeys(selectedWorkspaceKeys::contains),
+                session.config.blockedGitWriteBranches,
             )
         },
         onSuccess = { result -> refreshGitStatus(); onCompleted(result) },
@@ -496,7 +568,7 @@ class TaskController internal constructor(
             return LoadedTaskSnapshot(emptyList(), "任务目录扫描失败：${error.message ?: error::class.simpleName}")
         }
         val messages = buildList {
-            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.7.x 任务目录")
+            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.8.x 任务目录")
             if (scan.failures.isNotEmpty()) {
                 add("${scan.failures.size} 个任务清单读取失败：" + scan.failures.entries.joinToString { (path, reason) -> "${path.fileName}：$reason" })
             }

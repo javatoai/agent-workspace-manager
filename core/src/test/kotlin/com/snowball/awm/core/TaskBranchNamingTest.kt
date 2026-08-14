@@ -124,8 +124,8 @@ class TaskBranchNamingTest {
     @Test
     fun `base ref qualification does not replace the configured module suffix`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "release", name = "release", baseRef = "release/test"),
-            ServiceModuleConfig(id = "master", name = "master", baseRef = "refs/heads/master"),
+            ServiceModuleConfig(id = "release", name = "release", baseRef = "origin/release/test"),
+            ServiceModuleConfig(id = "master", name = "master", baseRef = "origin/master"),
         )
 
         assertEquals(

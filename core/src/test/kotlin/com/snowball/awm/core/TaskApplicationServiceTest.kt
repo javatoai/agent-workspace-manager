@@ -64,16 +64,269 @@ class TaskApplicationServiceTest {
         )
 
         assertEquals("alpha", manifest.groupId)
-        assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.strategy })
+        assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.modules.single().strategy })
         assertEquals("upstream/develop", standard.requests.single().service.modules.single().baseRef)
         assertEquals("upstream", standard.requests.single().service.modules.single().baseRemote)
         assertEquals(mapOf("default" to "feature/custom-standard"), standard.requests.single().moduleBranches)
-        assertEquals("origin/release/test", clone.requests.single().service.cloneModules.single().branch)
+        assertEquals("origin/release/test", clone.requests.single().service.modules.single().baseRef)
         assertEquals(2, manifest.services.size)
         assertEquals("2026-08-08 08:00:00", manifest.createdAt)
         assertEquals("2026-08-08 08:00:00", manifest.updatedAt)
         assertEquals("only edit the API module", documents.lastNotes)
         assertTrue(Files.exists(root.resolve("TASK-20").resolve(ManifestStore.FILE_NAME)))
+    }
+
+    @Test
+    fun `task selection supports mixed dynamic modules and an empty clone target`() {
+        val root = Files.createTempDirectory("task-mixed-selection-")
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val clone = RecordingProvisioner(WorkspaceStrategy.INDEPENDENT_CLONE)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(standard, clone)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        val manifest = application.create(
+            taskConfig(root),
+            CreateGroupedTaskRequest(
+                folderName = "TASK-MIXED",
+                featureBranch = "feature/mixed",
+                groupId = "alpha",
+                serviceIds = listOf("standard"),
+                serviceSelections = listOf(
+                    TaskServiceSelection(
+                        "standard",
+                        listOf(
+                            TaskModuleSelection("default", "default", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/mixed-default"),
+                            TaskModuleSelection("docs", "docs", WorkspaceStrategy.INDEPENDENT_CLONE, "origin/master", targetBranch = "", source = TaskModuleSource.TEMPORARY),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.modules.single().strategy })
+        assertEquals(listOf(WorkspaceStrategy.INDEPENDENT_CLONE), clone.requests.map { it.service.modules.single().strategy })
+        assertEquals("", clone.requests.single().moduleBranches.getValue("docs"))
+        assertEquals(2, manifest.services.size)
+    }
+
+    @Test
+    fun `create rejects module directories colliding across different services`() {
+        val root = Files.createTempDirectory("task-directory-collision-")
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val clone = RecordingProvisioner(WorkspaceStrategy.INDEPENDENT_CLONE)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(standard, clone)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val config = AppConfig(
+            taskRoot = root.toString(),
+            repositories = listOf(
+                RepositoryConfig("repo-a", "A", "C:/repo-a", "C:/repo-a/.git", "https://example.test/a.git"),
+                RepositoryConfig("repo-b", "B", "C:/repo-b", "C:/repo-b/.git", "https://example.test/b.git"),
+            ),
+            groups = listOf(
+                GroupConfig(
+                    "alpha",
+                    "Alpha",
+                    services = listOf(
+                        GroupServiceConfig.standard("service-a", "repo-a", "Shared"),
+                        GroupServiceConfig.standard("service-b", "repo-b", "shared"),
+                    ),
+                ),
+            ),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            application.create(
+                config,
+                CreateGroupedTaskRequest("TASK-COLLISION", "feature/collision", "alpha", listOf("service-a", "service-b")),
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("工作区目录"))
+        assertTrue(standard.requests.isEmpty())
+        assertTrue(!Files.exists(root.resolve("TASK-COLLISION")))
+    }
+
+    @Test
+    fun `adding a module rejects existing module name and directory aliases`() {
+        val root = Files.createTempDirectory("task-add-module-name-")
+        val taskDirectory = root.resolve("TASK")
+        val store = ManifestStore()
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = "repo-a",
+                        serviceName = "Repo A",
+                        repositoryPath = "C:/repo-a",
+                        worktreePath = taskDirectory.resolve("Repo-A-api-core").toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/task-api-core",
+                        groupServiceId = "standard",
+                        moduleId = "existing",
+                        moduleName = "api/core",
+                        baseRef = "origin/master",
+                        targetBranch = "feature/task-api-core",
+                    ),
+                    ServiceWorkspace(
+                        repositoryId = "repo-b",
+                        serviceName = "Repo B",
+                        repositoryPath = "C:/repo-b",
+                        worktreePath = taskDirectory.resolve("Repo-B-keep").toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/task-keep",
+                        groupServiceId = "clone",
+                        moduleId = "keep",
+                        moduleName = "keep",
+                        strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                        originUrl = "https://example.test/b.git",
+                        baseRef = "origin/master",
+                    ),
+                ),
+            ),
+        )
+        val application = TaskApplicationService(manifests = store, operationLock = NoOpTaskOperationLock)
+        val sameName = AddTaskModulesRequest(
+            "standard",
+            listOf(TaskModuleSelection("new-id", "API/CORE", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/new")),
+        )
+        val sameDirectory = AddTaskModulesRequest(
+            "standard",
+            listOf(TaskModuleSelection("other-id", "api-core", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/other")),
+        )
+
+        assertFailsWith<IllegalArgumentException> { application.inspectAddModulesBranchReuse(taskConfig(root), taskDirectory, sameName) }
+        assertFailsWith<IllegalArgumentException> { application.inspectAddModulesBranchReuse(taskConfig(root), taskDirectory, sameDirectory) }
+    }
+
+    @Test
+    fun `adding a module rejects a directory used by another service`() {
+        val root = Files.createTempDirectory("task-add-cross-service-directory-")
+        val taskDirectory = root.resolve("TASK")
+        val store = ManifestStore()
+        val config = taskConfig(root)
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = "repo-b",
+                        serviceName = "Other",
+                        repositoryPath = "C:/repo-b",
+                        worktreePath = taskDirectory.resolve("Repo-A-new").toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/other",
+                        groupServiceId = "clone",
+                        moduleId = "other",
+                        moduleName = "other",
+                        strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                        originUrl = "https://example.test/b.git",
+                        baseRef = "origin/master",
+                    ),
+                    ServiceWorkspace(
+                        repositoryId = "repo-a",
+                        serviceName = "Repo A",
+                        repositoryPath = "C:/repo-a",
+                        worktreePath = taskDirectory.resolve("Repo-A-existing").toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/existing",
+                        groupServiceId = "standard",
+                        moduleId = "existing",
+                        moduleName = "existing",
+                        baseRef = "origin/master",
+                        targetBranch = "feature/existing",
+                    ),
+                ),
+            ),
+        )
+        val application = TaskApplicationService(manifests = store, operationLock = NoOpTaskOperationLock)
+        val request = AddTaskModulesRequest(
+            "standard",
+            listOf(TaskModuleSelection("new", "new", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/new")),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            application.inspectAddModulesBranchReuse(config, taskDirectory, request)
+        }
+    }
+
+    @Test
+    fun `adding a module compares names with the task snapshot rather than stale service defaults`() {
+        val root = Files.createTempDirectory("task-add-renamed-module-")
+        val taskDirectory = root.resolve("TASK")
+        val store = ManifestStore()
+        val config = taskConfig(root)
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = "repo-a",
+                        serviceName = "Repo A",
+                        repositoryPath = "C:/repo-a",
+                        worktreePath = taskDirectory.resolve("Repo-A-custom").toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/custom",
+                        groupServiceId = "standard",
+                        moduleId = "default",
+                        moduleName = "custom",
+                        baseRef = "origin/master",
+                        targetBranch = "feature/custom",
+                    ),
+                ),
+            ),
+        )
+        val provisioner = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            manifests = store,
+            provisioning = WorkspaceProvisioningService(listOf(provisioner)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        val updated = application.addModules(
+            config,
+            taskDirectory,
+            AddTaskModulesRequest(
+                "standard",
+                listOf(
+                    TaskModuleSelection(
+                        id = "new-default",
+                        name = "default",
+                        strategy = WorkspaceStrategy.STANDARD_WORKTREE,
+                        baseRef = "origin/master",
+                        targetBranch = "feature/default",
+                        source = TaskModuleSource.TEMPORARY,
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("custom", "default"), updated.services.map(ServiceWorkspace::moduleName))
     }
 
     @Test
@@ -148,7 +401,7 @@ class TaskApplicationServiceTest {
 
         assertEquals(listOf("clone"), updated.services.map(ServiceWorkspace::groupServiceId))
         assertEquals("feature/task-20", clone.requests.single().requestedFeatureBranch)
-        assertEquals("origin/master", clone.requests.single().service.cloneModules.single().branch)
+        assertEquals("origin/master", clone.requests.single().service.modules.single().baseRef)
         assertEquals("2026-08-08 09:02:03", updated.updatedAt)
         assertEquals(null, documents.lastNotes)
     }
@@ -348,8 +601,9 @@ private class RecordingLifecycle : WorkspaceLifecycle {
     var restoreCalls = 0
     override fun inspectDeleteRisks(config: AppConfig, taskDirectory: Path, manifest: TaskManifest) = emptyList<DeleteRisk>()
     override fun requireArchiveSafe(config: AppConfig, taskDirectory: Path, manifest: TaskManifest, force: Boolean) = Unit
-    override fun removeAll(config: AppConfig, taskDirectory: Path, manifest: TaskManifest, force: Boolean) {
+    override fun removeAll(config: AppConfig, taskDirectory: Path, manifest: TaskManifest, force: Boolean): WorkspaceRemovalResult {
         removeCalls++
+        return WorkspaceRemovalResult()
     }
     override fun restoreAll(config: AppConfig, taskDirectory: Path, manifest: TaskManifest): List<ServiceWorkspace> {
         restoreCalls++
@@ -381,9 +635,7 @@ private fun taskConfig(taskRoot: Path): AppConfig {
                         id = "clone",
                         repositoryId = "repo-b",
                         displayName = "Repo B",
-                        strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                        modules = emptyList(),
-                        cloneModules = listOf(IndependentCloneModuleConfig("clone", branch = "origin/master")),
+                        modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master")),
                     ),
                 ),
             ),
@@ -408,10 +660,18 @@ private class RecordingProvisioner(
                 repositoryPath = request.repository.rootPath,
                 worktreePath = request.taskDirectory.resolve(request.service.id).toString(),
                 developmentTool = request.service.developmentTool,
-                branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.cloneModules.first().branch.removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
+                branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.modules.first().baseRef.removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
                 health = WorkspaceHealth.READY,
                 groupServiceId = request.service.id,
+                moduleId = request.service.modules.single().id,
+                moduleName = request.service.modules.single().name,
                 strategy = strategy,
+                baseRef = request.service.modules.single().baseRef,
+                targetBranch = request.moduleBranches[request.service.modules.single().id],
+                tagEnabled = request.service.modules.single().tagEnabled,
+                tagMode = request.service.modules.single().tagMode,
+                tagTargetRef = request.service.modules.single().tagTargetRef,
+                tagMessagePrefix = request.service.modules.single().tagMessagePrefix,
             ),
         )
     }

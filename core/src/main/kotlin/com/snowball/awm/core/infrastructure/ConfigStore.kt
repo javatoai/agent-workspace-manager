@@ -1,9 +1,6 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -62,7 +59,6 @@ class ConfigStore(
     override fun load(): AppConfig {
         if (!exists()) return AppConfig()
         val content = Files.readString(paths.config)
-        rejectRemovedSourceRepositoryStrategy(content, "配置文件提示：不再支持原仓库分支，请手工修改配置")
         val version = json.parseToJsonElement(content)
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
@@ -70,8 +66,7 @@ class ConfigStore(
         if (!SchemaVersionCompatibility.isCompatible(version, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
             throw UnsupportedConfigVersionException(version)
         }
-        return json.decodeFromJsonElement<AppConfig>(normalizeEarly07Config(json.parseToJsonElement(content)))
-            .normalizeLegacyTagDefaults()
+        return json.decodeFromJsonElement<AppConfig>(json.parseToJsonElement(content))
     }
 
     override fun save(config: AppConfig) = withMutationLock {
@@ -174,7 +169,7 @@ class ConfigStore(
         if (!SchemaVersionCompatibility.isCompatible(version, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
             throw UnsupportedConfigVersionException(version)
         }
-        return json.decodeFromJsonElement<AppConfig>(normalizeEarly07Config(element)).normalizeLegacyTagDefaults()
+        return json.decodeFromJsonElement<AppConfig>(element)
     }
 
     private fun moveAtomically(source: Path, target: Path) {
@@ -210,52 +205,3 @@ internal fun rejectRemovedSourceRepositoryStrategy(content: String, message: Str
         throw IllegalStateException(message)
     }
 }
-
-/** Removes fields written by early 0.7 builds that were withdrawn before the stable schema. */
-internal fun normalizeEarly07Config(element: JsonElement): JsonElement = when (element) {
-    is JsonObject -> JsonObject(
-        element.filterKeys {
-            it !in setOf("autoOpenServicesAfterTaskCreation", "initialTag", "initialUatTag")
-        }.mapValues { (key, value) ->
-            if (key == "bootstrap") stripPlatformsFromBootstrap(value) else normalizeEarly07Config(value)
-        },
-    )
-    is JsonArray -> JsonArray(element.map(::normalizeEarly07Config))
-    else -> element
-}
-
-private fun stripPlatformsFromBootstrap(element: JsonElement): JsonElement {
-    if (element !is JsonObject) return element
-    return JsonObject(
-        element.mapValues { (key, value) ->
-            if (key == "commands" && value is JsonArray) {
-                JsonArray(value.map { command ->
-                    if (command is JsonObject) {
-                        JsonObject(command.filterKeys { it != "platforms" })
-                    } else {
-                        command
-                    }
-                })
-            } else {
-                value
-            }
-        },
-    )
-}
-
-private fun AppConfig.normalizeLegacyTagDefaults(): AppConfig = copy(
-    groups = groups.map { group ->
-        group.copy(
-            services = group.services.map { service ->
-                service.copy(
-                    modules = service.modules.map { module ->
-                        if (module.tagMessagePrefix == "UAT") module.copy(tagMessagePrefix = "Tag") else module
-                    },
-                    cloneModules = service.cloneModules.map { module ->
-                        if (module.tagMessagePrefix == "UAT") module.copy(tagMessagePrefix = "Tag") else module
-                    },
-                )
-            },
-        )
-    },
-)

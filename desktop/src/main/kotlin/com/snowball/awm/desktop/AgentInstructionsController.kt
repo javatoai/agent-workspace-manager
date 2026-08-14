@@ -13,6 +13,8 @@ import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.AwmTime
 import com.snowball.awm.core.ModuleDisplayNaming
 import com.snowball.awm.core.ModuleBaseOverride
+import com.snowball.awm.core.TaskServiceSelection
+import com.snowball.awm.core.TaskModuleSelection
 import com.snowball.awm.core.RemoteBranchRef
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.ServiceWorkspace
@@ -136,7 +138,7 @@ class AgentInstructionsController internal constructor(
         serviceIds: Set<String>,
         requirementLink: String,
         notes: String,
-        baseOverrides: List<ModuleBaseOverride> = emptyList(),
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
     ): String {
         val config = session.config
         val root = config.taskRoot?.let(Path::of) ?: paths.temp
@@ -146,43 +148,32 @@ class AgentInstructionsController internal constructor(
         val now = AwmTime.format(Instant.now())
         val directory = root.resolve(directoryName)
         val repositories = config.repositories.associateBy(RepositoryConfig::id)
-        val overridesByModule = baseOverrides.associateBy { "${it.serviceId}::${it.moduleId}" }
+        val selectionsByService = serviceSelections.associateBy(TaskServiceSelection::serviceId)
         val workspaces = config.group(groupId).services.filter { it.id in serviceIds }.flatMap { service ->
             val repository = repositories[service.repositoryId] ?: return@flatMap emptyList()
-            when (service.strategy) {
-                WorkspaceStrategy.STANDARD_WORKTREE -> {
-                    val modules = service.modules.map { module ->
-                        overridesByModule["${service.id}::${module.id}"]?.let { override ->
-                            module.copy(baseRef = override.baseRef)
-                        } ?: module
-                    }
-                    val explicitBranches = modules.mapNotNull { module ->
-                        overridesByModule["${service.id}::${module.id}"]?.targetBranch?.let { module.id to it }
-                    }.toMap()
-                    val branches = runCatching { TaskBranchNaming.resolve(normalizedBranch, modules, explicitBranches) }
-                        .getOrElse { service.modules.associate { it.id to normalizedBranch } }
-                    modules.map { module ->
-                        ServiceWorkspace(
-                            repository.id, service.displayName, repository.rootPath,
-                            directory.resolve(WorkspaceLayout.standardDirectoryName(service, module, modules.size)).toString(),
-                            service.developmentTool, branches.getValue(module.id), groupServiceId = service.id, moduleId = module.id,
-                            moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, modules.size),
-                            strategy = service.strategy, baseRef = module.baseRef,
-                        )
-                    }
-                }
-                WorkspaceStrategy.INDEPENDENT_CLONE -> service.cloneModules.map { configuredModule ->
-                    val module = overridesByModule["${service.id}::${configuredModule.id}"]?.let { override ->
-                        configuredModule.copy(branch = override.baseRef)
-                    } ?: configuredModule
-                    ServiceWorkspace(
-                        repository.id, service.displayName, repository.rootPath,
-                        directory.resolve(WorkspaceLayout.cloneDirectoryName(service, module)).toString(),
-                        service.developmentTool, RemoteBranchRef.parse(module.branch).branch, groupServiceId = service.id, moduleId = module.id,
-                        moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.branch, service.cloneModules.size),
-                        strategy = service.strategy, originUrl = repository.originUrl, baseRef = module.branch,
-                    )
-                }
+            val selectedModules = selectionsByService[service.id]?.modules ?: service.modules.map { configured ->
+                TaskModuleSelection.configured(
+                    configured,
+                    if (service.modules.size == 1) normalizedBranch else "$normalizedBranch-${configured.name}",
+                )
+            }
+            selectedModules.map { selectedModule ->
+                val baseRef = selectedModule.baseRef
+                val module = selectedModule.toConfig()
+                val defaultTarget = if (service.modules.size == 1) normalizedBranch else "$normalizedBranch-${module.name}"
+                val target = selectedModule.targetBranch ?: if (module.strategy == WorkspaceStrategy.STANDARD_WORKTREE) defaultTarget else ""
+                val branch = if (module.strategy == WorkspaceStrategy.INDEPENDENT_CLONE && target.isBlank()) {
+                    RemoteBranchRef.parse(baseRef).branch
+                } else target
+                ServiceWorkspace(
+                    repository.id, service.displayName, repository.rootPath,
+                    directory.resolve(WorkspaceLayout.moduleDirectoryName(service, module)).toString(),
+                    service.developmentTool, branch, groupServiceId = service.id, moduleId = module.id,
+                    moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, service.modules.size),
+                    strategy = module.strategy, originUrl = repository.originUrl, baseRef = module.baseRef,
+                    moduleSource = selectedModule.source, targetBranch = target.ifBlank { null }, tagEnabled = module.tagEnabled,
+                    tagMode = module.tagMode, tagTargetRef = module.tagTargetRef, tagMessagePrefix = module.tagMessagePrefix,
+                )
             }
         }
         val manifest = TaskManifest(
