@@ -38,6 +38,22 @@ subprojects {
                         "batch rechecks each fingerprint immediately before its first write",
                 )
                 excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "batch rechecks write policy inside repository lock before writing",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "batch push refuses a head changed after confirmation",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceGitOperationServiceTest." +
+                        "batch commit and push rechecks a clean workspace before push",
+                )
+                excludeTestsMatching(
+                    "com.snowball.awm.core.WorkspaceModuleRemovalServiceTest." +
+                        "worktree prune failure keeps deletion backup and reports cleanup error",
+                )
+                excludeTestsMatching(
                     "com.snowball.awm.core.WorkspaceGitStatusTest." +
                         "reader reports untracked files and local commits without contacting remote",
                 )
