@@ -10,23 +10,16 @@ object TagOutputFormatter {
             it.state == TagOperationState.SUCCESS && !it.tag.isNullOrBlank()
         }
         val failures = operations.filter { it !in successes }
+        val hasFailures = includeFailures && failures.isNotEmpty()
         return buildString {
-            if (requirementLink.isNotBlank()) {
+            val link = requirementLink.trim()
+            if (link.isNotEmpty()) {
                 append("需求链接：")
-                append(requirementLink.trim())
-                append("\n\n")
+                append(link)
             }
-            if (successes.isEmpty()) {
-                append("（无）")
-            } else {
-                successes.forEachIndexed { index, operation ->
-                    if (index > 0) append('\n')
-                    append(operation.serviceName)
-                    append(" · ")
-                    append(operation.tag)
-                }
-            }
-            if (includeFailures && failures.isNotEmpty()) {
+            if (hasFailures) {
+                if (link.isNotEmpty()) append("\n\n")
+                appendTagList(successes)
                 append("\n\n构建失败：\n")
                 failures.forEachIndexed { index, operation ->
                     if (index > 0) append('\n')
@@ -38,12 +31,24 @@ object TagOutputFormatter {
                         append(it)
                     }
                 }
-            }
-            append("\n\n")
-            if (includeFailures && failures.isNotEmpty()) {
-                append("Tag未全部构建成功，请处理失败项后重试")
+                append("\n\nTag未全部构建成功，请处理失败项后重试")
             } else {
-                append("Tag 已构建完毕，请发布以上版本")
+                if (link.isNotEmpty()) append('\n')
+                append("Tag 已构建完毕，辛苦发版：\n\n")
+                appendTagList(successes)
+            }
+        }
+    }
+
+    private fun StringBuilder.appendTagList(operations: List<TagOperation>) {
+        if (operations.isEmpty()) {
+            append("（无）")
+        } else {
+            operations.forEachIndexed { index, operation ->
+                if (index > 0) append('\n')
+                append(operation.serviceName)
+                append(" · ")
+                append(operation.tag)
             }
         }
     }

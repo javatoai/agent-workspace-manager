@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
@@ -17,6 +19,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -245,3 +248,62 @@ internal fun branchPickerFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
 )
+
+@Composable
+internal fun RemoteNamePicker(
+    value: String,
+    repositoryId: String,
+    controller: DesktopApplication,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember(repositoryId) { mutableStateOf(false) }
+    val state = controller.repositoryRemotesState(repositoryId)
+    LaunchedEffect(repositoryId) {
+        controller.loadRepositoryRemotes(repositoryId)
+    }
+    if (!shouldShowRemoteNamePicker(value, state)) return
+    Box(modifier) {
+        OutlinedButton(
+            onClick = {
+                expanded = true
+                controller.loadRepositoryRemotes(repositoryId)
+            },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+        ) {
+            Text(value, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Icon(Icons.Outlined.KeyboardArrowDown, null, Modifier.size(17.dp))
+        }
+        AwmDropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+            when (state) {
+                RepositoryRemotesState.Idle, RepositoryRemotesState.Loading ->
+                    DropdownMenuItem({ Text("正在读取远程…") }, onClick = {}, enabled = false)
+                is RepositoryRemotesState.Failed -> {
+                    DropdownMenuItem({ Text(state.message, color = MaterialTheme.colorScheme.error) }, onClick = {}, enabled = false)
+                    DropdownMenuItem({ Text("重试") }, onClick = { controller.loadRepositoryRemotes(repositoryId, force = true) })
+                }
+                is RepositoryRemotesState.Loaded -> state.remotes.forEach { remote ->
+                    DropdownMenuItem(
+                        text = { Text(remote) },
+                        onClick = { onSelected(remote); expanded = false },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A sole, still-valid source remote has no user choice to expose. Keep the picker visible
+ * while loading or after an error, and when an old configuration refers to a removed remote,
+ * so we never silently replace the selected source.
+ */
+internal fun shouldShowRemoteNamePicker(
+    selectedRemote: String,
+    state: RepositoryRemotesState,
+): Boolean = when (state) {
+    is RepositoryRemotesState.Loaded ->
+        state.remotes.singleOrNull()?.equals(selectedRemote, ignoreCase = true) != true
+    is RepositoryRemotesState.Failed -> true
+    RepositoryRemotesState.Idle, RepositoryRemotesState.Loading -> false
+}

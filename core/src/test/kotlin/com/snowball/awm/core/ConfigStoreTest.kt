@@ -131,7 +131,7 @@ class ConfigStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
-        assertEquals("0.8.0", store.load().schemaVersion)
+        assertEquals("0.8.1", store.load().schemaVersion)
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)

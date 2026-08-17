@@ -5,22 +5,31 @@ import org.junit.jupiter.api.Test
 
 class TagOutputFormatterTest {
     @Test
-    fun `formats successful tags in input order without a success heading`() {
+    fun `formats successful tags with the publish hint right after the link`() {
         val first = operation("android-transit-service", "3.11.69.beta-1")
         val second = operation("api-service", "2.4.34.beta-6")
 
         assertEquals(
             """需求链接：https://project.feishu.cn/obt/userstory/detail/7035269559
+Tag 已构建完毕，辛苦发版：
 
 android-transit-service · 3.11.69.beta-1
-api-service · 2.4.34.beta-6
-
-Tag 已构建完毕，请发布以上版本""",
+api-service · 2.4.34.beta-6""",
             TagOutputFormatter.format(
                 "https://project.feishu.cn/obt/userstory/detail/7035269559",
                 listOf(first, second),
                 includeFailures = false,
             ),
+        )
+    }
+
+    @Test
+    fun `successful output without a link starts with the publish hint`() {
+        assertEquals(
+            """Tag 已构建完毕，辛苦发版：
+
+api-service · 2.4.34.beta-6""",
+            TagOutputFormatter.format("", listOf(operation("api-service", "2.4.34.beta-6")), includeFailures = false),
         )
     }
 

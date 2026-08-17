@@ -1,90 +1,50 @@
 package com.snowball.awm.desktop
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.CloudUpload
-import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Dns
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.Publish
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Save
-import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Sell
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
-import androidx.compose.material.icons.outlined.Workspaces
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -93,222 +53,28 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.application
-import androidx.compose.ui.window.rememberWindowState
-import com.mikepenz.markdown.compose.Markdown
-import com.mikepenz.markdown.m3.markdownColor
-import com.mikepenz.markdown.m3.markdownTypography
-import com.snowball.awm.core.AgentConflictResolution
-import com.snowball.awm.core.BootstrapConfig
-import com.snowball.awm.core.BootstrapPresets
-import com.snowball.awm.core.GroupServiceConfig
-import com.snowball.awm.core.BranchPrefixResolver
-import com.snowball.awm.core.RepositoryConfig
-import com.snowball.awm.core.RemoteBranchSearch
-import com.snowball.awm.core.RemoteBranchRef
-import com.snowball.awm.core.GroupConfig
-import com.snowball.awm.core.MeegleProjectConfig
-import com.snowball.awm.core.ServiceModuleConfig
+import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
-import com.snowball.awm.core.RequirementMetadata
-import com.snowball.awm.core.TaskNaming
-import com.snowball.awm.core.TagOutputFormatter
-import com.snowball.awm.core.RequirementDraftState
-import com.snowball.awm.core.WorkspaceToolLaunchStatus
-import com.snowball.awm.core.ThemePreference
-import com.snowball.awm.core.TaskLifecycleStatus
-import com.snowball.awm.core.WorkspaceHealth
-import com.snowball.awm.core.health
-import com.snowball.awm.core.WorkspaceStrategy
-import com.snowball.awm.core.WorkspaceGitHealth
-import com.snowball.awm.core.WorkspaceGitHealthState
-import com.snowball.awm.core.WorkspaceGitIssue
-import com.snowball.awm.core.WorkspaceRepairConfirmation
-import com.snowball.awm.core.WorkspaceRepairPreview
-import com.snowball.awm.core.WorkspaceModuleRemovalPreview
 import com.snowball.awm.core.WorkspaceGitBatchMode
 import com.snowball.awm.core.WorkspaceGitBatchResult
+import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitStepState
-import com.snowball.awm.core.LocalPushState
-import com.snowball.awm.core.isHttpUrl
-import com.snowball.awm.core.selectionKey
-import com.snowball.awm.desktop.generated.resources.Res
-import com.snowball.awm.desktop.generated.resources.app_icon
-import io.github.vinceglb.filekit.FileKit
-import org.jetbrains.compose.resources.painterResource
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import java.awt.Dimension
-import java.awt.event.WindowAdapter
-import java.awt.event.WindowEvent
-import java.util.UUID
-
+import com.snowball.awm.core.WorkspaceHealth
+import com.snowball.awm.core.WorkspaceModuleRemovalPreview
+import com.snowball.awm.core.WorkspaceRepairConfirmation
+import com.snowball.awm.core.WorkspaceRepairPreview
+import com.snowball.awm.core.WorkspaceToolLaunchStatus
+import com.snowball.awm.core.health
 
 @Composable
-internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCreate: () -> Unit) {
-    if (controller.needsTaskRoot) {
-        EmptyState("请先配置任务根目录", "设置完成后即可创建第一个研发任务", "前往设置") {
-            controller.navigation = NavigationItem.SETTINGS
-        }
-        return
-    }
-    val visibleTasks = controller.tasks.filter { (it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) == archived }
-    var taskQuery by remember(archived) { mutableStateOf("") }
-    fun requirementTitle(task: TaskManifest): String? =
-        (controller.requirementController.stateFor(task) as? RequirementUiState.Loaded)?.metadata?.title
-    val filteredTasks = filterTasks(
-        tasks = visibleTasks,
-        query = taskQuery,
-        requirementTitle = ::requirementTitle,
-    )
-    LaunchedEffect(archived, visibleTasks.joinToString { "${it.taskDirectoryName}:${it.requirementLink}" }) {
-        controller.requirementController.refreshAll()
-    }
-    if (visibleTasks.isEmpty()) {
-        if (archived) {
-            EmptyState("还没有已归档任务", "归档后的任务会保留在这里，可随时恢复。", "返回研发任务") {
-                controller.navigation = NavigationItem.TASKS
-            }
-        } else {
-            EmptyState("还没有研发任务", "从已配置的服务创建 Worktree 或独立克隆", "创建第一个任务", onCreate)
-        }
-        return
-    }
-    Row(
-        Modifier.fillMaxSize()
-            .padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        Surface(
-            Modifier.width(352.dp).fillMaxHeight(),
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Column {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("任务列表", style = MaterialTheme.typography.titleMedium)
-                            Text("按更新时间排列", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
-                            Text("${filteredTasks.size}/${visibleTasks.size}", Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                    OutlinedTextField(
-                        taskQuery,
-                        { taskQuery = it },
-                        Modifier.fillMaxWidth(),
-                        label = { Text("搜索任务") },
-                        placeholder = { Text("任务、需求、分支或服务") },
-                        singleLine = true,
-                    )
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                if (filteredTasks.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("没有匹配的任务", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                } else {
-                    TaskList(controller, filteredTasks, archived, Modifier.fillMaxSize().padding(10.dp))
-                }
-            }
-        }
-        controller.selectedTask?.takeIf { (it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) == archived }?.let {
-            TaskDetail(controller, it, Modifier.weight(1f).widthIn(min = 900.dp).fillMaxHeight())
-        }
-    }
-}
-
-@Composable
-private fun TaskList(controller: DesktopApplication, taskItems: List<TaskManifest>, archived: Boolean, modifier: Modifier) {
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
-    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (controller.config.groups.size == 1) {
-            items(taskItems, key = { it.folderName }) { TaskCard(controller, it, it == controller.selectedTask, archived, controller::selectTask) }
-        } else {
-            controller.config.groups.forEach { group ->
-                val grouped = taskItems.filter { it.groupId == group.id }
-                item(key = "header-${group.id}") {
-                    GroupHeader(group.name, grouped.size, expanded[group.id] != false) {
-                        expanded[group.id] = expanded[group.id] == false
-                    }
-                }
-                if (expanded[group.id] != false) items(grouped, key = { "${group.id}-${it.folderName}" }) {
-                    TaskCard(controller, it, it == controller.selectedTask, archived, controller::selectTask)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GroupHeader(name: String, count: Int, expanded: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 8.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
-            Icon(if (expanded) Icons.Outlined.KeyboardArrowDown else Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.padding(3.dp).size(16.dp))
-        }
-        Spacer(Modifier.width(9.dp))
-        Text(name, style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.weight(1f))
-        Text("$count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun TaskCard(controller: DesktopApplication, task: TaskManifest, selected: Boolean, archivedList: Boolean, onSelect: (TaskManifest) -> Unit) {
-    val shape = RoundedCornerShape(14.dp)
-    val containerColor = if (selected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-            .compositeOver(MaterialTheme.colorScheme.surface)
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth().clip(shape).clickable { onSelect(task) },
-        shape = shape,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = containerColor,
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 0.dp else 1.dp),
-    ) {
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).background(containerColor)) {
-            if (selected) Surface(Modifier.width(4.dp).fillMaxHeight(), color = MaterialTheme.colorScheme.primary) {}
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp).weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TooltipText(task.folderName, Modifier.weight(1f), MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                    if (!archivedList && task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) StatusPill("ARCHIVED")
-                    if (task.health != WorkspaceHealth.READY) StatusPill(task.health.name)
-                    if (task.requirementLink.isNotBlank()) {
-                        Spacer(Modifier.width(5.dp))
-                        RequirementStatePill(controller.requirementController.stateFor(task))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
+internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
     var notes by remember(task.folderName, task.updatedAt, controller.agentRevision) { mutableStateOf(controller.readTaskNotes(task)) }
     var confirmArchive by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -324,6 +90,7 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
     var addModuleServiceId by remember(task.folderName) { mutableStateOf<String?>(null) }
     var removalPreview by remember(task.folderName) { mutableStateOf<WorkspaceModuleRemovalPreview?>(null) }
     var removalChecking by remember(task.folderName) { mutableStateOf(false) }
+    var agentsPreview by remember(task.folderName) { mutableStateOf<String?>(null) }
     val group = controller.config.groups.firstOrNull { it.id == task.groupId }
     val tagWorkspaces = task.services.filter { controller.canBuildTag(task, it) }
     val physicalWorkspaces = controller.physicalWorkspaces(task)
@@ -457,6 +224,10 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
                 controller.markTaskNotesEdited(task, it)
             }, Modifier.fillMaxWidth(), minLines = 4, maxLines = 6, readOnly = controller.busy, label = { Text("任务说明") })
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                OutlinedButton(onClick = { agentsPreview = controller.previewTaskAgents(task, notes) }, enabled = !controller.busy) {
+                    Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("预览")
+                }
+                Spacer(Modifier.width(8.dp))
                 Button(onClick = { controller.saveTaskNotes(task, notes) }, enabled = !controller.busy) {
                     Icon(Icons.Outlined.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("保存")
                 }
@@ -556,6 +327,9 @@ private fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modif
             confirmButton = { Button(onClick = controller::clearWorkspaceRepairResult) { Text("关闭") } },
         )
     }
+    agentsPreview?.let { preview ->
+        TaskAgentsPreviewDialog(preview, onDismiss = { agentsPreview = null })
+    }
 }
 
 @Composable
@@ -612,410 +386,6 @@ private fun WorkspaceRepairDialog(
         },
         dismissButton = if (preview.canRepair) ({ TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") } }) else null,
     )
-}
-
-internal enum class WorkspaceCardLayout { SIDE_BY_SIDE }
-
-internal enum class WorkspaceStatusPlacement { SECOND_ROW, THIRD_ROW }
-
-internal data class WorkspaceBranchRowAllocation(
-    val branchWidth: Int,
-    val copyX: Int,
-    val statusX: Int,
-)
-
-internal fun workspaceCardLayout(availableWidthDp: Float): WorkspaceCardLayout =
-    WorkspaceCardLayout.SIDE_BY_SIDE
-
-internal fun workspaceStatusPlacement(health: WorkspaceGitHealth?): WorkspaceStatusPlacement =
-    if (health?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)) {
-        WorkspaceStatusPlacement.THIRD_ROW
-    } else {
-        WorkspaceStatusPlacement.SECOND_ROW
-    }
-
-internal fun workspaceBranchRowAllocation(
-    availableWidth: Int,
-    naturalBranchWidth: Int,
-    copyWidth: Int,
-    statusWidth: Int,
-    gapWidth: Int,
-): WorkspaceBranchRowAllocation {
-    val branchCopyGap = if (naturalBranchWidth > 0 && copyWidth > 0) gapWidth else 0
-    val copyStatusGap = if (copyWidth > 0 && statusWidth > 0) gapWidth else 0
-    val maximumBranchWidth = (availableWidth - copyWidth - statusWidth - branchCopyGap - copyStatusGap).coerceAtLeast(0)
-    val branchWidth = naturalBranchWidth.coerceIn(0, maximumBranchWidth)
-    val copyX = branchWidth + if (branchWidth > 0 && copyWidth > 0) gapWidth else 0
-    val statusX = copyX + copyWidth + if (copyWidth > 0 && statusWidth > 0) gapWidth else 0
-    return WorkspaceBranchRowAllocation(branchWidth, copyX, statusX)
-}
-
-@Composable
-private fun WorkspaceCard(
-    controller: DesktopApplication,
-    task: TaskManifest,
-    workspace: ServiceWorkspace,
-    showAddModule: Boolean,
-    onAddModule: () -> Unit,
-    onDeleteModule: () -> Unit,
-) {
-    val health = controller.gitHealth(workspace)
-    val displayedBranch = health?.actualBranch?.takeIf(String::isNotBlank) ?: workspace.branch
-    val branchVerified = !health?.actualBranch.isNullOrBlank()
-    var commitMode by remember { mutableStateOf<String?>(null) }
-    var commitMessage by remember(task, workspace) { mutableStateOf(controller.defaultCommitMessage(task, workspace)) }
-    var toolMenu by remember { mutableStateOf(false) }
-    OutlinedCard(
-        Modifier.fillMaxWidth(),
-        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(Modifier.align(Alignment.Top), color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(11.dp)) {
-                Icon(
-                    if (workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
-                    null,
-                    Modifier.padding(9.dp).size(19.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            WorkspaceCardSummary(
-                controller = controller,
-                task = task,
-                workspace = workspace,
-                health = health,
-                displayedBranch = displayedBranch,
-                branchVerified = branchVerified,
-                modifier = Modifier.weight(1f).align(Alignment.Top),
-            )
-            Spacer(Modifier.width(12.dp))
-            WorkspaceCardActions(
-                controller = controller,
-                task = task,
-                workspace = workspace,
-                toolMenu = toolMenu,
-                onToolMenuChange = { toolMenu = it },
-                onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
-                onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
-                showAddModule = showAddModule,
-                onAddModule = onAddModule,
-                canDeleteModule = task.services.size > 1,
-                onDeleteModule = onDeleteModule,
-                modifier = Modifier.padding(top = 1.dp),
-            )
-        }
-    }
-    commitMode?.let { mode ->
-        val preview = (controller.batchGitPreviewState as? BatchGitPreviewState.Loaded)?.previews?.get(controller.workspaceKey(workspace))
-        AlertDialog(
-            onDismissRequest = { commitMode = null },
-            title = { Text(if (mode == "commitPush") "提交并推送" else "提交") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(commitMessage, { commitMessage = it }, Modifier.fillMaxWidth(), label = { Text("提交信息") }, minLines = 3)
-                    when (val previewState = controller.batchGitPreviewState) {
-                        BatchGitPreviewState.Idle, BatchGitPreviewState.Loading -> Text("正在读取变更预览…")
-                        is BatchGitPreviewState.Failed -> SelectionContainer { Text(previewState.message, color = MaterialTheme.colorScheme.error) }
-                        is BatchGitPreviewState.Loaded -> if (preview != null) {
-                            Text("将提交 ${preview.files.size} 个变更文件", style = MaterialTheme.typography.labelMedium)
-                            SelectionContainer { Text(preview.files.take(20).joinToString("\n"), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
-                            if (preview.diffStat.isNotBlank()) SelectionContainer { Text(preview.diffStat, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace) }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    if (controller.commitWorkspace(task, workspace, commitMessage, pushAfter = mode == "commitPush", expectedFingerprint = preview?.fingerprint)) commitMode = null
-                }, enabled = commitMessage.isNotBlank() && preview != null && !controller.busy) { Text("确认") }
-            },
-            dismissButton = { TextButton(onClick = { commitMode = null }) { Text("取消") } },
-        )
-    }
-}
-
-@Composable
-private fun WorkspaceCardSummary(
-    controller: DesktopApplication,
-    task: TaskManifest,
-    workspace: ServiceWorkspace,
-    health: com.snowball.awm.core.WorkspaceGitHealth?,
-    displayedBranch: String,
-    branchVerified: Boolean,
-    modifier: Modifier,
-) {
-    val statusPlacement = workspaceStatusPlacement(health)
-    Column(modifier) {
-        Row(Modifier.heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                workspace.moduleName.ifBlank { workspace.serviceName },
-                Modifier.weight(1f, fill = false),
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            MetaPill(workspace.strategy.displayName)
-            if (workspace.health != WorkspaceHealth.READY) StatusPill(workspace.health.name)
-        }
-        WorkspaceBranchStatusRow(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 30.dp),
-            branch = {
-                SelectionContainer {
-                    Text(
-                        if (branchVerified) displayedBranch else "$displayedBranch（未验证）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            },
-            copy = {
-                ActionIconButton(
-                    "复制分支名",
-                    { controller.copyText(displayedBranch, "分支已复制") },
-                    Modifier.size(28.dp),
-                ) { Icon(Icons.Outlined.ContentCopy, "复制分支名", Modifier.size(14.dp)) }
-            },
-            status = {
-                if (statusPlacement == WorkspaceStatusPlacement.SECOND_ROW) {
-                    if (health == null || health.state == WorkspaceGitHealthState.CHECKING) MetaPill("检查中")
-                    if (health?.state == WorkspaceGitHealthState.READY) {
-                        MetaPill(if (health.dirtyFileCount == 0) "无未提交" else "${health.dirtyFileCount} 个文件未提交")
-                        MetaPill(
-                            when (health.pushState) {
-                                LocalPushState.PUSHED -> "已推送"
-                                LocalPushState.AHEAD -> "${health.unpushedCommitCount} 个提交未推送"
-                                LocalPushState.REMOTE_BRANCH_MISSING -> "未发现远程分支"
-                                LocalPushState.NO_UPSTREAM -> "未关联远程"
-                                LocalPushState.FAILED -> "检查失败"
-                            },
-                        )
-                    }
-                }
-            },
-        )
-        if (statusPlacement == WorkspaceStatusPlacement.THIRD_ROW && health != null) {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 30.dp),
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.weight(1f, fill = false)) {
-                    WorkspaceProblemPill(workspaceIssueLabel(health))
-                }
-                ActionIconButton(
-                    health.message ?: "查看修复方案",
-                    { controller.inspectWorkspaceRepair(task, workspace) },
-                    Modifier.size(30.dp),
-                    enabled = !controller.busy,
-                ) { Icon(Icons.Outlined.Build, "修复工作区", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error) }
-            }
-        }
-        workspaceIssueDetail(health)?.let { detail ->
-            SelectionContainer {
-                Text(detail, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        if (workspace.warnings.isNotEmpty()) {
-            Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
-        }
-        if (controller.config.blockedGitWriteBranches.any { it.equals(displayedBranch, ignoreCase = true) }) {
-            Text(
-                "Git 写保护：分支 $displayedBranch 禁止 Commit、Push 和 Commit & Push",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-@Composable
-private fun WorkspaceBranchStatusRow(
-    modifier: Modifier,
-    branch: @Composable () -> Unit,
-    copy: @Composable () -> Unit,
-    status: @Composable () -> Unit,
-) {
-    val gapWidth = with(LocalDensity.current) { 7.dp.roundToPx() }
-    val minimumHeight = with(LocalDensity.current) { 30.dp.roundToPx() }
-    Layout(
-        modifier = modifier,
-        content = {
-            Box { branch() }
-            Box { copy() }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) { status() }
-        },
-    ) { measurables, constraints ->
-        val looseConstraints = constraints.copy(minWidth = 0, minHeight = 0)
-        val copyPlaceable = measurables[1].measure(looseConstraints)
-        val statusPlaceable = measurables[2].measure(looseConstraints)
-        val reservedGaps = gapWidth + if (statusPlaceable.width > 0) gapWidth else 0
-        val maximumBranchWidth = (
-            constraints.maxWidth - copyPlaceable.width - statusPlaceable.width - reservedGaps
-        ).coerceAtLeast(0)
-        val branchPlaceable = measurables[0].measure(looseConstraints.copy(maxWidth = maximumBranchWidth))
-        val allocation = workspaceBranchRowAllocation(
-            availableWidth = constraints.maxWidth,
-            naturalBranchWidth = branchPlaceable.width,
-            copyWidth = copyPlaceable.width,
-            statusWidth = statusPlaceable.width,
-            gapWidth = gapWidth,
-        )
-        val height = maxOf(minimumHeight, branchPlaceable.height, copyPlaceable.height, statusPlaceable.height)
-            .coerceIn(constraints.minHeight, constraints.maxHeight)
-        layout(constraints.maxWidth, height) {
-            branchPlaceable.placeRelative(0, (height - branchPlaceable.height) / 2)
-            copyPlaceable.placeRelative(allocation.copyX, (height - copyPlaceable.height) / 2)
-            statusPlaceable.placeRelative(allocation.statusX, (height - statusPlaceable.height) / 2)
-        }
-    }
-}
-
-@Composable
-private fun WorkspaceCardActions(
-    controller: DesktopApplication,
-    task: TaskManifest,
-    workspace: ServiceWorkspace,
-    toolMenu: Boolean,
-    onToolMenuChange: (Boolean) -> Unit,
-    onCommit: () -> Unit,
-    onCommitAndPush: () -> Unit,
-    showAddModule: Boolean,
-    onAddModule: () -> Unit,
-    canDeleteModule: Boolean,
-    onDeleteModule: () -> Unit,
-    modifier: Modifier,
-) {
-    val actualBranch = controller.workspaceGitHealth[controller.workspaceKey(workspace)]?.actualBranch ?: workspace.branch
-    val writeBlocked = controller.config.blockedGitWriteBranches.any { it.equals(actualBranch, ignoreCase = true) }
-    Row(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconActionGroup {
-            ActionIconButton("在终端中打开", { controller.terminal(workspace.worktreePath) }, Modifier.size(34.dp)) {
-                Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
-            }
-            ActionIconButton("打开工作区文件夹", { controller.openDirectory(workspace.worktreePath) }, Modifier.size(34.dp)) {
-                Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
-            }
-            ActionIconButton("复制工作区完整路径", { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, Modifier.size(34.dp)) {
-                Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
-            }
-        }
-        GitActionIconGroup(
-            enabled = !controller.busy && !writeBlocked,
-            scopeLabel = workspace.moduleName.ifBlank { workspace.serviceName },
-            loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true,
-            onCommit = onCommit,
-            onCommitAndPush = onCommitAndPush,
-            onPush = { controller.pushWorkspace(task, workspace) },
-        )
-        if (controller.canBuildTag(task, workspace)) {
-            IconActionGroup {
-                ActionIconButton("构建 Tag", { controller.deliveryController.build(task, workspace) }, Modifier.size(34.dp), enabled = !controller.busy, loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true && controller.activeOperation?.contains("Tag") == true) {
-                    Icon(Icons.Outlined.Sell, "Tag", Modifier.size(18.dp))
-                }
-            }
-        }
-        IconActionGroup {
-            if (showAddModule) ActionIconButton("为服务添加模块", onAddModule, Modifier.size(34.dp), enabled = !controller.busy) {
-                Icon(Icons.Outlined.Add, "添加模块", Modifier.size(18.dp))
-            }
-            ActionIconButton("删除当前模块", onDeleteModule, Modifier.size(34.dp), enabled = canDeleteModule && !controller.busy) {
-                Icon(Icons.Outlined.Delete, "删除模块", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
-            }
-        }
-        IconActionGroup {
-            ActionIconButton(
-                "使用 ${workspace.developmentTool.displayName} 打开",
-                { controller.openWorkspace(workspace) },
-                Modifier.size(34.dp),
-            ) { Icon(Icons.Outlined.Code, "打开开发工具", Modifier.size(18.dp)) }
-            if (temporaryDevelopmentToolSelectionEnabled(controller.config)) {
-                Box {
-                    ActionIconButton("选择开发工具", { onToolMenuChange(true) }, Modifier.size(30.dp)) {
-                        Icon(Icons.Outlined.KeyboardArrowDown, "选择开发工具", Modifier.size(17.dp))
-                    }
-                    AwmDropdownMenu(toolMenu, onDismissRequest = { onToolMenuChange(false) }) {
-                        controller.configuredDevelopmentTools().forEach { type ->
-                            DropdownMenuItem(text = { Text(type.displayName) }, onClick = { onToolMenuChange(false); controller.openWorkspace(workspace, type) })
-                        }
-                    }
-                }
-            }
-        }
-        if (workspace.health == WorkspaceHealth.FAILED && workspace.groupServiceId.isNotBlank()) {
-            OutlinedButton(onClick = { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) }, enabled = !controller.busy) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重试")
-            }
-        }
-    }
-}
-
-@Composable
-private fun IconActionGroup(content: @Composable RowScope.() -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            content = content,
-        )
-    }
-}
-
-private fun workspaceIssueLabel(health: com.snowball.awm.core.WorkspaceGitHealth): String =
-    workspaceIssueLabel(health.issue, health.actualBranch, health.expectedBranch)
-
-internal fun workspaceIssueDetail(health: WorkspaceGitHealth?): String? = health
-    ?.takeIf {
-        it.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED) &&
-            it.issue != WorkspaceGitIssue.BRANCH_MISMATCH
-    }
-    ?.message
-    ?.takeIf(String::isNotBlank)
-
-private fun workspaceIssueLabel(issue: WorkspaceGitIssue, actual: String?, expected: String?): String = when (issue) {
-    WorkspaceGitIssue.NONE -> "正常"
-    WorkspaceGitIssue.MISSING -> "工作区不存在"
-    WorkspaceGitIssue.NOT_GIT -> "不是有效的 Git 工作区"
-    WorkspaceGitIssue.IDENTITY_MISMATCH -> "Git 仓库身份不匹配"
-    WorkspaceGitIssue.BRANCH_MISMATCH -> "分支不一致：${actual.orEmpty()} → ${expected.orEmpty()}"
-    WorkspaceGitIssue.DETACHED_HEAD -> "Detached HEAD"
-    WorkspaceGitIssue.OPERATION_IN_PROGRESS -> "存在进行中的 Git 操作"
-    WorkspaceGitIssue.INSPECTION_FAILED -> "Git 状态检查失败"
-}
-
-@Composable
-private fun GitActionIconGroup(
-    enabled: Boolean,
-    scopeLabel: String,
-    loading: Boolean = false,
-    onCommit: () -> Unit,
-    onCommitAndPush: () -> Unit,
-    onPush: () -> Unit,
-) {
-    IconActionGroup {
-        ActionIconButton("提交 $scopeLabel", onCommit, Modifier.size(34.dp), enabled, loading) {
-            Icon(Icons.Outlined.Commit, "提交", Modifier.size(18.dp))
-        }
-        ActionIconButton("提交并推送 $scopeLabel", onCommitAndPush, Modifier.size(34.dp), enabled, loading) {
-            Icon(Icons.Outlined.Publish, "提交并推送", Modifier.size(18.dp))
-        }
-        ActionIconButton("推送 $scopeLabel", onPush, Modifier.size(34.dp), enabled, loading) {
-            Icon(Icons.Outlined.CloudUpload, "推送", Modifier.size(18.dp))
-        }
-    }
 }
 
 @Composable
@@ -1110,7 +480,7 @@ private fun BatchGitDialog(
     onExecute: (Set<String>, Map<String, String>, Map<String, String>) -> Unit,
 ) {
     var selectedKeys by remember(task.taskDirectoryName, mode, workspaces) {
-        mutableStateOf(initialSelection ?: workspaces.map(controller::workspaceKey).toSet())
+        mutableStateOf(initialSelection ?: emptySet())
     }
     val messages = remember(task.taskDirectoryName, mode) {
         mutableStateMapOf<String, String>().apply {
@@ -1144,7 +514,7 @@ private fun BatchGitDialog(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("确认后仅预检并操作所选物理工作区。", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick = { selectedKeys = workspaces.map(controller::workspaceKey).toSet() }) { Text("全选") }
-                    TextButton(onClick = { selectedKeys = emptySet() }) { Text("清空") }
+                    TextButton(onClick = { selectedKeys = emptySet() }) { Text("全不选") }
                 }
                 workspaces.forEach { workspace ->
                     val key = controller.workspaceKey(workspace)
@@ -1277,4 +647,34 @@ private fun BatchGitResultDialog(controller: DesktopApplication, result: Workspa
             }
         },
     )
+}
+
+@Composable
+private fun TaskAgentsPreviewDialog(content: String, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            Modifier.width(860.dp).height(640.dp),
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("AGENTS.md 预览", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    MetaPill("与保存后内容一致")
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Surface(
+                    Modifier.weight(1f).fillMaxWidth().padding(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    AgentsMarkdownPreview(content)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
 }

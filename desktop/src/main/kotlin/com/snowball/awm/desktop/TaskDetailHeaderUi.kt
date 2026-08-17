@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -116,7 +117,15 @@ internal fun TaskDetailHeader(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                TaskHeaderMetadata(task, requirementState, groupName, showGroup, abnormalCount, Modifier.fillMaxWidth())
+                TaskHeaderMetadata(
+                    task,
+                    requirementState,
+                    groupName,
+                    showGroup,
+                    abnormalCount,
+                    onRetryRequirement = { controller.requirementController.refresh(task, force = true) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 if (task.requirementLink.isNotBlank()) {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -175,6 +184,7 @@ private fun TaskHeaderMetadata(
     groupName: String?,
     showGroup: Boolean,
     abnormalCount: Int,
+    onRetryRequirement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     FlowRow(
@@ -196,13 +206,20 @@ private fun TaskHeaderMetadata(
                 RequirementUiState.NotLoaded -> Unit
             }
             RequirementStatePill(requirementState)
+            if (requirementState == RequirementUiState.Failed) {
+                ActionIconButton("重试读取需求", onRetryRequirement, Modifier.size(30.dp)) {
+                    Icon(Icons.Outlined.Refresh, "重试读取需求", Modifier.size(15.dp))
+                }
+            }
+        }
+        if (task.health != WorkspaceHealth.READY) StatusPill(task.health.name)
+        if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) StatusPill("ARCHIVED")
+        if (task.requirementLink.isNotBlank()) {
             (requirementState as? RequirementUiState.Loaded)?.metadata?.participants?.let { participants ->
                 participantSummary("测试", participants.qcOwners.map { it.name })?.let { ParticipantPill(it) }
                 participantSummary("产品", participants.productManagers.map { it.name })?.let { ParticipantPill(it) }
             }
         }
-        if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) StatusPill("ARCHIVED")
-        if (task.health != WorkspaceHealth.READY) StatusPill(task.health.name)
         if (showGroup) MetaPill(groupName ?: task.groupId)
         if (abnormalCount > 0) WorkspaceProblemPill("$abnormalCount 个工作区异常")
     }

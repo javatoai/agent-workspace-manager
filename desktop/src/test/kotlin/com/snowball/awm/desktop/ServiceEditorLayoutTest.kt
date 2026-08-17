@@ -7,12 +7,12 @@ import kotlin.test.assertTrue
 
 class ServiceEditorLayoutTest {
     @Test
-    fun `service editor uses half of its previous width`() {
+    fun `service editor widens to host the section navigation`() {
         val policy = serviceEditorDialogWidthPolicy()
 
-        assertEquals(0.46f, policy.fillFraction)
-        assertEquals(410, policy.minWidthDp)
-        assertEquals(640, policy.maxWidthDp)
+        assertEquals(0.72f, policy.fillFraction)
+        assertEquals(860, policy.minWidthDp)
+        assertEquals(1200, policy.maxWidthDp)
     }
 
     @Test

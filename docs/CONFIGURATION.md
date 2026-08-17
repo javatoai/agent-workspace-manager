@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.8.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.8.1 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -13,11 +13,11 @@ agents/groups/<groupId>/AGENTS.md
 
 ## 严格数组 schema
 
-0.8.0 的 `config.json` 使用严格字符串 schema `"0.8.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.8.1 的 `config.json` 使用严格字符串 schema `"0.8.1"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.8.0",
+  "schemaVersion": "0.8.1",
   "taskRoot": "Q:\\tasks",
   "developmentTools": [
     { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
@@ -204,11 +204,11 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema `"0.8.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.8.x 不读取或迁移 0.7.x 的配置和任务清单。
+`agent-workspace.json` 使用严格字符串 schema `"0.8.1"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.8.x 不读取或迁移 0.7.x 的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "0.8.0",
+  "schemaVersion": "0.8.1",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {

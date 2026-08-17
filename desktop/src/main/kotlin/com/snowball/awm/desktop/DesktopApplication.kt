@@ -520,6 +520,7 @@ class DesktopApplication(
         notes,
         serviceSelections,
     )
+    fun previewTaskAgents(task: TaskManifest, notes: String): String = agentInstructionsController.previewTask(task, notes)
     fun createTask(
         folderName: String,
         branch: String,

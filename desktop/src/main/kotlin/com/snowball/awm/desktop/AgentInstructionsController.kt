@@ -131,6 +131,10 @@ class AgentInstructionsController internal constructor(
         }
     }
 
+    /** Renders exactly what [saveTaskNotes] would write, without touching disk. */
+    fun previewTask(task: TaskManifest, notes: String): String =
+        documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
+
     fun preview(
         folderName: String,
         branch: String,
