@@ -136,6 +136,7 @@ class TaskApplicationService(
     private val branchReuseInspector: WorkspaceBranchReuseInspector = WorkspaceBranchReuseInspector(),
     private val repairs: WorkspaceRepairService = WorkspaceRepairService(manifests, agentDocuments, operationLock),
     private val moduleRemoval: WorkspaceModuleRemovalService = WorkspaceModuleRemovalService(manifests, agentDocuments, operationLock),
+    private val bootstrap: BootstrapService = BootstrapService(),
     private val clock: Clock = Clock.systemUTC(),
 ) {
     fun inspectModuleRemoval(config: AppConfig, taskDirectory: Path, workspacePath: String): WorkspaceModuleRemovalPreview =
@@ -671,6 +672,65 @@ class TaskApplicationService(
             notes,
         )
     }
+
+    /** Dismisses bootstrap warnings the user has acknowledged; only READY_WITH_WARNINGS entries flip back to READY. */
+    fun clearWorkspaceWarnings(config: AppConfig, taskDirectory: Path, workspacePath: String): TaskManifest =
+        operationLock.withLock(taskDirectory) {
+            val manifest = manifests.load(taskDirectory)
+            val normalizedTarget = normalize(workspacePath)
+            val updated = manifest.copy(
+                updatedAt = AwmTime.format(Instant.now(clock)),
+                services = manifest.services.map { existing ->
+                    if (normalize(existing.worktreePath) != normalizedTarget) return@map existing
+                    existing.copy(
+                        warnings = emptyList(),
+                        health = if (existing.health == WorkspaceHealth.READY_WITH_WARNINGS) WorkspaceHealth.READY else existing.health,
+                    )
+                },
+            )
+            manifests.save(taskDirectory, updated)
+            agentDocuments.writeTaskDocument(taskDirectory, updated, config.repositories.map(RepositoryConfig::toInfo))
+            updated
+        }
+
+    /**
+     * Re-runs the current service bootstrap snapshot against an existing workspace and replaces its
+     * warnings with the fresh result. Non-overwriting copy rules fail on existing targets by design.
+     */
+    fun rerunWorkspaceBootstrap(config: AppConfig, taskDirectory: Path, workspacePath: String): TaskManifest =
+        operationLock.withLock(taskDirectory) {
+            val manifest = manifests.load(taskDirectory)
+            val normalizedTarget = normalize(workspacePath)
+            val workspace = manifest.services.firstOrNull { normalize(it.worktreePath) == normalizedTarget }
+                ?: error("任务中不存在工作区：$workspacePath")
+            require(workspace.health == WorkspaceHealth.READY || workspace.health == WorkspaceHealth.READY_WITH_WARNINGS) {
+                "仅就绪的工作区可以重新执行 Bootstrap"
+            }
+            val target = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+            require(Files.exists(target)) { "工作区目录不存在：$target" }
+            val service = config.group(manifest.groupId).services.firstOrNull { it.id == workspace.groupServiceId }
+                ?: error("服务配置已经不存在，无法重新执行 Bootstrap")
+            val source = when (workspace.strategy) {
+                WorkspaceStrategy.STANDARD_WORKTREE -> Path.of(workspace.repositoryPath).toAbsolutePath().normalize()
+                WorkspaceStrategy.INDEPENDENT_CLONE -> config.repositories.firstOrNull { it.id == workspace.repositoryId }
+                    ?.let { Path.of(it.rootPath).toAbsolutePath().normalize() }
+                    ?: error("仓库配置已经不存在，无法重新执行 Bootstrap")
+            }
+            val warnings = bootstrap.initialize(source, target, service.bootstrap).warnings
+            val updated = manifest.copy(
+                updatedAt = AwmTime.format(Instant.now(clock)),
+                services = manifest.services.map { existing ->
+                    if (normalize(existing.worktreePath) != normalizedTarget) return@map existing
+                    existing.copy(
+                        warnings = warnings,
+                        health = if (warnings.isEmpty()) WorkspaceHealth.READY else WorkspaceHealth.READY_WITH_WARNINGS,
+                    )
+                },
+            )
+            manifests.save(taskDirectory, updated)
+            agentDocuments.writeTaskDocument(taskDirectory, updated, config.repositories.map(RepositoryConfig::toInfo))
+            updated
+        }
 
     fun inspectDeleteRisk(config: AppConfig, taskDirectory: Path): List<DeleteRisk> = operationLock.withLock(taskDirectory) {
         val manifest = manifests.load(taskDirectory)

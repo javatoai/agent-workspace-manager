@@ -482,11 +482,11 @@ class WorkspaceRepairService(
         "worktrees=${worktrees.sortedBy { it.path.toString() }.joinToString(",") { "${it.path}|${it.locked}" }}",
     ).joinToString(";")
 
-    private fun normalize(path: String): String = Path.of(path).toAbsolutePath().normalize().toString()
-
     private fun deleteRecursively(target: Path, taskDirectory: Path) {
         require(target.parent == taskDirectory.toAbsolutePath().normalize()) { "拒绝删除任务目录之外的独立克隆：$target" }
         if (!target.exists()) return
         Files.walk(target).use { entries -> entries.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
 }
+
+internal fun normalize(path: String): String = Path.of(path).toAbsolutePath().normalize().toString()

@@ -401,6 +401,8 @@ class DesktopApplication(
         taskController.gitHealth(workspace)
 
     fun inspectWorkspaceRepair(task: TaskManifest, workspace: ServiceWorkspace) = taskController.inspectRepair(task, workspace)
+    fun clearWorkspaceWarnings(task: TaskManifest, workspace: ServiceWorkspace) = taskController.clearWorkspaceWarnings(task, workspace)
+    fun rerunWorkspaceBootstrap(task: TaskManifest, workspace: ServiceWorkspace) = taskController.rerunWorkspaceBootstrap(task, workspace)
     fun repairWorkspace(task: TaskManifest, preview: WorkspaceRepairPreview, confirmation: WorkspaceRepairConfirmation) =
         taskController.repairWorkspace(task, preview, confirmation)
     fun clearWorkspaceRepairPreview() = taskController.clearRepairPreview()

@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Sell
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +39,11 @@ internal fun TagScreen(controller: DesktopApplication) {
             item { EmptyState("还没有 Tag 构建历史", "进入研发任务，在对应工作区点击“Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS } }
         } else {
             items(controller.tagHistory, key = { it.operationId }) { operation ->
-                ElevatedCard(Modifier.fillMaxWidth()) {
+                ElevatedCard(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+                ) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 17.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
                         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(11.dp)) {
                             Icon(Icons.Outlined.Sell, null, Modifier.padding(9.dp).size(19.dp), tint = MaterialTheme.colorScheme.primary)
@@ -59,12 +64,10 @@ internal fun TagScreen(controller: DesktopApplication) {
                         }
                         StatusPill(operation.state.name)
                         ActionIconButton("复制 Tag 构建记录", onClick = {
-                            val copy = buildString {
+                            val copy = operation.tag?.let { "${operation.serviceName} · $it" } ?: buildString {
                                 append("服务名："); append(operation.serviceName); append('\n')
-                                operation.tag?.let { append("Tag："); append(it) } ?: run {
-                                    append("状态："); append(operation.state.name)
-                                    operation.message?.takeIf(String::isNotBlank)?.let { append('\n'); append("说明："); append(it) }
-                                }
+                                append("状态："); append(operation.state.name)
+                                operation.message?.takeIf(String::isNotBlank)?.let { append('\n'); append("说明："); append(it) }
                             }
                             controller.copyText(copy, "构建记录已复制")
                         }) { Icon(Icons.Outlined.ContentCopy, "复制构建记录") }

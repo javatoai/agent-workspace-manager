@@ -578,7 +578,232 @@ class TaskApplicationServiceTest {
         assertEquals(0, restoreLifecycle.restoreCalls)
         assertEquals(0, restoreLifecycle.removeCalls)
     }
+
+    @Test
+    fun `clearing workspace warnings restores ready health only for that workspace`() {
+        val root = Files.createTempDirectory("task-clear-warnings-")
+        val taskDirectory = root.resolve("TASK")
+        val store = ManifestStore()
+        val warned = taskDirectory.resolve("wt-warned")
+        val failed = taskDirectory.resolve("wt-failed")
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    warningWorkspace(warned, WorkspaceHealth.READY_WITH_WARNINGS, listOf("执行 初始化 失败（退出码 1）")),
+                    warningWorkspace(failed, WorkspaceHealth.FAILED, emptyList(), serviceId = "clone"),
+                ),
+            ),
+        )
+        val application = TaskApplicationService(
+            manifests = store,
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        val updated = application.clearWorkspaceWarnings(taskConfig(root), taskDirectory, warned.toString())
+
+        val cleared = updated.services.first { it.worktreePath == warned.toString() }
+        val untouched = updated.services.first { it.worktreePath == failed.toString() }
+        assertEquals(emptyList(), cleared.warnings)
+        assertEquals(WorkspaceHealth.READY, cleared.health)
+        assertEquals(WorkspaceHealth.FAILED, untouched.health)
+        assertEquals(WorkspaceHealth.FAILED, updated.health)
+        assertEquals(updated, store.load(taskDirectory))
+    }
+
+    @Test
+    fun `rerun bootstrap replaces warnings with the fresh result`() {
+        val root = Files.createTempDirectory("task-rerun-bootstrap-")
+        val taskDirectory = root.resolve("TASK")
+        val repository = root.resolve("repo-a")
+        val worktree = taskDirectory.resolve("wt")
+        Files.createDirectories(repository)
+        Files.createDirectories(worktree)
+        Files.writeString(repository.resolve("seed.txt"), "seed")
+        val store = ManifestStore()
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    warningWorkspace(worktree, WorkspaceHealth.READY_WITH_WARNINGS, listOf("旧警告"), repositoryPath = repository),
+                ),
+            ),
+        )
+        val config = taskConfig(root).copy(
+            groups = listOf(
+                GroupConfig(
+                    "alpha",
+                    "Alpha",
+                    services = listOf(
+                        GroupServiceConfig.standard("standard", "repo-a", "Repo A").copy(
+                            bootstrap = BootstrapConfig(copyRules = listOf(BootstrapCopyRule("seed.txt", "copied.txt"))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val application = TaskApplicationService(
+            manifests = store,
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        val updated = application.rerunWorkspaceBootstrap(config, taskDirectory, worktree.toString())
+
+        val entry = updated.services.single()
+        assertEquals(emptyList(), entry.warnings)
+        assertEquals(WorkspaceHealth.READY, entry.health)
+        assertEquals("seed", Files.readString(worktree.resolve("copied.txt")))
+    }
+
+    @Test
+    fun `rerun bootstrap keeps the fresh warnings when a step still fails`() {
+        val root = Files.createTempDirectory("task-rerun-failing-")
+        val taskDirectory = root.resolve("TASK")
+        val repository = root.resolve("repo-a")
+        val worktree = taskDirectory.resolve("wt")
+        Files.createDirectories(repository)
+        Files.createDirectories(worktree)
+        val store = ManifestStore()
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    warningWorkspace(worktree, WorkspaceHealth.READY_WITH_WARNINGS, listOf("旧警告"), repositoryPath = repository),
+                ),
+            ),
+        )
+        val config = taskConfig(root).copy(
+            groups = listOf(
+                GroupConfig(
+                    "alpha",
+                    "Alpha",
+                    services = listOf(
+                        GroupServiceConfig.standard("standard", "repo-a", "Repo A").copy(
+                            bootstrap = BootstrapConfig(
+                                commands = listOf(BootstrapCommand(name = "缺失命令", executable = "definitely-missing-awm-test-executable")),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val application = TaskApplicationService(
+            manifests = store,
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        val updated = application.rerunWorkspaceBootstrap(config, taskDirectory, worktree.toString())
+
+        val entry = updated.services.single()
+        assertEquals(WorkspaceHealth.READY_WITH_WARNINGS, entry.health)
+        assertTrue(entry.warnings.any { it.contains("缺失命令") })
+        assertTrue(entry.warnings.none { it.contains("旧警告") })
+    }
+
+    @Test
+    fun `rerun bootstrap refuses a failed workspace`() {
+        val root = Files.createTempDirectory("task-rerun-failed-")
+        val taskDirectory = root.resolve("TASK")
+        val worktree = taskDirectory.resolve("wt")
+        Files.createDirectories(worktree)
+        val store = ManifestStore()
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(warningWorkspace(worktree, WorkspaceHealth.FAILED, listOf("创建失败"))),
+            ),
+        )
+        val application = TaskApplicationService(
+            manifests = store,
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            application.rerunWorkspaceBootstrap(taskConfig(root), taskDirectory, worktree.toString())
+        }
+    }
+
+    @Test
+    fun `rerun bootstrap reports a removed service configuration`() {
+        val root = Files.createTempDirectory("task-rerun-missing-service-")
+        val taskDirectory = root.resolve("TASK")
+        val worktree = taskDirectory.resolve("wt")
+        Files.createDirectories(worktree)
+        val store = ManifestStore()
+        store.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TASK",
+                taskDirectoryName = "TASK",
+                featureBranch = "feature/task",
+                createdAt = "2026-08-13 08:00:00",
+                updatedAt = "2026-08-13 08:00:00",
+                groupId = "alpha",
+                services = listOf(
+                    warningWorkspace(worktree, WorkspaceHealth.READY_WITH_WARNINGS, listOf("旧警告"), serviceId = "ghost"),
+                ),
+            ),
+        )
+        val application = TaskApplicationService(
+            manifests = store,
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        val error = assertFailsWith<IllegalStateException> {
+            application.rerunWorkspaceBootstrap(taskConfig(root), taskDirectory, worktree.toString())
+        }
+        assertTrue(error.message.orEmpty().contains("服务配置已经不存在"))
+    }
 }
+
+private fun warningWorkspace(
+    path: Path,
+    health: WorkspaceHealth,
+    warnings: List<String>,
+    serviceId: String = "standard",
+    repositoryPath: Path? = null,
+) = ServiceWorkspace(
+    repositoryId = "repo-a",
+    serviceName = "Repo A",
+    repositoryPath = (repositoryPath ?: Path.of("C:/repo-a")).toString(),
+    worktreePath = path.toString(),
+    developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+    branch = "feature/task",
+    health = health,
+    warnings = warnings,
+    groupServiceId = serviceId,
+    moduleId = "default",
+    moduleName = "default",
+)
 
 private fun emptyManifest(status: TaskLifecycleStatus) = TaskManifest(
     folderName = "task",

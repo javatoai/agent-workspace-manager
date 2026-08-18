@@ -379,6 +379,16 @@ class TaskController internal constructor(
             workspaceTools.retry(taskDirectory(task), task, toolId)
         }, onSuccess = { reloadTasks(it.folderName) })
 
+    fun clearWorkspaceWarnings(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
+        operations.run("正在清除警告…", "警告已清除", block = {
+            tasks.clearWorkspaceWarnings(session.config, taskDirectory(task), workspace.worktreePath)
+        }, onSuccess = { reloadTasks(it.folderName) })
+
+    fun rerunWorkspaceBootstrap(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
+        operations.run("正在重新执行 Bootstrap…", "Bootstrap 已重新执行", block = {
+            tasks.rerunWorkspaceBootstrap(session.config, taskDirectory(task), workspace.worktreePath)
+        }, onSuccess = { reloadTasks(it.folderName) })
+
     fun refreshGitStatus() {
         gitStatusJob?.cancel()
         val task = session.selectedTask ?: run {
@@ -514,7 +524,7 @@ class TaskController internal constructor(
         val taskKey = task.taskDirectoryName
         scope.launch {
             val result = withContext(ioDispatcher) {
-                runCatching { physicalWorkspaces(task).associate { workspaceKey(it) to gitOperations.preview(it) } }
+                runCatching { gitOperations.previews(physicalWorkspaces(task)) }
             }
             if (session.selectedTask?.taskDirectoryName != taskKey) return@launch
             batchGitPreviews = result.fold(

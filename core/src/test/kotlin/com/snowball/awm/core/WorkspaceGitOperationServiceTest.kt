@@ -193,16 +193,9 @@ class WorkspaceGitOperationServiceTest {
 
     @Test
     fun `batch rechecks each fingerprint immediately before its first write`() {
-        val (remoteA, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-race-a"))
-        val (remoteB, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-race-b"))
-        val checkoutA = GitTestSupport.clone(remoteA, temporary.resolve("batch-race-a/checkout"))
-        val checkoutB = GitTestSupport.clone(remoteB, temporary.resolve("batch-race-b/checkout"))
-        GitTestSupport.run(checkoutA, "switch", "-c", "feature/a")
-        GitTestSupport.run(checkoutB, "switch", "-c", "feature/b")
-        Files.writeString(checkoutA.resolve("planned.txt"), "planned a")
-        Files.writeString(checkoutB.resolve("planned.txt"), "planned b")
-        val workspaceA = workspace(checkoutA, remoteA, "feature/a", "service-a")
-        val workspaceB = workspace(checkoutB, remoteB, "feature/b", "service-b")
+        val fixture = sharedRepositoryWorkspaces("batch-race")
+        Files.writeString(fixture.worktreeA.resolve("planned.txt"), "planned a")
+        Files.writeString(fixture.worktreeB.resolve("planned.txt"), "planned b")
         val delegate = ProcessCommandRunner()
         val changedSecondWorkspace = AtomicBoolean()
         val runner = object : CommandRunner {
@@ -213,10 +206,10 @@ class WorkspaceGitOperationServiceTest {
                 environment: Map<String, String>,
             ): CommandResult {
                 if (
-                    "commit" in command && checkoutA.toString() in command &&
+                    "commit" in command && fixture.worktreeA.toString() in command &&
                     changedSecondWorkspace.compareAndSet(false, true)
                 ) {
-                    Files.writeString(checkoutB.resolve("late.txt"), "arrived after batch confirmation")
+                    Files.writeString(fixture.worktreeB.resolve("late.txt"), "arrived after batch confirmation")
                 }
                 return delegate.run(command, workingDirectory, timeout, environment)
             }
@@ -225,27 +218,27 @@ class WorkspaceGitOperationServiceTest {
             git = GitClient(runner),
             repositoryLock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("batch-race-home"))),
         )
-        val previewA = service.preview(workspaceA)
-        val previewB = service.preview(workspaceB)
+        val previewA = service.preview(fixture.workspaceA)
+        val previewB = service.preview(fixture.workspaceB)
 
         val result = service.batch(
-            listOf(workspaceA, workspaceB),
+            listOf(fixture.workspaceA, fixture.workspaceB),
             WorkspaceGitBatchMode.COMMIT,
             commitMessages = mapOf(
-                WorkspaceGitOperationService.workspacePathKey(workspaceA) to "feat: planned a",
-                WorkspaceGitOperationService.workspacePathKey(workspaceB) to "feat: planned b",
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceA) to "feat: planned a",
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceB) to "feat: planned b",
             ),
             expectedFingerprints = mapOf(
-                WorkspaceGitOperationService.workspacePathKey(workspaceA) to previewA.fingerprint,
-                WorkspaceGitOperationService.workspacePathKey(workspaceB) to previewB.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceA) to previewA.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceB) to previewB.fingerprint,
             ),
         )
 
         assertEquals(WorkspaceGitStepState.SUCCESS, result.items[0].commitState)
         assertEquals(WorkspaceGitStepState.FAILED, result.items[1].commitState)
         assertTrue(result.items[1].message.contains("状态已变化"))
-        assertEquals("1", GitTestSupport.run(checkoutB, "rev-list", "--count", "HEAD"))
-        assertTrue(GitTestSupport.run(checkoutB, "status", "--porcelain").contains("late.txt"))
+        assertEquals("1", GitTestSupport.run(fixture.worktreeB, "rev-list", "--count", "HEAD"))
+        assertTrue(GitTestSupport.run(fixture.worktreeB, "status", "--porcelain").contains("late.txt"))
     }
 
     @Test
@@ -278,22 +271,15 @@ class WorkspaceGitOperationServiceTest {
 
     @Test
     fun `batch push refuses a head changed after confirmation`() {
-        val (remoteA, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-push-race-a"))
-        val (remoteB, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-push-race-b"))
-        val checkoutA = GitTestSupport.clone(remoteA, temporary.resolve("batch-push-race-a/checkout"))
-        val checkoutB = GitTestSupport.clone(remoteB, temporary.resolve("batch-push-race-b/checkout"))
-        GitTestSupport.run(checkoutA, "switch", "-c", "feature/a")
-        GitTestSupport.run(checkoutB, "switch", "-c", "feature/b")
-        val workspaceA = workspace(checkoutA, remoteA, "feature/a", "service-a")
-        val workspaceB = workspace(checkoutB, remoteB, "feature/b", "service-b")
+        val fixture = sharedRepositoryWorkspaces("batch-push-race")
         val delegate = ProcessCommandRunner()
         val changedSecond = AtomicBoolean()
         val runner = object : CommandRunner {
             override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
-                if ("push" in command && checkoutA.toString() in command && changedSecond.compareAndSet(false, true)) {
-                    Files.writeString(checkoutB.resolve("late.txt"), "late")
-                    GitTestSupport.run(checkoutB, "add", "late.txt")
-                    GitTestSupport.run(checkoutB, "commit", "-m", "late external commit")
+                if ("push" in command && fixture.worktreeA.toString() in command && changedSecond.compareAndSet(false, true)) {
+                    Files.writeString(fixture.worktreeB.resolve("late.txt"), "late")
+                    GitTestSupport.run(fixture.worktreeB, "add", "late.txt")
+                    GitTestSupport.run(fixture.worktreeB, "commit", "-m", "late external commit")
                 }
                 return delegate.run(command, workingDirectory, timeout, environment)
             }
@@ -302,41 +288,34 @@ class WorkspaceGitOperationServiceTest {
             git = GitClient(runner),
             repositoryLock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("batch-push-race-home"))),
         )
-        val previewA = service.preview(workspaceA)
-        val previewB = service.preview(workspaceB)
+        val previewA = service.preview(fixture.workspaceA)
+        val previewB = service.preview(fixture.workspaceB)
 
         val result = service.batch(
-            listOf(workspaceA, workspaceB),
+            listOf(fixture.workspaceA, fixture.workspaceB),
             WorkspaceGitBatchMode.PUSH,
             expectedFingerprints = mapOf(
-                WorkspaceGitOperationService.workspacePathKey(workspaceA) to previewA.fingerprint,
-                WorkspaceGitOperationService.workspacePathKey(workspaceB) to previewB.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceA) to previewA.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceB) to previewB.fingerprint,
             ),
         )
 
         assertEquals(WorkspaceGitStepState.FAILED, result.items[1].pushState)
         assertTrue(result.items[1].message.contains("状态已变化"))
-        assertTrue(GitTestSupport.run(checkoutB, "ls-remote", "--heads", "origin", "refs/heads/feature/b").isBlank())
+        assertTrue(GitTestSupport.run(fixture.main, "ls-remote", "--heads", "origin", "refs/heads/feature/b").isBlank())
     }
 
     @Test
     fun `batch commit and push rechecks a clean workspace before push`() {
-        val (remoteA, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-clean-cp-race-a"))
-        val (remoteB, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("batch-clean-cp-race-b"))
-        val checkoutA = GitTestSupport.clone(remoteA, temporary.resolve("batch-clean-cp-race-a/checkout"))
-        val checkoutB = GitTestSupport.clone(remoteB, temporary.resolve("batch-clean-cp-race-b/checkout"))
-        GitTestSupport.run(checkoutA, "switch", "-c", "feature/a")
-        GitTestSupport.run(checkoutB, "switch", "-c", "feature/b")
-        val workspaceA = workspace(checkoutA, remoteA, "feature/a", "service-a")
-        val workspaceB = workspace(checkoutB, remoteB, "feature/b", "service-b")
+        val fixture = sharedRepositoryWorkspaces("batch-clean-cp-race")
         val delegate = ProcessCommandRunner()
         val changedSecond = AtomicBoolean()
         val runner = object : CommandRunner {
             override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
-                if ("push" in command && checkoutA.toString() in command && changedSecond.compareAndSet(false, true)) {
-                    Files.writeString(checkoutB.resolve("late.txt"), "late")
-                    GitTestSupport.run(checkoutB, "add", "late.txt")
-                    GitTestSupport.run(checkoutB, "commit", "-m", "late external commit")
+                if ("push" in command && fixture.worktreeA.toString() in command && changedSecond.compareAndSet(false, true)) {
+                    Files.writeString(fixture.worktreeB.resolve("late.txt"), "late")
+                    GitTestSupport.run(fixture.worktreeB, "add", "late.txt")
+                    GitTestSupport.run(fixture.worktreeB, "commit", "-m", "late external commit")
                 }
                 return delegate.run(command, workingDirectory, timeout, environment)
             }
@@ -345,23 +324,62 @@ class WorkspaceGitOperationServiceTest {
             git = GitClient(runner),
             repositoryLock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("batch-clean-cp-race-home"))),
         )
-        val previewA = service.preview(workspaceA)
-        val previewB = service.preview(workspaceB)
+        val previewA = service.preview(fixture.workspaceA)
+        val previewB = service.preview(fixture.workspaceB)
 
         val result = service.batch(
-            listOf(workspaceA, workspaceB),
+            listOf(fixture.workspaceA, fixture.workspaceB),
             WorkspaceGitBatchMode.COMMIT_AND_PUSH,
             expectedFingerprints = mapOf(
-                WorkspaceGitOperationService.workspacePathKey(workspaceA) to previewA.fingerprint,
-                WorkspaceGitOperationService.workspacePathKey(workspaceB) to previewB.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceA) to previewA.fingerprint,
+                WorkspaceGitOperationService.workspacePathKey(fixture.workspaceB) to previewB.fingerprint,
             ),
         )
 
         assertEquals(WorkspaceGitStepState.SKIPPED, result.items[1].commitState)
         assertEquals(WorkspaceGitStepState.FAILED, result.items[1].pushState)
         assertTrue(result.items[1].message.contains("状态已变化"))
-        assertTrue(GitTestSupport.run(checkoutB, "ls-remote", "--heads", "origin", "refs/heads/feature/b").isBlank())
+        assertTrue(GitTestSupport.run(fixture.main, "ls-remote", "--heads", "origin", "refs/heads/feature/b").isBlank())
     }
+
+    private class SharedRepositoryWorkspaces(
+        val main: Path,
+        val worktreeA: Path,
+        val worktreeB: Path,
+        val workspaceA: ServiceWorkspace,
+        val workspaceB: ServiceWorkspace,
+    )
+
+    /** Two worktrees of one repository, so batch execution serializes them through the shared lock. */
+    private fun sharedRepositoryWorkspaces(name: String): SharedRepositoryWorkspaces {
+        val root = temporary.resolve(name)
+        val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
+        val main = GitTestSupport.clone(remote, root.resolve("main"))
+        GitTestSupport.run(main, "branch", "feature/a")
+        GitTestSupport.run(main, "branch", "feature/b")
+        val worktreeA = root.resolve("worktree-a")
+        val worktreeB = root.resolve("worktree-b")
+        GitTestSupport.run(main, "worktree", "add", worktreeA.toString(), "feature/a")
+        GitTestSupport.run(main, "worktree", "add", worktreeB.toString(), "feature/b")
+        return SharedRepositoryWorkspaces(
+            main = main,
+            worktreeA = worktreeA,
+            worktreeB = worktreeB,
+            workspaceA = worktree(main, worktreeA, "feature/a", "service-a"),
+            workspaceB = worktree(main, worktreeB, "feature/b", "service-b"),
+        )
+    }
+
+    private fun worktree(repository: Path, worktreePath: Path, branch: String, service: String) = ServiceWorkspace(
+        repositoryId = service,
+        serviceName = service,
+        repositoryPath = repository.toString(),
+        worktreePath = worktreePath.toString(),
+        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+        branch = branch,
+        strategy = WorkspaceStrategy.STANDARD_WORKTREE,
+        pushRemote = "origin",
+    )
 
     private fun workspace(path: Path, remote: Path, branch: String, service: String) = ServiceWorkspace(
         repositoryId = service,

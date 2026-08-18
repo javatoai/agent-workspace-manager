@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Commit
@@ -198,6 +199,7 @@ private fun WorkspaceCardSummary(
     modifier: Modifier,
 ) {
     val statusPlacement = workspaceStatusPlacement(health)
+    var confirmRerunBootstrap by remember(workspace.worktreePath) { mutableStateOf(false) }
     Column(modifier) {
         Row(Modifier.heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
@@ -271,7 +273,23 @@ private fun WorkspaceCardSummary(
             }
         }
         if (workspace.warnings.isNotEmpty()) {
-            Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                SelectionContainer(Modifier.weight(1f)) {
+                    Text(workspace.warnings.joinToString("\n"), color = WarningAmber, style = MaterialTheme.typography.bodySmall)
+                }
+                ActionIconButton(
+                    "重新执行 Bootstrap",
+                    { confirmRerunBootstrap = true },
+                    Modifier.size(28.dp),
+                    enabled = !controller.busy,
+                ) { Icon(Icons.Outlined.Refresh, "重新执行 Bootstrap", Modifier.size(15.dp), tint = WarningAmber) }
+                ActionIconButton(
+                    "清除警告（确认已知晓）",
+                    { controller.clearWorkspaceWarnings(task, workspace) },
+                    Modifier.size(28.dp),
+                    enabled = !controller.busy,
+                ) { Icon(Icons.Outlined.Close, "清除警告", Modifier.size(15.dp), tint = WarningAmber) }
+            }
         }
         if (controller.config.blockedGitWriteBranches.any { it.equals(displayedBranch, ignoreCase = true) }) {
             Text(
@@ -279,6 +297,16 @@ private fun WorkspaceCardSummary(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+    if (confirmRerunBootstrap) {
+        ConfirmDialog(
+            "重新执行 Bootstrap",
+            "将按当前服务配置对该工作区重新执行 Bootstrap 复制规则与命令；已有文件按规则覆盖，命令会重复执行一次。禁止覆盖的规则会因目标已存在而报警告。",
+            onDismiss = { confirmRerunBootstrap = false },
+        ) {
+            confirmRerunBootstrap = false
+            controller.rerunWorkspaceBootstrap(task, workspace)
         }
     }
 }
