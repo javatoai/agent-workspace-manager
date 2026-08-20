@@ -3,6 +3,8 @@ package com.snowball.awm.core
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -134,6 +136,10 @@ class MeegleExecutableTest {
     }
 
     @Test
+    @DisabledOnOs(
+        value = [OS.MAC, OS.LINUX],
+        disabledReason = "The fixture is created without a POSIX execute bit; Windows still covers this path.",
+    )
     fun `path normalization accepts an existing executable file`() {
         val file = Files.writeString(temporary.resolve("meegle"), "#!/bin/sh\n")
         assertEquals(file.toString(), normalizeMeegleExecutablePath(" ${file.toAbsolutePath()} "))
