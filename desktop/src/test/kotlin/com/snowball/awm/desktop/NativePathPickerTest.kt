@@ -27,6 +27,13 @@ class NativePathPickerTest {
         assertEquals(emptyList<String>(), applicationPickerExtensions("Windows 11"))
         assertEquals(emptyList<String>(), applicationPickerExtensions("Linux"))
     }
+
+    @Test
+    fun `terminal picker accepts macOS application bundles`() {
+        assertEquals(true, terminalUsesApplicationPicker("Mac OS X"))
+        assertEquals(false, terminalUsesApplicationPicker("Windows 11"))
+        assertEquals(false, terminalUsesApplicationPicker("Linux"))
+    }
 }
 
 private class FakeNativePathPicker(

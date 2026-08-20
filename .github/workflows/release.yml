@@ -135,7 +135,7 @@ jobs:
           # Normalize them before executing them on the macOS runner.
           perl -pi -e 's/\r$//' ./gradlew ./scripts/build-macos.sh
           chmod +x ./gradlew ./scripts/build-macos.sh
-          MAC_PACKAGE_VERSION=3.0.0 ./scripts/build-macos.sh
+          MAC_PACKAGE_VERSION=3.0.1 ./scripts/build-macos.sh
 
       - name: Show macOS packaging diagnostics
         if: always()

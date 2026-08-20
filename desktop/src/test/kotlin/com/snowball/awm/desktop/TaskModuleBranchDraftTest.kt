@@ -38,4 +38,19 @@ class TaskModuleBranchDraftTest {
         assertEquals("feature/custom-api", overrides[0].targetBranch)
         assertEquals("feature/REQ-2-jobs/nightly", overrides[1].targetBranch)
     }
+
+    @Test
+    fun `selected service targets follow a task branch edit while manual targets remain`() {
+        val initial = configuredTaskModuleDrafts(service, "feature/REQ-1")
+        val drafts = mapOf("backend" to initial.mapIndexed { index, module ->
+            if (index == 0) module.copy(targetBranch = "feature/custom-api", targetEdited = true) else module
+        })
+
+        val updated = retargetServiceModuleDrafts(drafts, "feature/REQ-2")
+
+        assertEquals(
+            listOf("feature/custom-api", "feature/REQ-2-jobs/nightly"),
+            updated.getValue("backend").map(TaskModuleUiDraft::targetBranch),
+        )
+    }
 }

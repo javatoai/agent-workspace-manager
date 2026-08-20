@@ -85,6 +85,13 @@ internal fun retargetUntouchedModules(modules: List<TaskModuleUiDraft>, taskBran
         )
     }
 
+/** Applies a task-branch change to every selected service without overwriting explicit module edits. */
+internal fun retargetServiceModuleDrafts(
+    draftsByService: Map<String, List<TaskModuleUiDraft>>,
+    taskBranch: String,
+): Map<String, List<TaskModuleUiDraft>> =
+    draftsByService.mapValues { (_, modules) -> retargetUntouchedModules(modules, taskBranch) }
+
 internal fun defaultTaskModuleTargetBranch(
     taskBranch: String,
     service: GroupServiceConfig,

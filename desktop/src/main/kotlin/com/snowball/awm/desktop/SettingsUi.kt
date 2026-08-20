@@ -770,9 +770,18 @@ private fun SettingsToolsSection(
             Modifier.onFocusChanged { focus ->
                 if (!focus.isFocused && terminal.trim() != controller.config.terminalExecutable.orEmpty()) onSaveDevelopmentTools()
             },
-        ) { controller.chooseFile(terminal) { onTerminalChange(it); onSaveDevelopmentTools() } }
+        ) {
+            val selected: (String) -> Unit = { path -> onTerminalChange(path); onSaveDevelopmentTools() }
+            if (terminalUsesApplicationPicker(System.getProperty("os.name"))) {
+                controller.chooseApplication(terminal, selected)
+            } else {
+                controller.chooseFile(terminal, selected)
+            }
+        }
     }
 }
+
+internal fun terminalUsesApplicationPicker(osName: String): Boolean = osName.startsWith("Mac", ignoreCase = true)
 
 @Composable
 private fun SettingsBranchesSection(
@@ -954,46 +963,99 @@ private fun GitEnvironmentPanel(controller: DesktopApplication, state: LocalGitS
 
 @Composable
 private fun GitEnvironmentSummary(snapshot: LocalGitEnvironmentSnapshot, refreshing: Boolean) {
+    val credentialFields = snapshot.globalCredentialHelpers.ifEmpty {
+        listOf(GitConfigValue("credential.helper", "未配置", null))
+    }.map { GitEnvironmentField(it.key, it.value, it.origin) }
+    val globalConfigFields = visibleGlobalGitKeyConfig(snapshot).map { GitEnvironmentField(it.key, it.value, it.origin) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Git 可用", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    if (refreshing) Text("刷新中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                GitEnvironmentGrid(
+                    listOf(
+                        GitEnvironmentField("版本", snapshot.gitVersion ?: "未读取到"),
+                        GitEnvironmentField("生效路径", snapshot.gitExecutable ?: "未读取到", monospace = true),
+                    ),
+                )
+            }
+        }
+        GitEnvironmentSection(
+            "身份",
+            listOf(
+                GitEnvironmentField("系统用户", snapshot.systemUser.ifBlank { "未读取到" }),
+                GitEnvironmentField("全局 user.name", snapshot.globalUserName?.value ?: "未配置", snapshot.globalUserName?.origin),
+                GitEnvironmentField("全局 user.email", snapshot.globalUserEmail?.value ?: "未配置", snapshot.globalUserEmail?.origin),
+            ),
+        )
+        GitEnvironmentSection("凭据与其他全局配置", credentialFields + globalConfigFields)
+        snapshot.errors.forEach { error ->
+            Text("全局读取错误：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+private data class GitEnvironmentField(
+    val label: String,
+    val value: String,
+    val origin: String? = null,
+    val monospace: Boolean = false,
+)
+
+@Composable
+private fun GitEnvironmentSection(title: String, fields: List<GitEnvironmentField>) {
     Surface(
         Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
         shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Git 可用", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                if (refreshing) Text("刷新中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
-            GitEnvironmentValue("版本", snapshot.gitVersion ?: "未读取到")
-            GitEnvironmentValue("命令路径", snapshot.gitExecutable ?: "未读取到", monospace = true)
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            GitEnvironmentGrid(fields)
         }
-    }
-    Text("身份", style = MaterialTheme.typography.titleSmall)
-    GitEnvironmentValue("系统用户", snapshot.systemUser.ifBlank { "未读取到" })
-    GitEnvironmentValue("全局 user.name", snapshot.globalUserName?.value ?: "未配置", snapshot.globalUserName?.origin)
-    GitEnvironmentValue("全局 user.email", snapshot.globalUserEmail?.value ?: "未配置", snapshot.globalUserEmail?.origin)
-    Text("凭据", style = MaterialTheme.typography.titleSmall)
-    if (snapshot.globalCredentialHelpers.isEmpty()) {
-        GitEnvironmentValue("credential.helper", "未配置")
-    } else {
-        snapshot.globalCredentialHelpers.forEach { helper ->
-            GitEnvironmentValue(helper.key, helper.value, helper.origin)
-        }
-    }
-    visibleGlobalGitKeyConfig(snapshot).takeIf(List<GitConfigValue>::isNotEmpty)?.let { keyConfig ->
-        Text("关键配置", style = MaterialTheme.typography.titleSmall)
-        keyConfig.forEach { config -> GitEnvironmentValue(config.key, config.value, config.origin) }
-    }
-    snapshot.errors.forEach { error ->
-        Text("全局读取错误：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
 }
 
 @Composable
-private fun GitEnvironmentValue(label: String, value: String, origin: String? = null, monospace: Boolean = false) {
+private fun GitEnvironmentGrid(fields: List<GitEnvironmentField>) {
+    fields.chunked(2).forEach { row ->
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            row.forEach { field ->
+                GitEnvironmentValue(
+                    label = field.label,
+                    value = field.value,
+                    origin = field.origin,
+                    monospace = field.monospace,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun GitEnvironmentValue(
+    label: String,
+    value: String,
+    origin: String? = null,
+    monospace: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
     SelectionContainer {
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = if (monospace) FontFamily.Monospace else null)
             origin?.let {
@@ -1083,7 +1145,7 @@ private fun GitExecutablePathEditor(controller: DesktopApplication) {
         mutableStateOf(controller.config.gitExecutablePath.orEmpty())
     }
     val saving = controller.settingsSaveState("git") == SettingsSaveState.SAVING
-    val (effectiveCommand, source) = controller.gitCommandResolution()
+    val source = controller.gitCommandResolution().second
     val osName = System.getProperty("os.name")
     val isWindows = osName.startsWith("Windows", ignoreCase = true)
     val probeHint = gitProbeCommandDisplay(osName)
@@ -1111,7 +1173,7 @@ private fun GitExecutablePathEditor(controller: DesktopApplication) {
         )
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "当前生效：$effectiveCommand（$sourceLabel）",
+                "命令来源：$sourceLabel；右侧可复制探测命令。",
                 Modifier.weight(1f),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -92,6 +92,15 @@ internal fun CreateTaskDialog(
     val moduleDraftsByService = remember(groupId) { mutableStateMapOf<String, List<TaskModuleUiDraft>>() }
     val group = controller.config.groups.first { it.id == groupId }
     val toolOptions = controller.workspaceToolOptions(groupId)
+    fun retargetSelectedServiceBranches(taskBranch: String) {
+        val updated = retargetServiceModuleDrafts(moduleDraftsByService.toMap(), taskBranch)
+        updated.forEach { (serviceId, modules) -> moduleDraftsByService[serviceId] = modules }
+    }
+    fun updateDraft(updated: RequirementDraftState) {
+        val branchChanged = draft.branch != updated.branch
+        draft = updated
+        if (branchChanged) retargetSelectedServiceBranches(updated.branch)
+    }
     fun effectiveBaseOverrides(): List<ModuleBaseOverride> = group.services.filter { it.id in selected }.flatMap { service ->
         taskModuleOverrides(service, draft.branch, baseOverrideValues, targetBranchValues)
     }
@@ -131,12 +140,7 @@ internal fun CreateTaskDialog(
     LaunchedEffect(draft.requirementLink) {
         val requestedLink = draft.requirementLink
         controller.requestRequirementMetadata(requestedLink) { metadata ->
-            draft = draft.applyMetadata(requestedLink, metadata)
-        }
-    }
-    LaunchedEffect(draft.branch) {
-        moduleDraftsByService.keys.toList().forEach { serviceId ->
-            moduleDraftsByService[serviceId] = retargetUntouchedModules(moduleDraftsByService[serviceId].orEmpty(), draft.branch)
+            updateDraft(draft.applyMetadata(requestedLink, metadata))
         }
     }
     LaunchedEffect(Unit) { controller.requirementController.loadCandidates() }
@@ -176,7 +180,7 @@ internal fun CreateTaskDialog(
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                             OutlinedTextField(
                                 draft.requirementLink,
-                                { draft = draft.changeRequirement(it, group.defaultBranchPrefix) },
+                                { updateDraft(draft.changeRequirement(it, group.defaultBranchPrefix)) },
                                 Modifier.weight(1f),
                                 label = { Text("飞书需求链接（可选）") },
                                 supportingText = {
@@ -230,7 +234,7 @@ internal fun CreateTaskDialog(
                                                     }
                                                 },
                                                 onClick = {
-                                                    draft = draft.changeRequirement(candidate.url, group.defaultBranchPrefix, candidate.title)
+                                                    updateDraft(draft.changeRequirement(candidate.url, group.defaultBranchPrefix, candidate.title))
                                                     requirementMenuExpanded = false
                                                 },
                                             )
@@ -248,7 +252,7 @@ internal fun CreateTaskDialog(
                         }
                         OutlinedTextField(
                             value = draft.taskName,
-                            onValueChange = { draft = draft.editName(it) },
+                            onValueChange = { updateDraft(draft.editName(it)) },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("文件夹名称") },
                             placeholder = { Text("例如：PAY-1024 支付订单优化") },
@@ -258,7 +262,7 @@ internal fun CreateTaskDialog(
                         )
                         OutlinedTextField(
                             value = draft.branch,
-                            onValueChange = { draft = draft.editBranch(it) },
+                            onValueChange = { updateDraft(draft.editBranch(it)) },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("任务分支") },
                             placeholder = { Text("例如：feature/PAY-1024") },
@@ -277,7 +281,7 @@ internal fun CreateTaskDialog(
                                     selected = emptySet()
                                     selectedToolIds = candidate.defaultWorkspaceToolIds.toSet()
                                     serviceSearch = ""
-                                    draft = draft.changeGroup(candidate.defaultBranchPrefix)
+                                    updateDraft(draft.changeGroup(candidate.defaultBranchPrefix))
                                 }, label = { Text(candidate.name) }) }
                             }
                         }

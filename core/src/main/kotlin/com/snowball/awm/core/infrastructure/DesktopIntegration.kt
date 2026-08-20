@@ -57,20 +57,14 @@ class DesktopIntegration(
     }
 
     fun openTerminal(path: Path, configuredExecutable: String? = null) {
-        val os = System.getProperty("os.name")
-        val command = when {
-            configuredExecutable != null ->
-                listOf(configuredExecutable, path.toAbsolutePath().toString())
-            os.startsWith("Windows", ignoreCase = true) && commandExists("wt.exe") ->
-                listOf("wt.exe", "-d", path.toAbsolutePath().toString())
-            os.startsWith("Windows", ignoreCase = true) ->
-                listOf("powershell.exe", "-NoExit", "-Command", "Set-Location -LiteralPath '${
-                    path.toAbsolutePath().toString().replace("'", "''")
-                }'")
-            os.startsWith("Mac", ignoreCase = true) ->
-                listOf("open", "-a", "Terminal", path.toAbsolutePath().toString())
-            else -> listOf("x-terminal-emulator", "--working-directory", path.toAbsolutePath().toString())
-        }
+        val osName = System.getProperty("os.name")
+        val command = TerminalLaunchCommand.build(
+            configuredExecutable = configuredExecutable,
+            target = path,
+            osName = osName,
+            windowsTerminalAvailable = configuredExecutable.isNullOrBlank() &&
+                osName.startsWith("Windows", ignoreCase = true) && commandExists("wt.exe"),
+        )
         launchDetached(command)
     }
 
@@ -95,6 +89,32 @@ class DesktopIntegration(
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
+    }
+}
+
+/** Builds a terminal command without treating a macOS .app bundle as an executable file. */
+object TerminalLaunchCommand {
+    fun build(
+        configuredExecutable: String?,
+        target: Path,
+        osName: String = System.getProperty("os.name"),
+        windowsTerminalAvailable: Boolean = false,
+    ): List<String> {
+        val normalizedTarget = target.toAbsolutePath().normalize().toString()
+        val configured = configuredExecutable?.trim()?.takeIf(String::isNotEmpty)
+        return when {
+            configured != null && osName.startsWith("Mac", ignoreCase = true) && configured.endsWith(".app", ignoreCase = true) ->
+                listOf("open", "-a", configured, normalizedTarget)
+            configured != null -> listOf(configured, normalizedTarget)
+            osName.startsWith("Windows", ignoreCase = true) && windowsTerminalAvailable ->
+                listOf("wt.exe", "-d", normalizedTarget)
+            osName.startsWith("Windows", ignoreCase = true) ->
+                listOf("powershell.exe", "-NoExit", "-Command", "Set-Location -LiteralPath '${
+                    normalizedTarget.replace("'", "''")
+                }'")
+            osName.startsWith("Mac", ignoreCase = true) -> listOf("open", "-a", "Terminal", normalizedTarget)
+            else -> listOf("x-terminal-emulator", "--working-directory", normalizedTarget)
+        }
     }
 }
 
