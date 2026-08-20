@@ -4,6 +4,7 @@ import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.ManifestStore
+import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RemoteBranchCatalog
@@ -36,6 +37,24 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 
 class DesktopApplicationTest {
+    @Test
+    fun `configured Meegle executable is available after application initialization`() {
+        val root = Files.createTempDirectory("awm-meegle-executable")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val executable = Files.createFile(root.resolve("meegle.cmd")).toAbsolutePath().toString()
+        val store = ConfigStore(paths)
+        store.save(AppConfig(meegleExecutablePath = executable))
+
+        val controller = DesktopApplication(paths = paths, configStore = store)
+        try {
+            val resolution = controller.meegleCommandResolution()
+            assertEquals(executable, resolution.first)
+            assertEquals(MeegleCommandSource.CONFIGURED, resolution.second)
+        } finally {
+            controller.close()
+        }
+    }
+
     @Test
     fun `invalid disk configuration remains visible and is never overwritten`() {
         val root = Files.createTempDirectory("awm-invalid-config")

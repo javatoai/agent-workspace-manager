@@ -131,7 +131,7 @@ class ConfigStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
-        assertEquals("0.8.1", store.load().schemaVersion)
+        assertEquals("0.9.0", store.load().schemaVersion)
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
@@ -208,12 +208,12 @@ class ConfigStoreTest {
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.8.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"0.9.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.8.9", compatible.schemaVersion)
+        assertEquals("0.9.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)

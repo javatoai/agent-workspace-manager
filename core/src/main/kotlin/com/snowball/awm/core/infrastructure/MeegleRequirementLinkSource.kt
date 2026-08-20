@@ -12,9 +12,10 @@ class MeegleRequirementLinkSource(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val metadata: RequirementMetadataProvider = MeegleRequirementMetadataProvider(runner),
     private val isWindows: Boolean = System.getProperty("os.name").lowercase(Locale.ROOT).contains("win"),
+    private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(isWindows),
 ) : RequirementLinkSource() {
     override val sourceId: String = "meegle"
-    private fun command() = if (isWindows) "meegle.cmd" else "meegle"
+    private fun command() = meegleExecutable.resolve()
     override fun isInstalled(): Boolean = runCatching { runner.run(listOf(command(), "version"), timeout = Duration.ofSeconds(4)).succeeded }.getOrDefault(false)
     override fun load(projects: List<MeegleProjectConfig>): RequirementLinkLoadResult {
         val links = linkedSetOf<String>(); val failures = mutableListOf<RequirementLinkFailure>()

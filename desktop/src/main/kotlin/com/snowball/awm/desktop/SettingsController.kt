@@ -14,6 +14,9 @@ import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.MeegleProjectCatalog
 import com.snowball.awm.core.MeegleCliService
 import com.snowball.awm.core.MeegleCliStatus
+import com.snowball.awm.core.MeegleCommandSource
+import com.snowball.awm.core.MeegleExecutable
+import com.snowball.awm.core.normalizeMeegleExecutablePath
 import com.snowball.awm.core.MeegleProjectSummary
 import com.snowball.awm.core.LocalGitEnvironmentInspector
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
@@ -86,6 +89,7 @@ class SettingsController internal constructor(
     private val remoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(),
     private val meegleProjectCatalog: MeegleProjectCatalog,
     private val meegleCliService: MeegleCliService,
+    private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
     private val localGitInspector: LocalGitEnvironmentInspector,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -121,6 +125,21 @@ class SettingsController internal constructor(
         "feishu",
         settingsOperations,
     ) { it.copy(meegleProjects = projects) }
+
+    fun updateMeegleExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 Meegle 命令路径…",
+        "Meegle 命令路径已保存",
+        onFailure,
+        "feishu",
+        settingsOperations,
+        onCompleted = { refreshMeegleStatus(force = true) },
+    ) { config ->
+        config.copy(meegleExecutablePath = normalizeMeegleExecutablePath(raw))
+    }
+
+    /** The currently effective Meegle command and where it came from; safe on the UI thread. */
+    fun meegleCommandResolution(): Pair<String, MeegleCommandSource> =
+        meegleExecutable.current() to meegleExecutable.source()
 
     fun setTheme(theme: ThemePreference): Boolean = mutate(
         "正在更新主题…",
@@ -222,7 +241,10 @@ class SettingsController internal constructor(
         if (!force && meegleCli is MeegleCliState.Loading) return
         meegleCli = MeegleCliState.Loading
         scope.launch {
-            val result = withContext(ioDispatcher) { runCatching { meegleCliService.status() } }
+            val result = withContext(ioDispatcher) {
+                if (force) runCatching { meegleExecutable.probe() }
+                runCatching { meegleCliService.status() }
+            }
             meegleCli = result.fold(
                 onSuccess = { MeegleCliState.Ready(it) },
                 onFailure = { MeegleCliState.Failed(it.message ?: "检查 Meegle CLI 状态失败") },
@@ -380,12 +402,13 @@ class SettingsController internal constructor(
         onFailure: (Throwable) -> Unit = {},
         saveKey: String? = null,
         runner: OperationRunner = operations,
+        onCompleted: () -> Unit = {},
         transform: (AppConfig) -> AppConfig,
     ): Boolean = runner.run(
         active,
         success,
         block = { configStore.update(transform) },
-        onSuccess = { applyConfig(it); saveKey?.let { key -> setSaveState(key, SettingsSaveState.SAVED) } },
+        onSuccess = { applyConfig(it); saveKey?.let { key -> setSaveState(key, SettingsSaveState.SAVED) }; onCompleted() },
         onFailure = { error -> saveKey?.let { key -> setSaveState(key, SettingsSaveState.FAILED) }; onFailure(error) },
     ).also { started -> saveKey?.let { setSaveState(it, if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) } }
 

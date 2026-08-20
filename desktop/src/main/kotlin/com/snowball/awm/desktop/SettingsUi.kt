@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ApplicationEventClipboard
+import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DevelopmentToolConfig
 import com.snowball.awm.core.DevelopmentToolType
@@ -1069,6 +1070,53 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
         controller.meegleOperationError?.let { error ->
             SelectionContainer {
                 Text(error, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        MeegleExecutablePathEditor(controller)
+    }
+}
+
+@Composable
+private fun MeegleExecutablePathEditor(controller: DesktopApplication) {
+    var pathInput by remember(controller.config.meegleExecutablePath) {
+        mutableStateOf(controller.config.meegleExecutablePath.orEmpty())
+    }
+    val saving = controller.settingsSaveState("feishu") == SettingsSaveState.SAVING
+    val (effectiveCommand, source) = controller.meegleCommandResolution()
+    val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+    val probeHint = if (isWindows) "(Get-Command meegle.cmd).Source" else "command -v meegle"
+    val sourceLabel = when (source) {
+        MeegleCommandSource.CONFIGURED -> "已配置"
+        MeegleCommandSource.PROBED -> "自动探测"
+        MeegleCommandSource.PATH_FALLBACK -> "PATH 回退"
+    }
+    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            pathInput,
+            { pathInput = it },
+            Modifier.fillMaxWidth().onFocusChanged { focus ->
+                if (!focus.isFocused && pathInput.trim() != controller.config.meegleExecutablePath.orEmpty()) {
+                    controller.updateMeegleExecutablePath(pathInput) {
+                        pathInput = controller.config.meegleExecutablePath.orEmpty()
+                    }
+                }
+            },
+            label = { Text("Meegle 命令路径（留空自动探测）") },
+            placeholder = { Text(if (isWindows) "例如 C:\\tools\\meegle.cmd" else "例如 /opt/homebrew/bin/meegle") },
+            supportingText = { Text("获取命令：$probeHint；配置后所有 Meegle 调用都使用该路径。") },
+            singleLine = true,
+            readOnly = controller.busy || saving,
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "当前生效：$effectiveCommand（$sourceLabel）",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ActionIconButton("复制探测命令", { controller.copyText(probeHint, "命令已复制") }) {
+                Icon(Icons.Outlined.ContentCopy, "复制探测命令")
             }
         }
     }

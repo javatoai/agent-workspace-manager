@@ -7,8 +7,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.8.1"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.8.1"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.9.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.9.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -208,7 +208,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.8.x is intentionally strict and does not migrate earlier schemas. */
+/** Version 0.9.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -228,6 +228,8 @@ data class AppConfig(
     /** Exact local branch names on which AWM refuses every commit or branch push. */
     val blockedGitWriteBranches: List<String> = listOf("master", "main"),
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
+    /** Absolute path to the Meegle CLI executable; null means auto-detect. */
+    val meegleExecutablePath: String? = null,
     /** Controls only opening the create-task dialog; it never runs at app startup. */
     val meegleAutoLoadRequirementLinks: Boolean = false,
 ) {

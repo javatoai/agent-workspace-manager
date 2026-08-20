@@ -71,7 +71,7 @@ class MixedModuleAndGitWritePolicyTest {
 
         val decoded = json.decodeFromString<AppConfig>(json.encodeToString(config))
 
-        assertEquals("0.8.1", decoded.schemaVersion)
+        assertEquals("0.9.0", decoded.schemaVersion)
         assertEquals(listOf("master", "main"), decoded.blockedGitWriteBranches)
     }
 

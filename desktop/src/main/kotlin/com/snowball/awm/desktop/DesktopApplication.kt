@@ -16,6 +16,8 @@ import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
+import com.snowball.awm.core.ConfiguredMeegleExecutable
+import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.MeegleRequirementMetadataProvider
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.MeegleProjectCatalog
@@ -87,6 +89,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicReference
 
 enum class NavigationItem(val title: String, val subtitle: String) {
     TASKS("研发任务", "Tasks"),
@@ -133,7 +136,9 @@ class DesktopApplication(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val events: EventSink = JsonlEventSink(paths),
     private val errorLogReader: ApplicationErrorLogReader = ApplicationErrorLogReader(paths),
-    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths),
+    private val meegleExecutablePath: AtomicReference<String?> = AtomicReference(null),
+    private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
+    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, meegleExecutable = meegleExecutable),
     private val configStore: ConfigStore = ConfigStore(paths),
     private val manifests: ManifestStore = ManifestStore(),
     private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(),
@@ -170,8 +175,8 @@ class DesktopApplication(
         TagBuildService(paths = paths, repositoryLock = repositoryLock),
     ),
     val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(tagDelivery)),
-    private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(),
-    private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(),
+    private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(meegleExecutable = meegleExecutable),
+    private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader()),
     private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(repositoryLock = repositoryLock),
@@ -180,8 +185,8 @@ class DesktopApplication(
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
     private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(),
     private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(),
-    private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(),
-    private val meegleCliService: MeegleCliService = ProcessMeegleCliService(),
+    private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(meegleExecutable = meegleExecutable),
+    private val meegleCliService: MeegleCliService = ProcessMeegleCliService(meegleExecutable = meegleExecutable),
     private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(),
     private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
         listOf(CodexWorkspaceToolLauncher(), CursorWorkspaceToolLauncher()),
@@ -208,7 +213,9 @@ class DesktopApplication(
         })
     }
 
-    private val initialConfig = initial.getOrDefault(AppConfig())
+    private val initialConfig = initial.getOrDefault(AppConfig()).also {
+        meegleExecutablePath.set(it.meegleExecutablePath)
+    }
     private val initialTasks = scanTasks(initialConfig)
     private var taskScanWarning: String? = initialTasks.warning
     val sessionStore = AppSessionStore(initialConfig, initialTasks.manifests)
@@ -280,6 +287,7 @@ class DesktopApplication(
             remoteCatalog = repositoryRemoteCatalog,
             meegleProjectCatalog = meegleProjectCatalog,
             meegleCliService = meegleCliService,
+            meegleExecutable = meegleExecutable,
             localGitInspector = localGitInspector,
             scope = scope,
             ioDispatcher = ioDispatcher,
@@ -322,7 +330,10 @@ class DesktopApplication(
 
     var config: AppConfig
         get() = sessionStore.config
-        private set(value) { sessionStore.config = value }
+        private set(value) {
+            meegleExecutablePath.set(value.meegleExecutablePath)
+            sessionStore.config = value
+        }
     var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
         private set
     var tasks: List<TaskManifest>
@@ -419,6 +430,11 @@ class DesktopApplication(
     /** Saves the configured Feishu project identities without enabling any automatic query. */
     fun updateMeegleProjects(projects: List<MeegleProjectConfig>, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateMeegleProjects(projects, onFailure)
+
+    fun updateMeegleExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateMeegleExecutablePath(raw, onFailure)
+
+    fun meegleCommandResolution(): Pair<String, MeegleCommandSource> = settingsController.meegleCommandResolution()
 
 
     fun refreshCurrentTaskGitStatus() = taskController.refreshGitStatus()
@@ -711,7 +727,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.8.x 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.9.x 任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(

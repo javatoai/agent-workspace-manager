@@ -1,0 +1,128 @@
+package com.snowball.awm.core
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
+import kotlin.test.assertFailsWith
+
+class MeegleExecutableTest {
+    @TempDir
+    lateinit var temporary: Path
+
+    @Test
+    fun `fallback command follows the platform`() {
+        assertEquals("meegle.cmd", meegleFallbackCommand(isWindows = true))
+        assertEquals("meegle", meegleFallbackCommand(isWindows = false))
+    }
+
+    @Test
+    fun `probe command uses a login shell on unix and where on windows`() {
+        assertEquals(listOf("where.exe", "meegle"), meegleProbeCommand("Windows 11"))
+        assertEquals(listOf("/bin/zsh", "-lc", "command -v meegle"), meegleProbeCommand("Mac OS X"))
+        assertEquals(listOf("/bin/bash", "-lc", "command -v meegle"), meegleProbeCommand("Linux"))
+    }
+
+    @Test
+    fun `probe output parsing takes the first absolute path line`() {
+        assertEquals("/opt/homebrew/bin/meegle", parseMeegleProbeOutput("/opt/homebrew/bin/meegle\n", "Mac OS X"))
+        assertEquals(
+            "/usr/local/bin/meegle",
+            parseMeegleProbeOutput("meegle: aliased to something\n/usr/local/bin/meegle\n", "Linux"),
+        )
+        assertEquals("C:\\tools\\meegle.cmd", parseMeegleProbeOutput("C:\\tools\\meegle.cmd\r\n", "Windows 11"))
+        assertEquals(
+            "C:\\Program Files\\Meegle\\meegle.cmd",
+            parseMeegleProbeOutput("C:\\Program Files\\Meegle\\meegle.cmd\r\n", "Windows 11"),
+        )
+        assertNull(parseMeegleProbeOutput("", "Mac OS X"))
+        assertNull(parseMeegleProbeOutput("meegle not found", "Mac OS X"))
+        assertNull(parseMeegleProbeOutput("meegle\n", "Windows 11"))
+    }
+
+    @Test
+    fun `configured path wins and never triggers a probe`() {
+        val runner = RecordingRunner(CommandResult(0, "/opt/homebrew/bin/meegle\n", ""))
+        val executable = ConfiguredMeegleExecutable({ " /custom/meegle " }, runner, osName = "Mac OS X")
+
+        assertEquals("/custom/meegle", executable.resolve())
+        assertEquals(MeegleCommandSource.CONFIGURED, executable.source())
+        assertEquals(0, runner.calls)
+    }
+
+    @Test
+    fun `unconfigured resolution probes once and caches the result`() {
+        val runner = RecordingRunner(CommandResult(0, "/opt/homebrew/bin/meegle\n", ""))
+        val executable = ConfiguredMeegleExecutable({ null }, runner, osName = "Mac OS X")
+
+        assertEquals("/opt/homebrew/bin/meegle", executable.resolve())
+        assertEquals("/opt/homebrew/bin/meegle", executable.resolve())
+        assertEquals(MeegleCommandSource.PROBED, executable.source())
+        assertEquals(1, runner.calls)
+        assertEquals(listOf("/bin/zsh", "-lc", "command -v meegle"), runner.commands.single())
+    }
+
+    @Test
+    fun `failed probe falls back to the bare command`() {
+        val runner = RecordingRunner(CommandResult(1, "", "not found"))
+        val executable = ConfiguredMeegleExecutable({ null }, runner, osName = "Windows 11")
+
+        assertEquals("meegle.cmd", executable.resolve())
+        assertEquals(MeegleCommandSource.PATH_FALLBACK, executable.source())
+    }
+
+    @Test
+    fun `probe reruns detection and a later configuration takes over immediately`() {
+        var configured: String? = null
+        val runner = RecordingRunner(CommandResult(0, "/opt/homebrew/bin/meegle\n", ""))
+        val executable = ConfiguredMeegleExecutable({ configured }, runner, osName = "Mac OS X")
+
+        assertEquals("/opt/homebrew/bin/meegle", executable.probe())
+        assertEquals(1, runner.calls)
+        assertEquals("/opt/homebrew/bin/meegle", executable.probe())
+        assertEquals(2, runner.calls)
+
+        configured = "/custom/meegle"
+        assertEquals("/custom/meegle", executable.resolve())
+        assertEquals(MeegleCommandSource.CONFIGURED, executable.source())
+        assertEquals(2, runner.calls)
+    }
+
+    @Test
+    fun `path normalization accepts blank as auto-detect`() {
+        assertNull(normalizeMeegleExecutablePath("   "))
+    }
+
+    @Test
+    fun `path normalization rejects relative and missing paths`() {
+        assertFailsWith<IllegalArgumentException> { normalizeMeegleExecutablePath("bin/meegle") }
+        val missing = temporary.resolve("missing-meegle").toAbsolutePath().toString()
+        assertFailsWith<IllegalArgumentException> { normalizeMeegleExecutablePath(missing) }
+    }
+
+    @Test
+    fun `path normalization accepts an existing executable file`() {
+        val file = Files.writeString(temporary.resolve("meegle"), "#!/bin/sh\n")
+        assertEquals(file.toString(), normalizeMeegleExecutablePath(" ${file.toAbsolutePath()} "))
+    }
+
+    private class RecordingRunner(
+        private val result: CommandResult,
+    ) : CommandRunner {
+        val commands = mutableListOf<List<String>>()
+        val calls: Int get() = commands.size
+
+        override fun run(
+            command: List<String>,
+            workingDirectory: Path?,
+            timeout: Duration,
+            environment: Map<String, String>,
+        ): CommandResult {
+            commands += command
+            return result
+        }
+    }
+}

@@ -32,6 +32,7 @@ interface MeegleCliService {
 class ProcessMeegleCliService(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val isWindows: Boolean = System.getProperty("os.name").lowercase(Locale.ROOT).contains("win"),
+    private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(isWindows),
 ) : MeegleCliService {
     override fun status(): MeegleCliStatus {
         val versionResult = runCatching {
@@ -66,7 +67,7 @@ class ProcessMeegleCliService(
         check(result.succeeded) { "Meegle OAuth 登录失败：${commandError(result)}" }
     }
 
-    private fun executable(): String = if (isWindows) "meegle.cmd" else "meegle"
+    private fun executable(): String = meegleExecutable.resolve()
 
     @Serializable
     private data class AuthResponse(
@@ -86,11 +87,12 @@ class ProcessMeegleCliService(
 class CliMeegleProjectCatalog(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val isWindows: Boolean = System.getProperty("os.name").lowercase(Locale.ROOT).contains("win"),
+    private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(isWindows),
 ) : MeegleProjectCatalog {
     override fun list(): List<MeegleProjectSummary> {
         val result = runner.run(
             listOf(
-                if (isWindows) "meegle.cmd" else "meegle",
+                meegleExecutable.resolve(),
                 "project",
                 "search",
                 "--auto-paginate",

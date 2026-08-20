@@ -40,11 +40,9 @@ class FileKitNativePathPicker : NativePathPicker {
         ?.absolutePath
 
     override suspend fun pickApplication(initialPath: String?): String? =
-        if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
-            pickDirectory(initialPath)
-        } else {
-            pickFile(initialPath)
-        }
+        // macOS treats .app bundles as files in an extension-filtered NSOpenPanel;
+        // a directory picker would descend into the bundle instead of selecting it.
+        pickFile(initialPath, applicationPickerExtensions(System.getProperty("os.name")))
 
     private fun String?.asInitialPlatformFile(): PlatformFile? =
         this?.trim()?.takeIf(String::isNotEmpty)?.let(::File)?.let(::PlatformFile)
@@ -56,6 +54,10 @@ class FileKitNativePathPicker : NativePathPicker {
         ?.let { selected -> if (selected.isDirectory) selected else selected.parentFile ?: selected }
         ?.let(::PlatformFile)
 }
+
+/** Application pickers filter to .app bundles only on macOS; Windows keeps any file. */
+internal fun applicationPickerExtensions(osName: String): List<String> =
+    if (osName.startsWith("Mac", ignoreCase = true)) listOf("app") else emptyList()
 
 /** Small testable coordinator that guarantees cancellation never clears a field. */
 class PathSelectionCoordinator(

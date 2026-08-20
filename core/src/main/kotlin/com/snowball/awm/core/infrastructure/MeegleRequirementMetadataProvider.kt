@@ -13,6 +13,7 @@ class MeegleRequirementMetadataProvider(
     private val isWindows: Boolean = System.getProperty("os.name")
         .lowercase(Locale.ROOT)
         .contains("win"),
+    private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(isWindows),
 ) : ProjectScopedRequirementMetadataProvider {
     override fun fetch(requirementLink: String): RequirementMetadata? =
         FeishuWorkItemLink.parse(requirementLink)?.projectKey?.let { projectKey ->
@@ -24,7 +25,7 @@ class MeegleRequirementMetadataProvider(
         val result = runCatching {
             runner.run(
                 command = listOf(
-                    if (isWindows) "meegle.cmd" else "meegle",
+                    meegleExecutable.resolve(),
                     "workitem",
                     "get",
                     "--project-key",

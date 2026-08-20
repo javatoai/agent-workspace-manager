@@ -2,22 +2,23 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.8.1 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.9.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
 agents/groups/<groupId>/AGENTS.md
+agents/task-templates.json
 ```
 
 磁盘文件是唯一可信来源；说明正文不重复保存在 `config.json`。
 
 ## 严格数组 schema
 
-0.8.1 的 `config.json` 使用严格字符串 schema `"0.8.1"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.9.0 的 `config.json` 使用严格字符串 schema `"0.9.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.8.1",
+  "schemaVersion": "0.9.0",
   "taskRoot": "Q:\\tasks",
   "developmentTools": [
     { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
@@ -28,6 +29,7 @@ agents/groups/<groupId>/AGENTS.md
   "hiddenTaskDetailBranches": ["master", "develop"],
   "blockedGitWriteBranches": ["master", "main"],
   "terminalExecutable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "meegleExecutablePath": null,
   "repositories": [
     {
       "id": "repo-…",
@@ -121,7 +123,9 @@ agents/groups/<groupId>/AGENTS.md
 
 每个模块都会使用稳定的 `服务名-模块名` 目录。模块 ID、名称和目录名忽略大小写不得重复；独立克隆模块可以选择原仓库的任意远程作为来源，基础 Ref 使用 `<来源 remote>/<branch>` 格式。新建 clone 会将所选来源 URL 命名为自身的 `origin`，因此后续 Push、恢复和 Git 操作仍统一使用 `origin`。
 
-未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。旧 TaskWT 用户目录与任务文件不会被读取、迁移或删除。
+`meegleExecutablePath` 为 `null` 时，应用会通过平台 login shell 自动探测 Meegle CLI 并缓存结果；也可以在设置页填写已存在、可执行的绝对路径。探测失败时回退到 PATH 中的 `meegle.cmd`（Windows）或 `meegle`（macOS/Linux）。
+
+未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。0.8.x 配置与任务清单不会被 0.9.x 读取或迁移；旧 TaskWT 用户目录与任务文件也不会被读取、迁移或删除。
 
 ## 组
 
@@ -204,11 +208,11 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema `"0.8.1"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.8.x 不读取或迁移 0.7.x 的配置和任务清单。
+`agent-workspace.json` 使用严格字符串 schema `"0.9.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.9.x 不读取或迁移 0.8.x 的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "0.8.1",
+  "schemaVersion": "0.9.0",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {

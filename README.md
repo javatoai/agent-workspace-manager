@@ -4,7 +4,7 @@ Agent Workspace Manager（AWM）是一个桌面工具，用来把“一项需求
 
 它适合需要同时修改多个服务、希望使用 Git Worktree 隔离任务、并且会配合 Codex、Cursor 等 Agent 工具开发的人或团队。创建任务后，AWM 会按你选择的服务建立独立工作区、生成任务说明、展示 Git 改动与推送状态，并在需要时构建 Tag。
 
-当前版本：**0.8.1**
+当前版本：**0.9.0**
 
 ## 适合什么场景
 
@@ -57,7 +57,7 @@ macOS 构建 DMG：
 ./scripts/build-macos.sh
 ```
 
-0.8.1 只提供桌面应用，不再包含命令行模块或命令行发布包。
+0.9.0 只提供桌面应用，不再包含命令行模块或命令行发布包。
 
 ## 数据位置
 
@@ -66,14 +66,15 @@ macOS 构建 DMG：
 ├── config.json
 ├── agents/
 │   ├── global/AGENTS.md
-│   └── groups/<groupId>/AGENTS.md
+│   ├── groups/<groupId>/AGENTS.md
+│   └── task-templates.json
 ├── locks/
 └── temp/tag-build/
 ```
 
 每个任务目录包含严格版本的 `agent-workspace.json`、最终合成的 `AGENTS.md`、Tag 构建历史以及服务 Worktree 或独立克隆。
 
-0.8.x 使用字符串 schema。相同主次版本的 PATCH 可兼容读取；主版本或次版本不同则拒绝读取，且不会迁移或删除旧数据。0.7.x 数据不会读取或迁移。
+0.9.x 使用字符串 schema。相同主次版本的 PATCH 可兼容读取；主版本或次版本不同则拒绝读取，且不会迁移或删除旧数据。0.8.x 数据不会读取或迁移。
 
 ## 构建产物
 

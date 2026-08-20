@@ -20,6 +20,13 @@ class NativePathPickerTest {
         assertEquals("D:/tools/idea.exe", selected.file("C:/idea.exe"))
         assertEquals(listOf("D:/repo-a", "D:/repo-b"), selected.directories("C:/tasks"))
     }
+
+    @Test
+    fun `application picker filters to app bundles only on macOS`() {
+        assertEquals(listOf("app"), applicationPickerExtensions("Mac OS X"))
+        assertEquals(emptyList<String>(), applicationPickerExtensions("Windows 11"))
+        assertEquals(emptyList<String>(), applicationPickerExtensions("Linux"))
+    }
 }
 
 private class FakeNativePathPicker(

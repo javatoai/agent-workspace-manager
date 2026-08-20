@@ -18,6 +18,7 @@ class DiagnosticsExporter(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val git: GitClient = GitClient(runner),
     private val json: Json = Json { prettyPrint = true; encodeDefaults = true },
+    private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
 ) {
     fun export(config: AppConfig, manifestFailures: String? = null): Path {
         paths.diagnostics.createDirectories()
@@ -44,7 +45,7 @@ class DiagnosticsExporter(
         appendLine("OS: ${System.getProperty("os.name")} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}")
         appendLine("Java: ${System.getProperty("java.version")} (${System.getProperty("java.vendor")})")
         appendLine("Git: ${command(listOf("git", "--version"))}")
-        val meegle = if (System.getProperty("os.name").lowercase(Locale.ROOT).contains("win")) "meegle.cmd" else "meegle"
+        val meegle = meegleExecutable.resolve()
         appendLine("Meegle: ${command(listOf(meegle, "--version"))}")
         appendLine("Meegle auth: ${command(listOf(meegle, "auth", "status", "--format", "json"))}")
     }
