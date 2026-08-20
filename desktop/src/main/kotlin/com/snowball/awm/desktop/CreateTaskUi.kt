@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.BranchPrefixResolver
 import com.snowball.awm.core.BranchReuseConflict
 import com.snowball.awm.core.BranchReuseKey
@@ -74,6 +75,8 @@ internal fun CreateTaskDialog(
         mutableStateOf(RequirementDraftState(branch = initialGroup.defaultBranchPrefix))
     }
     var notes by remember { mutableStateOf("") }
+    var selectedTemplateId by remember { mutableStateOf<String?>(null) }
+    var pendingTemplate by remember { mutableStateOf<AgentTaskTemplate?>(null) }
     var groupId by remember { mutableStateOf(initialGroup.id) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedToolIds by remember { mutableStateOf(initialGroup.defaultWorkspaceToolIds.toSet()) }
@@ -433,6 +436,34 @@ internal fun CreateTaskDialog(
                             if (rightTab == "preview") MetaPill("实时更新")
                         }
                         if (rightTab == "notes") {
+                            val templates = controller.agentTaskTemplates
+                            if (templates.isNotEmpty()) {
+                                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Text(
+                                        "从模板填充（单选）",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        templates.forEach { template ->
+                                            FilterChip(
+                                                selected = selectedTemplateId == template.id,
+                                                onClick = {
+                                                    val selected = templates.firstOrNull { it.id == selectedTemplateId }
+                                                    when (val result = resolveTemplateToggle(notes, selected, template)) {
+                                                        is TemplateFillResult.Applied -> {
+                                                            notes = result.notes
+                                                            selectedTemplateId = result.selectedTemplateId
+                                                        }
+                                                        is TemplateFillResult.NeedsConfirmation -> pendingTemplate = result.target
+                                                    }
+                                                },
+                                                label = { Text(template.name) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             OutlinedTextField(
                                 notes,
                                 { notes = it },
@@ -519,6 +550,18 @@ internal fun CreateTaskDialog(
                 }
             }
         }
+    }
+    pendingTemplate?.let { template ->
+        ConfirmDialog(
+            title = "替换任务人工说明？",
+            message = "当前说明已被手动修改，应用模板“${template.name}”将替换现有内容。",
+            onDismiss = { pendingTemplate = null },
+            onConfirm = {
+                notes = template.content
+                selectedTemplateId = template.id
+                pendingTemplate = null
+            },
+        )
     }
     if (confirmDiscard) {
         DiscardChangesDialog(

@@ -66,6 +66,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ApplicationEventClipboard
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DevelopmentToolConfig
@@ -114,6 +116,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var newGroup by remember { mutableStateOf(false) }
     var renameGroup by remember { mutableStateOf<GroupConfig?>(null) }
     var deleteGroupTarget by remember { mutableStateOf<GroupConfig?>(null) }
+    var newTemplate by remember { mutableStateOf(false) }
+    var editTemplate by remember { mutableStateOf<AgentTaskTemplate?>(null) }
+    var deleteTemplateTarget by remember { mutableStateOf<AgentTaskTemplate?>(null) }
     var agentGroupId by remember(controller.config.groups) { mutableStateOf(controller.config.groups.first().id) }
     var agentScope by remember { mutableStateOf("global") }
     var globalAgents by remember(controller.agentRevision) { mutableStateOf(controller.readGlobalAgents()) }
@@ -270,6 +275,14 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     groupAgentDrafts = groupAgentDrafts,
                 )
             }
+            if (selectedSection == "agents") item {
+                SettingsTaskTemplatesSection(
+                    controller = controller,
+                    onNewTemplate = { newTemplate = true },
+                    onEditTemplate = { editTemplate = it },
+                    onDeleteTemplate = { deleteTemplateTarget = it },
+                )
+            }
             if (selectedSection == "tools") item {
                 SettingsToolsSection(
                     controller = controller,
@@ -332,6 +345,24 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             message = "将删除组“${group.name}”。仅当组内没有服务且没有任务引用时才会执行，此操作不会删除任何仓库目录。",
             onDismiss = { deleteGroupTarget = null },
             onConfirm = { controller.deleteGroup(group.id) { deleteGroupTarget = null } },
+        )
+    }
+    if (newTemplate) {
+        TaskTemplateDialog("新建模板", "", "", onDismiss = { newTemplate = false }) { name, content ->
+            if (controller.saveAgentTaskTemplate(null, name, content)) newTemplate = false
+        }
+    }
+    editTemplate?.let { template ->
+        TaskTemplateDialog("编辑模板", template.name, template.content, onDismiss = { editTemplate = null }) { name, content ->
+            if (controller.saveAgentTaskTemplate(template.id, name, content)) editTemplate = null
+        }
+    }
+    deleteTemplateTarget?.let { template ->
+        ConfirmDialog(
+            title = "删除模板？",
+            message = "将删除模板“${template.name}”。已创建任务中的人工说明不受影响。",
+            onDismiss = { deleteTemplateTarget = null },
+            onConfirm = { if (controller.deleteAgentTaskTemplate(template.id)) deleteTemplateTarget = null },
         )
     }
     restoreBackup?.let { backup ->
@@ -513,6 +544,81 @@ private fun SettingsAgentsSection(
                 },
                 enabled = !controller.busy,
             ) { Text(if (isGlobal) "保存全局说明" else "保存组说明") }
+        }
+    }
+}
+
+@Composable
+private fun SettingsTaskTemplatesSection(
+    controller: DesktopApplication,
+    onNewTemplate: () -> Unit,
+    onEditTemplate: (AgentTaskTemplate) -> Unit,
+    onDeleteTemplate: (AgentTaskTemplate) -> Unit,
+) {
+    SettingsCard("任务说明模板", "创建任务时可勾选一个模板自动填充任务人工说明；模板修改不影响已创建的任务。") {
+        if (controller.agentTaskTemplates.isEmpty()) {
+            Text("还没有模板。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        controller.agentTaskTemplates.forEach { template ->
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(template.name, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            template.content.lineSequence().firstOrNull().orEmpty(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    ActionIconButton("删除模板", { onDeleteTemplate(template) }, enabled = !controller.busy) { Icon(Icons.Outlined.Delete, "删除") }
+                    ActionIconButton("编辑模板", { onEditTemplate(template) }, enabled = !controller.busy) { Icon(Icons.Outlined.Edit, "编辑") }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            OutlinedButton(onClick = onNewTemplate, enabled = !controller.busy) {
+                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("新建模板")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskTemplateDialog(
+    title: String,
+    initialName: String,
+    initialContent: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var name by remember { mutableStateOf(initialName) }
+    var content by remember { mutableStateOf(initialContent) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.padding(20.dp).widthIn(max = 560.dp).heightIn(max = 640.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("模板名称") }, singleLine = true)
+                    OutlinedTextField(
+                        content,
+                        { content = it },
+                        Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                        label = { Text("模板内容") },
+                        supportingText = { Text("创建任务勾选后填充到任务人工说明，仍可继续编辑。") },
+                        minLines = 8,
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { onSave(name, content) }, enabled = name.isNotBlank() && content.isNotBlank()) { Text("保存") }
+                }
+            }
         }
     }
 }

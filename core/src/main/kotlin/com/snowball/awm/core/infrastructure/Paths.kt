@@ -14,6 +14,7 @@ data class ApplicationPaths(
     val temp: Path = home.resolve("temp")
     val agents: Path = home.resolve("agents")
     val globalAgents: Path = agents.resolve("global").resolve("AGENTS.md")
+    val agentTaskTemplates: Path = agents.resolve("task-templates.json")
 
     fun groupAgents(groupId: String): Path {
         require(groupId.matches(Regex("[A-Za-z0-9._-]+"))) { "组 ID 不能用于文件路径：$groupId" }

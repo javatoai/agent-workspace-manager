@@ -8,6 +8,7 @@ import com.snowball.awm.core.AgentConflictResolution
 import com.snowball.awm.core.AgentFileChange
 import com.snowball.awm.core.AgentFileMonitor
 import com.snowball.awm.core.AgentDocumentPropagationService
+import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.BatchRepositoryAddResult
@@ -499,6 +500,9 @@ class DesktopApplication(
     fun moveService(groupId: String, serviceId: String, offset: Int) = settingsController.moveService(groupId, serviceId, offset)
     fun removeService(groupId: String, serviceId: String, onCompleted: () -> Unit = {}) =
         settingsController.removeService(groupId, serviceId, onCompleted)
+    val agentTaskTemplates: List<AgentTaskTemplate> get() = agentInstructionsController.state.templates
+    fun saveAgentTaskTemplate(id: String?, name: String, content: String) = agentInstructionsController.saveTemplate(id, name, content)
+    fun deleteAgentTaskTemplate(id: String) = agentInstructionsController.deleteTemplate(id)
     fun readGlobalAgents(): String = agentInstructionsController.readGlobal()
     fun saveGlobalAgents(content: String) = agentInstructionsController.saveGlobal(content)
     fun markGlobalAgentsEdited(content: String) = agentInstructionsController.markGlobalEdited(content)

@@ -467,6 +467,20 @@ data class TagBuildHistoryEntry(
     val message: String? = null,
 )
 
+/** A reusable preset for the per-task AGENTS.md notes section. */
+@Serializable
+data class AgentTaskTemplate(
+    val id: String,
+    val name: String,
+    val content: String,
+    val updatedAt: String,
+) {
+    init {
+        require(name.isNotBlank()) { "模板名称不能为空" }
+        require(content.isNotBlank()) { "模板内容不能为空" }
+    }
+}
+
 @Serializable
 data class CommandResult(
     val exitCode: Int,

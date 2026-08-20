@@ -9,6 +9,8 @@ import com.snowball.awm.core.AgentDocumentService
 import com.snowball.awm.core.AgentFileChange
 import com.snowball.awm.core.AgentFileMonitor
 import com.snowball.awm.core.AgentInstructionScope
+import com.snowball.awm.core.AgentTaskTemplate
+import com.snowball.awm.core.AgentTaskTemplateStore
 import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.AwmTime
 import com.snowball.awm.core.ModuleDisplayNaming
@@ -31,10 +33,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.time.Instant
+import java.util.UUID
 
 data class AgentInstructionsUiState(
     val revision: Long,
     val conflict: AgentFileChange.Conflict?,
+    val templates: List<AgentTaskTemplate>,
 )
 
 /** Owns three-level AGENTS.md editing, monitoring, propagation and conflict resolution. */
@@ -45,6 +49,7 @@ class AgentInstructionsController internal constructor(
     private val propagation: AgentDocumentPropagationService,
     private val tasks: TaskApplicationService,
     private val monitor: AgentFileMonitor,
+    private val templateStore: AgentTaskTemplateStore = AgentTaskTemplateStore(paths),
     private val operations: OperationRunner,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -56,7 +61,8 @@ class AgentInstructionsController internal constructor(
 ) {
     private var revision by mutableStateOf(0L)
     private var conflict by mutableStateOf<AgentFileChange.Conflict?>(null)
-    val state: AgentInstructionsUiState get() = AgentInstructionsUiState(revision, conflict)
+    private var templates by mutableStateOf(runCatching { templateStore.list() }.getOrDefault(emptyList()))
+    val state: AgentInstructionsUiState get() = AgentInstructionsUiState(revision, conflict, templates)
 
     fun readGlobal(): String = read(paths.globalAgents)
     fun readGroup(groupId: String): String = read(paths.groupAgents(groupId))
@@ -74,6 +80,31 @@ class AgentInstructionsController internal constructor(
         monitor.save(paths.groupAgents(groupId), content)
         requirePropagationSucceeded(propagation.propagate(session.config, AgentInstructionScope.Group(groupId)).failures)
     })
+
+    fun saveTemplate(id: String?, name: String, content: String): Boolean =
+        operations.run("正在保存模板…", "模板已保存", block = {
+            val trimmedName = name.trim()
+            val trimmedContent = content.trim()
+            requireNoReservedMarkers(trimmedContent)
+            val now = AwmTime.format(Instant.now())
+            val current = templateStore.list()
+            val updated = if (id == null || current.none { it.id == id }) {
+                current + AgentTaskTemplate(UUID.randomUUID().toString(), trimmedName, trimmedContent, now)
+            } else {
+                current.map { if (it.id == id) it.copy(name = trimmedName, content = trimmedContent, updatedAt = now) else it }
+            }
+            templateStore.saveAll(updated)
+        }, onSuccess = { refreshTemplates() })
+
+    fun deleteTemplate(id: String): Boolean =
+        operations.run("正在删除模板…", "模板已删除", block = {
+            templateStore.saveAll(templateStore.list().filterNot { it.id == id })
+        }, onSuccess = { refreshTemplates() })
+
+    private fun refreshTemplates() {
+        templates = runCatching { templateStore.list() }.getOrDefault(templates)
+        revision++
+    }
 
     fun readTaskNotes(task: TaskManifest): String = runCatching {
         val content = monitor.track(taskDirectory(task).resolve("AGENTS.md")).content
