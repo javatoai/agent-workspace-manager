@@ -26,14 +26,24 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.Subject
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -62,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,13 +81,17 @@ import androidx.compose.ui.window.Dialog
 import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ApplicationEventClipboard
 import com.snowball.awm.core.MeegleCommandSource
+import com.snowball.awm.core.GitCommandSource
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DevelopmentToolConfig
 import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.GroupConfig
+import com.snowball.awm.core.GitConfigValue
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ThemePreference
+import com.snowball.awm.core.gitProbeCommandDisplay
+import com.snowball.awm.core.meegleProbeCommandDisplay
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -129,7 +144,8 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         }
     }
     val sections = listOf(
-        "basic" to "任务路径",
+        "basic" to "基础设置",
+        "paths" to "路径设置",
         "groups" to "任务组",
         "agents" to "Agent 说明",
         "tools" to "开发工具",
@@ -181,6 +197,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     }
 
     LaunchedEffect(selectedSection) {
+        if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
     }
@@ -226,6 +243,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             ) {
             controller.configurationLoadError?.let { error ->
                 item {
+                    val snapshot = controller.configFileSnapshot
                     OutlinedCard(
                         Modifier.fillMaxWidth(),
                         colors = CardDefaults.outlinedCardColors(
@@ -235,11 +253,18 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     ) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("配置加载失败", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "未使用默认配置覆盖磁盘文件。请修复或删除 config.json 后重新打开应用。$error",
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                            SelectionContainer {
+                                Text(
+                                    "未使用默认配置覆盖磁盘文件。\n文件：${snapshot.path}\n原因：$error\n请先备份该文件；确认无需保留时，可在文件管理器中手动删除它，然后重新打开 AWM。",
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { controller.copyText(snapshot.path.toString(), "主配置路径已复制") }) { Text("复制路径") }
+                                OutlinedButton(onClick = controller::revealConfigFile, enabled = snapshot.exists) { Text("定位文件") }
+                                OutlinedButton(onClick = { controller.copyText(controller.configurationRecoveryGuidance(), "恢复指引已复制") }) { Text("复制恢复指引") }
+                            }
                         }
                     }
                 }
@@ -247,9 +272,15 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             if (selectedSection == "basic") item {
                 SettingsBasicSection(
                     controller = controller,
+                    saving = saving("basic"),
+                )
+            }
+            if (selectedSection == "paths") item {
+                SettingsPathsSection(
+                    controller = controller,
                     taskRoot = taskRoot,
                     onTaskRootChange = { taskRoot = it },
-                    saving = saving("basic"),
+                    saving = saving("paths"),
                     backupMenuExpanded = backupMenuExpanded,
                     onBackupMenuExpandedChange = { backupMenuExpanded = it },
                     onRestoreBackup = { restoreBackup = it },
@@ -344,6 +375,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         ConfirmDialog(
             title = "删除空组？",
             message = "将删除组“${group.name}”。仅当组内没有服务且没有任务引用时才会执行，此操作不会删除任何仓库目录。",
+            confirmLabel = "删除组",
+            destructive = true,
+            enabled = !controller.settingsBusy,
             onDismiss = { deleteGroupTarget = null },
             onConfirm = { controller.deleteGroup(group.id) { deleteGroupTarget = null } },
         )
@@ -362,6 +396,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         ConfirmDialog(
             title = "删除模板？",
             message = "将删除模板“${template.name}”。已创建任务中的人工说明不受影响。",
+            confirmLabel = "删除模板",
+            destructive = true,
+            enabled = !controller.settingsBusy,
             onDismiss = { deleteTemplateTarget = null },
             onConfirm = { if (controller.deleteAgentTaskTemplate(template.id)) deleteTemplateTarget = null },
         )
@@ -370,6 +407,8 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         ConfirmDialog(
             title = "恢复配置备份？",
             message = "将先备份当前配置，再恢复 ${backup.path.fileName}。任务目录不会被删除。",
+            confirmLabel = "恢复备份",
+            enabled = !controller.busy,
             onDismiss = { restoreBackup = null },
             onConfirm = { if (controller.restoreConfigBackup(backup.path.toString())) restoreBackup = null },
         )
@@ -384,6 +423,8 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     append("当前电脑路径无效，导入后需重新选择：${preview.invalidDevelopmentTools.joinToString { it.displayName }}")
                 }
             }.trim(),
+            confirmLabel = "导入配置",
+            enabled = !controller.busy,
             onDismiss = { importPreview = null },
             onConfirm = { if (controller.importConfig(preview.source.toString())) importPreview = null },
         )
@@ -399,6 +440,30 @@ internal fun normalizeSettingsSection(stored: String, supported: Set<String>): S
 @Composable
 private fun SettingsBasicSection(
     controller: DesktopApplication,
+    saving: Boolean,
+) {
+    SettingsCard("基础设置", "调整本机界面的显示方式。") {
+        AutoSaveStatus(controller, "basic")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("界面主题", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.width(14.dp))
+            FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemePreference.entries.forEach { theme ->
+                    FilterChip(
+                        controller.config.theme == theme,
+                        { controller.setTheme(theme) },
+                        label = { Text(theme.displayName) },
+                        enabled = !controller.busy && !saving,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPathsSection(
+    controller: DesktopApplication,
     taskRoot: String,
     onTaskRootChange: (String) -> Unit,
     saving: Boolean,
@@ -407,53 +472,54 @@ private fun SettingsBasicSection(
     onRestoreBackup: (ConfigStore.Backup) -> Unit,
     onImportPreview: (ConfigStore.ImportPreview) -> Unit,
 ) {
-    SettingsCard("任务路径", "启动只读取这些本地配置，不扫描仓库。") {
-        AutoSaveStatus(controller, "basic")
-        PathField(
-            "任务根目录",
-            taskRoot,
-            onTaskRootChange,
-            !controller.pathPickerBusy && !controller.busy && !saving,
-            Modifier.onFocusChanged { focus ->
-                if (!focus.isFocused && taskRoot.isNotBlank() && taskRoot != controller.config.taskRoot.orEmpty()) {
-                    controller.updateTaskRoot(taskRoot) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
-                }
-            },
-        ) {
-            controller.chooseDirectory(taskRoot) { selected ->
-                onTaskRootChange(selected)
-                controller.updateTaskRoot(selected) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
-            }
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("界面主题", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.width(14.dp))
-            FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemePreference.entries.forEach { theme -> FilterChip(controller.config.theme == theme, { controller.setTheme(theme) }, label = { Text(theme.displayName) }, enabled = !controller.busy && !saving) }
-            }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = controller::exportConfig, enabled = !controller.busy) { Text("导出配置") }
-            OutlinedButton(
-                onClick = {
-                    controller.chooseFile(null) { selected ->
-                        runCatching { controller.previewConfigImport(selected) }
-                            .onSuccess { onImportPreview(it) }
-                            .onFailure(controller::showError)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        SettingsCard("任务路径设置", "选择 AWM 扫描和创建任务的根目录。") {
+            AutoSaveStatus(controller, "paths")
+            PathField(
+                "任务根目录",
+                taskRoot,
+                onTaskRootChange,
+                !controller.pathPickerBusy && !controller.busy && !saving,
+                Modifier.onFocusChanged { focus ->
+                    if (!focus.isFocused && taskRoot.isNotBlank() && taskRoot != controller.config.taskRoot.orEmpty()) {
+                        controller.updateTaskRoot(taskRoot) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
                     }
                 },
-                enabled = !controller.busy && !controller.pathPickerBusy,
-            ) { Text("导入配置") }
-            Box {
-                OutlinedButton(onClick = { onBackupMenuExpandedChange(true) }, enabled = !controller.busy) { Text("恢复备份") }
-                AwmDropdownMenu(backupMenuExpanded, onDismissRequest = { onBackupMenuExpandedChange(false) }) {
-                    val backups = controller.configBackups()
-                    if (backups.isEmpty()) DropdownMenuItem(text = { Text("暂无配置备份") }, onClick = {}, enabled = false)
-                    backups.forEach { backup ->
-                        DropdownMenuItem(
-                            text = { Text(backup.path.fileName.toString()) },
-                            onClick = { onBackupMenuExpandedChange(false); onRestoreBackup(backup) },
-                        )
+            ) {
+                controller.chooseDirectory(taskRoot) { selected ->
+                    onTaskRootChange(selected)
+                    controller.updateTaskRoot(selected) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
+                }
+            }
+            TaskManifestIssues(controller)
+        }
+        SettingsCard("系统主配置文件", "只读预览 AWM 的全局配置文件，并管理配置备份。") {
+            ConfigFilePreview(controller)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("配置操作", style = MaterialTheme.typography.titleSmall)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = controller::exportConfig, enabled = !controller.busy) { Text("导出配置") }
+                OutlinedButton(
+                    onClick = {
+                        controller.chooseFile(null) { selected ->
+                            runCatching { controller.previewConfigImport(selected) }
+                                .onSuccess { onImportPreview(it) }
+                                .onFailure(controller::showError)
+                        }
+                    },
+                    enabled = !controller.busy && !controller.pathPickerBusy,
+                ) { Text("导入配置") }
+                Box {
+                    OutlinedButton(onClick = { onBackupMenuExpandedChange(true) }, enabled = !controller.busy) { Text("恢复备份") }
+                    AwmDropdownMenu(backupMenuExpanded, onDismissRequest = { onBackupMenuExpandedChange(false) }) {
+                        val backups = controller.configBackups()
+                        if (backups.isEmpty()) DropdownMenuItem(text = { Text("暂无配置备份") }, onClick = {}, enabled = false)
+                        backups.forEach { backup ->
+                            DropdownMenuItem(
+                                text = { Text(backup.path.fileName.toString()) },
+                                onClick = { onBackupMenuExpandedChange(false); onRestoreBackup(backup) },
+                            )
+                        }
                     }
                 }
             }
@@ -780,8 +846,15 @@ private fun SettingsGitSection(
     saving: Boolean,
     onSaveBlockedGitBranches: (List<String>) -> Unit,
 ) {
-    SettingsCard("Git", "只读取本机 Git 可执行文件、版本、系统用户和全局配置。") {
-        val gitState = controller.localGitSettingsState
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        SettingsCard("Git 环境", "自动探测或配置 Git 命令，并读取本机身份和全局配置。") {
+            GitExecutablePathEditor(controller)
+            AutoSaveStatus(controller, "git")
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            GitEnvironmentPanel(controller, controller.localGitSettingsState)
+        }
+        SettingsCard("分支写保护", "保护指定分支，避免在 AWM 内执行 Git 写操作。") {
+            AutoSaveStatus(controller, "git-write-policy")
         Text("分支写保护", style = MaterialTheme.typography.titleSmall)
         Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的 Tag 流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -813,65 +886,238 @@ private fun SettingsGitSection(
                 }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = { controller.refreshLocalGit(force = true) }, enabled = gitState !is LocalGitSettingsState.Loading) {
+        }
+    }
+}
+
+@Composable
+private fun GitEnvironmentPanel(controller: DesktopApplication, state: LocalGitSettingsState) {
+    val snapshot = displayedGitSnapshot(state)
+    val refreshing = state is LocalGitSettingsState.Loading
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column {
+            Text("本机 Git 状态", style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (refreshing && snapshot != null) "正在刷新，保留上次读取结果" else "用于 AWM 的提交、推送与仓库检查",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { controller.refreshLocalGit(force = true) }, enabled = !refreshing) {
                 Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
                 Spacer(Modifier.width(5.dp))
-                Text("刷新")
+                Text(if (refreshing) "正在刷新" else "刷新")
             }
-            when (gitState) {
-                is LocalGitSettingsState.Failed -> {
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { controller.copyText(gitState.message, "Git 错误已复制") }) {
-                        Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("复制错误")
-                    }
+            snapshot?.let {
+                OutlinedButton(onClick = { controller.copyText(formatLocalGitSettings(it), "Git 信息已复制") }) {
+                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("复制全部")
                 }
-                is LocalGitSettingsState.Loaded -> {
-                    val content = formatLocalGitSettings(gitState.snapshot)
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { controller.copyText(content, "Git 信息已复制") }) {
-                        Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("复制全部")
-                    }
+            }
+            (state as? LocalGitSettingsState.Failed)?.let { failure ->
+                OutlinedButton(onClick = { controller.copyText(failure.message, "Git 错误已复制") }) {
+                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("复制错误")
                 }
-                LocalGitSettingsState.Idle, LocalGitSettingsState.Loading -> Unit
             }
         }
-        when (val state = gitState) {
-            LocalGitSettingsState.Idle, LocalGitSettingsState.Loading -> {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("正在读取本地 Git 信息…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            is LocalGitSettingsState.Failed -> {
-                SelectionContainer { Text(state.message, color = MaterialTheme.colorScheme.error) }
-            }
-            is LocalGitSettingsState.Loaded -> {
-                val content = formatLocalGitSettings(state.snapshot)
-                Surface(
-                    Modifier.fillMaxWidth().heightIn(min = 280.dp, max = 460.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                ) {
-                    SelectionContainer {
-                        Text(
-                            content,
-                            Modifier.fillMaxSize().padding(14.dp)
-                                .verticalScroll(rememberScrollState())
-                                .horizontalScroll(rememberScrollState()),
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+    }
+    snapshot?.let { GitEnvironmentSummary(it, refreshing) } ?: when (state) {
+        LocalGitSettingsState.Idle, is LocalGitSettingsState.Loading -> {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text("正在读取本地 Git 信息…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        is LocalGitSettingsState.Failed -> {
+            OutlinedCard(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+            ) {
+                SelectionContainer {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("无法读取本机 Git 信息", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
+                        Text(state.message, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
+        }
+        is LocalGitSettingsState.Loaded -> Unit
+    }
+}
+
+@Composable
+private fun GitEnvironmentSummary(snapshot: LocalGitEnvironmentSnapshot, refreshing: Boolean) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Git 可用", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                if (refreshing) Text("刷新中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            GitEnvironmentValue("版本", snapshot.gitVersion ?: "未读取到")
+            GitEnvironmentValue("命令路径", snapshot.gitExecutable ?: "未读取到", monospace = true)
+        }
+    }
+    Text("身份", style = MaterialTheme.typography.titleSmall)
+    GitEnvironmentValue("系统用户", snapshot.systemUser.ifBlank { "未读取到" })
+    GitEnvironmentValue("全局 user.name", snapshot.globalUserName?.value ?: "未配置", snapshot.globalUserName?.origin)
+    GitEnvironmentValue("全局 user.email", snapshot.globalUserEmail?.value ?: "未配置", snapshot.globalUserEmail?.origin)
+    Text("凭据", style = MaterialTheme.typography.titleSmall)
+    if (snapshot.globalCredentialHelpers.isEmpty()) {
+        GitEnvironmentValue("credential.helper", "未配置")
+    } else {
+        snapshot.globalCredentialHelpers.forEach { helper ->
+            GitEnvironmentValue(helper.key, helper.value, helper.origin)
+        }
+    }
+    visibleGlobalGitKeyConfig(snapshot).takeIf(List<GitConfigValue>::isNotEmpty)?.let { keyConfig ->
+        Text("关键配置", style = MaterialTheme.typography.titleSmall)
+        keyConfig.forEach { config -> GitEnvironmentValue(config.key, config.value, config.origin) }
+    }
+    snapshot.errors.forEach { error ->
+        Text("全局读取错误：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+private fun GitEnvironmentValue(label: String, value: String, origin: String? = null, monospace: Boolean = false) {
+    SelectionContainer {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = if (monospace) FontFamily.Monospace else null)
+            origin?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigFilePreview(controller: DesktopApplication) {
+    val snapshot = controller.configFileSnapshot
+    val content = snapshot.content
+    SelectionContainer {
+        Text(
+            snapshot.path.toString(),
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = controller::refreshConfigFileSnapshot, enabled = !controller.configFileSnapshotRefreshing) {
+            Text(if (controller.configFileSnapshotRefreshing) "正在刷新" else "刷新预览")
+        }
+        OutlinedButton(onClick = { controller.copyText(snapshot.path.toString(), "主配置路径已复制") }) { Text("复制路径") }
+        OutlinedButton(onClick = controller::revealConfigFile, enabled = snapshot.exists) { Text("定位文件") }
+    }
+    when {
+        !snapshot.exists -> Text(
+            "配置文件尚未创建；保存任一设置后会在该路径生成。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        snapshot.readError != null -> Text(
+            "无法读取配置文件：${snapshot.readError}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        content != null -> Surface(
+            Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 360.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            SelectionContainer {
+                Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
+                    Text(content, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskManifestIssues(controller: DesktopApplication) {
+    val issues = controller.taskManifestIssues
+    if (issues.isEmpty()) return
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("任务清单问题", style = MaterialTheme.typography.titleSmall)
+            Text("这些文件未被 AWM 读取或改写。请先备份后再手工修复或删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = controller::refreshTaskManifestIssues) { Text("重新扫描") }
+    }
+    issues.forEach { issue ->
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(issue.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                SelectionContainer {
+                    Text(issue.manifestPath, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { controller.copyText(issue.manifestPath, "任务清单路径已复制") }) { Text("复制路径") }
+                    TextButton(onClick = { controller.reveal(issue.manifestPath) }) { Text("定位文件") }
+                    TextButton(onClick = { controller.copyText(controller.taskManifestRecoveryGuidance(issue), "恢复指引已复制") }) { Text("复制恢复指引") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitExecutablePathEditor(controller: DesktopApplication) {
+    var pathInput by remember(controller.config.gitExecutablePath) {
+        mutableStateOf(controller.config.gitExecutablePath.orEmpty())
+    }
+    val saving = controller.settingsSaveState("git") == SettingsSaveState.SAVING
+    val (effectiveCommand, source) = controller.gitCommandResolution()
+    val osName = System.getProperty("os.name")
+    val isWindows = osName.startsWith("Windows", ignoreCase = true)
+    val probeHint = gitProbeCommandDisplay(osName)
+    val sourceLabel = when (source) {
+        GitCommandSource.CONFIGURED -> "已配置"
+        GitCommandSource.PROBED -> "自动探测"
+        GitCommandSource.PATH_FALLBACK -> "PATH 回退"
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            pathInput,
+            { pathInput = it },
+            Modifier.fillMaxWidth().onFocusChanged { focus ->
+                if (!focus.isFocused && pathInput.trim() != controller.config.gitExecutablePath.orEmpty()) {
+                    controller.updateGitExecutablePath(pathInput) {
+                        pathInput = controller.config.gitExecutablePath.orEmpty()
+                    }
+                }
+            },
+            label = { Text("Git 命令路径（留空时自动探测并保存）") },
+            placeholder = { Text(if (isWindows) "例如 C:\\Program Files\\Git\\cmd\\git.exe" else "例如 /usr/bin/git") },
+            supportingText = { Text("探测命令：$probeHint；已有保存路径时不再探测。") },
+            singleLine = true,
+            readOnly = controller.busy || saving,
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "当前生效：$effectiveCommand（$sourceLabel）",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ActionIconButton("复制探测命令", { controller.copyText(probeHint, "命令已复制") }) {
+                Icon(Icons.Outlined.ContentCopy, "复制探测命令")
             }
         }
     }
@@ -1014,6 +1260,13 @@ private fun SettingsLogsSection(controller: DesktopApplication) {
 
 @Composable
 private fun MeegleCliStatusPanel(controller: DesktopApplication) {
+    val cliState = controller.meegleCliState
+    val status = when (cliState) {
+        is MeegleCliState.Ready -> cliState.status
+        is MeegleCliState.Loading -> cliState.previous
+        MeegleCliState.Idle, is MeegleCliState.Failed -> null
+    }
+    val refreshing = cliState is MeegleCliState.Loading
     OutlinedCard(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
@@ -1022,44 +1275,48 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("Meegle CLI", fontWeight = FontWeight.SemiBold)
-                when (val state = controller.meegleCliState) {
-                    MeegleCliState.Idle, MeegleCliState.Loading -> Text(
+                when (cliState) {
+                    MeegleCliState.Idle -> Text(
                         "正在检查版本和登录状态…",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     is MeegleCliState.Failed -> SelectionContainer {
-                        Text(state.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        Text(cliState.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
-                    is MeegleCliState.Ready -> {
-                        val status = state.status
-                        if (!status.installed) {
+                    is MeegleCliState.Loading, is MeegleCliState.Ready -> {
+                        val current = status ?: return@Column Text(
+                            "正在检查版本和登录状态…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (current.installed.not()) {
                             Text("未安装或无法启动 Meegle CLI", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         } else {
                             Text(
-                                "版本 ${status.version.orEmpty()} · ${if (status.authenticated) "已登录" else if (status.host != null) "登录已过期" else "未登录"}",
+                                "版本 ${current.version.orEmpty()} · ${if (current.authenticated) "已登录" else if (current.host != null) "登录已过期" else "未登录"}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (status.authenticated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                color = if (current.authenticated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                             )
                             Text(
                                 buildString {
-                                    append("站点：${status.host ?: "project.feishu.cn"}")
-                                    status.expiresInMinutes?.let { append(" · 凭据剩余 $it 分钟") }
+                                    append("站点：${current.host ?: "project.feishu.cn"}")
+                                    current.expiresInMinutes?.let { append(" · 凭据剩余 $it 分钟") }
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (status.authenticated && (status.expiresInMinutes ?: Long.MAX_VALUE) <= 5) {
+                            if (refreshing) Text("正在刷新…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (current.authenticated && (current.expiresInMinutes ?: Long.MAX_VALUE) <= 5) {
                                 Text("登录凭据即将过期，建议刷新或重新登录", style = MaterialTheme.typography.labelSmall, color = WarningAmber)
                             }
                         }
                     }
                 }
             }
-            TextButton(onClick = { controller.refreshMeegleStatus(force = true) }, enabled = !controller.busy) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("刷新")
+            TextButton(onClick = { controller.refreshMeegleStatus(force = true) }, enabled = !refreshing && !controller.meegleBusy) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(if (refreshing) "正在刷新" else "刷新")
             }
-            val status = (controller.meegleCliState as? MeegleCliState.Ready)?.status
             if (status?.installed == true && !status.authenticated) {
                 Button(onClick = controller::loginMeegle, enabled = !controller.meegleBusy) { Text("登录飞书项目") }
             }
@@ -1084,8 +1341,9 @@ private fun MeegleExecutablePathEditor(controller: DesktopApplication) {
     }
     val saving = controller.settingsSaveState("feishu") == SettingsSaveState.SAVING
     val (effectiveCommand, source) = controller.meegleCommandResolution()
-    val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
-    val probeHint = if (isWindows) "(Get-Command meegle.cmd).Source" else "command -v meegle"
+    val osName = System.getProperty("os.name")
+    val isWindows = osName.startsWith("Windows", ignoreCase = true)
+    val probeHint = meegleProbeCommandDisplay(osName)
     val sourceLabel = when (source) {
         MeegleCommandSource.CONFIGURED -> "已配置"
         MeegleCommandSource.PROBED -> "自动探测"
@@ -1102,9 +1360,9 @@ private fun MeegleExecutablePathEditor(controller: DesktopApplication) {
                     }
                 }
             },
-            label = { Text("Meegle 命令路径（留空自动探测）") },
+            label = { Text("Meegle 命令路径（留空时自动探测并保存）") },
             placeholder = { Text(if (isWindows) "例如 C:\\tools\\meegle.cmd" else "例如 /opt/homebrew/bin/meegle") },
-            supportingText = { Text("获取命令：$probeHint；配置后所有 Meegle 调用都使用该路径。") },
+            supportingText = { Text("探测命令：$probeHint；已有保存路径时不再探测。") },
             singleLine = true,
             readOnly = controller.busy || saving,
         )
@@ -1226,6 +1484,15 @@ private fun GroupSettingsRow(
     }
 }
 
+internal fun visibleGlobalGitKeyConfig(snapshot: LocalGitEnvironmentSnapshot): List<GitConfigValue> =
+    snapshot.globalKeyConfig.filterNot { it.key in setOf("user.name", "user.email") }
+
+internal fun displayedGitSnapshot(state: LocalGitSettingsState): LocalGitEnvironmentSnapshot? = when (state) {
+    is LocalGitSettingsState.Loaded -> state.snapshot
+    is LocalGitSettingsState.Loading -> state.previous
+    LocalGitSettingsState.Idle, is LocalGitSettingsState.Failed -> null
+}
+
 internal fun formatLocalGitSettings(snapshot: LocalGitEnvironmentSnapshot): String = buildString {
     appendLine("Git 可执行文件：${snapshot.gitExecutable ?: "未读取到"}")
     appendLine("Git 版本：${snapshot.gitVersion ?: "未读取到"}")
@@ -1250,7 +1517,12 @@ private fun SettingsCard(title: String, subtitle: String, content: @Composable C
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(10.dp)) {
-                    Text(title.take(1), Modifier.padding(horizontal = 11.dp, vertical = 7.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    Icon(
+                        settingsCardIcon(title),
+                        null,
+                        Modifier.padding(9.dp).size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
                 }
                 Spacer(Modifier.width(11.dp))
                 Column {
@@ -1262,6 +1534,22 @@ private fun SettingsCard(title: String, subtitle: String, content: @Composable C
             content()
         }
     }
+}
+
+private fun settingsCardIcon(title: String): ImageVector = when (title) {
+    "基础设置" -> Icons.Outlined.Palette
+    "任务路径设置" -> Icons.Outlined.Folder
+    "系统主配置文件" -> Icons.Outlined.Description
+    "任务组" -> Icons.Outlined.Group
+    "Agent 说明" -> Icons.AutoMirrored.Outlined.Article
+    "任务说明模板" -> Icons.Outlined.Edit
+    "开发工具" -> Icons.Outlined.Build
+    "分支" -> Icons.Outlined.AccountTree
+    "Git 环境" -> Icons.Outlined.Terminal
+    "分支写保护" -> Icons.Outlined.Lock
+    "飞书项目" -> Icons.Outlined.Link
+    "日志" -> Icons.AutoMirrored.Outlined.Subject
+    else -> Icons.Outlined.Description
 }
 
 @Composable

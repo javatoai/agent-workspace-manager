@@ -49,4 +49,14 @@ class TaskTemplateFillingTest {
 
         assertEquals(TemplateFillResult.Applied("a 内容加手写补充", null), result)
     }
+
+    @Test
+    fun `existing notes preselect their unique matching template`() {
+        assertEquals("a", selectedTemplateIdForNotes("a 内容", listOf(template("a"), template("b"))))
+    }
+
+    @Test
+    fun `existing notes do not preselect an arbitrary template when contents duplicate`() {
+        assertEquals(null, selectedTemplateIdForNotes("相同内容", listOf(template("a", "相同内容"), template("b", "相同内容"))))
+    }
 }

@@ -7,6 +7,9 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertFailsWith
 
 class MeegleExecutableTest {
@@ -21,9 +24,16 @@ class MeegleExecutableTest {
 
     @Test
     fun `probe command uses a login shell on unix and where on windows`() {
-        assertEquals(listOf("where.exe", "meegle"), meegleProbeCommand("Windows 11"))
+        assertEquals(listOf("where.exe", "meegle.cmd"), meegleProbeCommand("Windows 11"))
         assertEquals(listOf("/bin/zsh", "-lc", "command -v meegle"), meegleProbeCommand("Mac OS X"))
         assertEquals(listOf("/bin/bash", "-lc", "command -v meegle"), meegleProbeCommand("Linux"))
+    }
+
+    @Test
+    fun `probe command display follows the same platform definition`() {
+        assertEquals("where.exe meegle.cmd", meegleProbeCommandDisplay("Windows 11"))
+        assertEquals("/bin/zsh -lc 'command -v meegle'", meegleProbeCommandDisplay("Mac OS X"))
+        assertEquals("/bin/bash -lc 'command -v meegle'", meegleProbeCommandDisplay("Linux"))
     }
 
     @Test
@@ -66,6 +76,25 @@ class MeegleExecutableTest {
     }
 
     @Test
+    fun `concurrent first resolutions share one probe`() {
+        val runner = FirstCallBlockingRunner(CommandResult(0, "/opt/homebrew/bin/meegle\n", ""))
+        val executable = ConfiguredMeegleExecutable({ null }, runner, osName = "Mac OS X")
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val first = workers.submit<String> { executable.resolve() }
+            assertEquals(true, runner.firstCallStarted.await(2, TimeUnit.SECONDS))
+            val second = workers.submit<String> { executable.resolve() }
+            runner.releaseFirstCall.countDown()
+
+            assertEquals("/opt/homebrew/bin/meegle", first.get(2, TimeUnit.SECONDS))
+            assertEquals("/opt/homebrew/bin/meegle", second.get(2, TimeUnit.SECONDS))
+            assertEquals(1, runner.calls)
+        } finally {
+            workers.shutdownNow()
+        }
+    }
+
+    @Test
     fun `failed probe falls back to the bare command`() {
         val runner = RecordingRunner(CommandResult(1, "", "not found"))
         val executable = ConfiguredMeegleExecutable({ null }, runner, osName = "Windows 11")
@@ -101,6 +130,7 @@ class MeegleExecutableTest {
         assertFailsWith<IllegalArgumentException> { normalizeMeegleExecutablePath("bin/meegle") }
         val missing = temporary.resolve("missing-meegle").toAbsolutePath().toString()
         assertFailsWith<IllegalArgumentException> { normalizeMeegleExecutablePath(missing) }
+        assertFailsWith<IllegalArgumentException> { normalizeMeegleExecutablePath(temporary.toAbsolutePath().toString()) }
     }
 
     @Test
@@ -122,6 +152,29 @@ class MeegleExecutableTest {
             environment: Map<String, String>,
         ): CommandResult {
             commands += command
+            return result
+        }
+    }
+
+    private class FirstCallBlockingRunner(
+        private val result: CommandResult,
+    ) : CommandRunner {
+        val firstCallStarted = CountDownLatch(1)
+        val releaseFirstCall = CountDownLatch(1)
+        var calls = 0
+            private set
+
+        override fun run(
+            command: List<String>,
+            workingDirectory: Path?,
+            timeout: Duration,
+            environment: Map<String, String>,
+        ): CommandResult {
+            calls += 1
+            if (calls == 1) {
+                firstCallStarted.countDown()
+                check(releaseFirstCall.await(2, TimeUnit.SECONDS)) { "test did not release the first probe" }
+            }
             return result
         }
     }

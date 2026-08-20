@@ -34,6 +34,7 @@ Desktop -> Application -> Domain
 ## 持久化
 
 - 全局配置：`~/.AgentWorkspaceManager/config.json`
+- 任务说明模板：`~/.AgentWorkspaceManager/task-templates.json`
 - 全局说明：`~/.AgentWorkspaceManager/agents/global/AGENTS.md`
 - 组说明：`~/.AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md`
 - 任务清单：`<taskDir>/agent-workspace.json`

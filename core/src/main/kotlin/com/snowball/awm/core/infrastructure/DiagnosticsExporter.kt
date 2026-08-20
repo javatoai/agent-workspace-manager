@@ -44,7 +44,7 @@ class DiagnosticsExporter(
         appendLine("AWM config schema: $CURRENT_APP_CONFIG_SCHEMA_VERSION")
         appendLine("OS: ${System.getProperty("os.name")} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}")
         appendLine("Java: ${System.getProperty("java.version")} (${System.getProperty("java.vendor")})")
-        appendLine("Git: ${command(listOf("git", "--version"))}")
+        appendLine("Git: ${gitVersion()}")
         val meegle = meegleExecutable.resolve()
         appendLine("Meegle: ${command(listOf(meegle, "--version"))}")
         appendLine("Meegle auth: ${command(listOf(meegle, "auth", "status", "--format", "json"))}")
@@ -80,7 +80,14 @@ class DiagnosticsExporter(
         },
         developmentTools = developmentTools.map { it.copy(path = "<configured:${it.type.name}>") },
         terminalExecutable = terminalExecutable?.let { "<configured>" },
+        meegleExecutablePath = meegleExecutablePath?.let { "<configured>" },
+        gitExecutablePath = gitExecutablePath?.let { "<configured>" },
     )
+
+    private fun gitVersion(): String = runCatching {
+        val result = git.version()
+        result.stdout.ifBlank { result.stderr }.trim().ifBlank { "exit=${result.exitCode}" }
+    }.getOrElse { "unavailable: ${it.message}" }
 
     private fun redactUserHome(value: String): String {
         val home = System.getProperty("user.home").orEmpty()

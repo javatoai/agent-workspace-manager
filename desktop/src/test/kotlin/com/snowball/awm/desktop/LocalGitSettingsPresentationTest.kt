@@ -7,6 +7,45 @@ import kotlin.test.assertEquals
 
 class LocalGitSettingsPresentationTest {
     @Test
+    fun `refresh state retains the last successful git summary`() {
+        val snapshot = LocalGitEnvironmentSnapshot(
+            gitExecutable = "git",
+            gitVersion = "git version test",
+            systemUser = "tester",
+            globalUserName = null,
+            globalUserEmail = null,
+            globalCredentialHelpers = emptyList(),
+            globalKeyConfig = emptyList(),
+            errors = emptyList(),
+        )
+
+        assertEquals(snapshot, displayedGitSnapshot(LocalGitSettingsState.Loading(snapshot)))
+        assertEquals(null, displayedGitSnapshot(LocalGitSettingsState.Loading()))
+    }
+
+    @Test
+    fun `structured git summary does not repeat identity configuration`() {
+        val visible = visibleGlobalGitKeyConfig(
+            LocalGitEnvironmentSnapshot(
+                gitExecutable = "git",
+                gitVersion = "git version test",
+                systemUser = "tester",
+                globalUserName = GitConfigValue("user.name", "Tester"),
+                globalUserEmail = GitConfigValue("user.email", "tester@example.com"),
+                globalCredentialHelpers = emptyList(),
+                globalKeyConfig = listOf(
+                    GitConfigValue("user.name", "Tester"),
+                    GitConfigValue("user.email", "tester@example.com"),
+                    GitConfigValue("core.autocrlf", "input"),
+                ),
+                errors = emptyList(),
+            ),
+        )
+
+        assertEquals(listOf(GitConfigValue("core.autocrlf", "input")), visible)
+    }
+
+    @Test
     fun `git settings display only executable user and global configuration`() {
         val text = formatLocalGitSettings(
             LocalGitEnvironmentSnapshot(

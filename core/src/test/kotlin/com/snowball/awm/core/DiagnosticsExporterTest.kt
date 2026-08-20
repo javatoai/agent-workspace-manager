@@ -24,6 +24,8 @@ class DiagnosticsExporterTest {
         val config = AppConfig(
             developmentTools = listOf(DevelopmentToolConfig(DevelopmentToolType.PYCHARM, "C:/secret/user/PyCharm.exe")),
             terminalExecutable = "C:/secret/terminal.exe",
+            meegleExecutablePath = "C:/secret/user/meegle.cmd",
+            gitExecutablePath = "C:/secret/user/git.exe",
         )
 
         val archive = DiagnosticsExporter(paths, runner).export(config, "broken task")
@@ -37,6 +39,8 @@ class DiagnosticsExporterTest {
             val configText = zip.getInputStream(zip.getEntry("config-summary.json")).bufferedReader().readText()
             assertFalse(configText.contains("C:/secret"))
             assertTrue(configText.contains("<configured:PYCHARM>"))
+            assertTrue(configText.contains("\"meegleExecutablePath\": \"<configured>\""))
+            assertTrue(configText.contains("\"gitExecutablePath\": \"<configured>\""))
         }
     }
 }

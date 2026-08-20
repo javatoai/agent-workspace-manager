@@ -12,6 +12,14 @@ sealed interface TemplateFillResult {
 }
 
 /**
+ * Restores a visual template selection for an existing task without persisting
+ * template metadata into the task. Equal contents are deliberately ambiguous:
+ * selecting none is safer than presenting an arbitrary template as the source.
+ */
+fun selectedTemplateIdForNotes(notes: String, templates: List<AgentTaskTemplate>): String? =
+    templates.filter { it.content == notes }.singleOrNull()?.id
+
+/**
  * Single-selection template filling for the create-task notes field.
  *
  * A template owns the notes only while the notes still equal its content; any

@@ -28,9 +28,10 @@ class WindowPreferencesTest {
 
     @Test
     fun `settings selection restores supported keys and maps legacy advanced to feishu`() {
-        val supported = setOf("basic", "groups", "agents", "tools", "branches", "git", "feishu", "logs")
+        val supported = setOf("basic", "paths", "groups", "agents", "tools", "branches", "git", "feishu", "logs")
 
         assertEquals("logs", normalizeSettingsSection("logs", supported))
+        assertEquals("paths", normalizeSettingsSection("paths", supported))
         assertEquals("feishu", normalizeSettingsSection("advanced", supported))
         assertEquals("basic", normalizeSettingsSection("unknown", supported))
     }

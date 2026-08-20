@@ -16,7 +16,12 @@ import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
+import com.snowball.awm.core.ConfiguredGitExecutable
 import com.snowball.awm.core.ConfiguredMeegleExecutable
+import com.snowball.awm.core.GitBranchReferenceValidator
+import com.snowball.awm.core.GitClient
+import com.snowball.awm.core.GitCommandSource
+import com.snowball.awm.core.GitWorkspaceLifecycle
 import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.MeegleRequirementMetadataProvider
 import com.snowball.awm.core.MeegleProjectConfig
@@ -81,6 +86,8 @@ import com.snowball.awm.core.WorkspaceProvisioningService
 import com.snowball.awm.core.WorkspaceBranchReuseInspector
 import com.snowball.awm.core.StandardWorktreeProvisioner
 import com.snowball.awm.core.IndependentCloneProvisioner
+import com.snowball.awm.core.BootstrapService
+import com.snowball.awm.core.WorkspaceModuleRemovalService
 import com.snowball.awm.core.toInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
@@ -88,6 +95,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicReference
 
@@ -129,6 +137,13 @@ data class WorkspaceToolOption(
 private data class LoadedTasks(
     val manifests: List<TaskManifest>,
     val warning: String? = null,
+    val manifestIssues: List<TaskManifestIssue> = emptyList(),
+)
+
+/** A task manifest that AWM deliberately left unchanged because it could not read it safely. */
+data class TaskManifestIssue(
+    val manifestPath: String,
+    val reason: String,
 )
 
 /** Desktop dependency container; feature controllers expose its application use cases to Compose. */
@@ -138,10 +153,14 @@ class DesktopApplication(
     private val errorLogReader: ApplicationErrorLogReader = ApplicationErrorLogReader(paths),
     private val meegleExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
-    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, meegleExecutable = meegleExecutable),
+    private val gitExecutablePath: AtomicReference<String?> = AtomicReference(null),
+    private val gitExecutable: ConfiguredGitExecutable = ConfiguredGitExecutable(gitExecutablePath::get),
+    private val gitClient: GitClient = GitClient(executable = gitExecutable),
+    private val bootstrapService: BootstrapService = BootstrapService(git = gitClient),
+    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, git = gitClient, meegleExecutable = meegleExecutable),
     private val configStore: ConfigStore = ConfigStore(paths),
     private val manifests: ManifestStore = ManifestStore(),
-    private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(),
+    private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(gitClient),
     private val groupConfigurations: GroupConfigurationService =
         GroupConfigurationService(configStore, repositoryInspector),
     private val operationLock: TaskOperationLock = FileTaskOperationLock(paths),
@@ -149,45 +168,57 @@ class DesktopApplication(
     private val agentDocuments: AgentDocumentService = AgentDocumentService(paths),
     private val provisioning: WorkspaceProvisioningService = WorkspaceProvisioningService(
         listOf(
-            StandardWorktreeProvisioner(repositoryLock = repositoryLock),
-            IndependentCloneProvisioner(),
+            StandardWorktreeProvisioner(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
+            IndependentCloneProvisioner(git = gitClient, bootstrap = bootstrapService),
         ),
     ),
     private val branchReuseInspector: WorkspaceBranchReuseInspector =
-        WorkspaceBranchReuseInspector(repositoryLock = repositoryLock),
+        WorkspaceBranchReuseInspector(git = gitClient, repositoryLock = repositoryLock),
     private val workspaceRepairs: WorkspaceRepairService = WorkspaceRepairService(
         manifests = manifests,
         agentDocuments = agentDocuments,
         taskLock = operationLock,
         repositoryLock = repositoryLock,
+        git = gitClient,
+        bootstrap = bootstrapService,
     ),
     private val tasksApplication: TaskApplicationService = TaskApplicationService(
         manifests = manifests,
         provisioning = provisioning,
         agentDocuments = agentDocuments,
+        lifecycle = GitWorkspaceLifecycle(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
         operationLock = operationLock,
+        branchValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
         branchReuseInspector = branchReuseInspector,
         repairs = workspaceRepairs,
+        moduleRemoval = WorkspaceModuleRemovalService(
+            manifests = manifests,
+            agentDocuments = agentDocuments,
+            taskLock = operationLock,
+            repositoryLock = repositoryLock,
+            git = gitClient,
+        ),
+        bootstrap = bootstrapService,
     ),
     private val agentPropagation: AgentDocumentPropagationService =
         AgentDocumentPropagationService(manifests, agentDocuments, operationLock),
     private val tagDelivery: GitTagDeliveryAdapter = GitTagDeliveryAdapter(
-        TagBuildService(paths = paths, repositoryLock = repositoryLock),
+        TagBuildService(paths = paths, git = gitClient, repositoryLock = repositoryLock),
     ),
     val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(tagDelivery)),
     private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(meegleExecutable = meegleExecutable),
     private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
-    private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader()),
-    private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(repositoryLock = repositoryLock),
-    private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(),
+    private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader(gitClient)),
+    private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(gitClient, repositoryLock),
+    private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(gitClient),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
-    private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(),
-    private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(),
+    private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(gitClient),
+    private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(gitClient),
     private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(meegleExecutable = meegleExecutable),
     private val meegleCliService: MeegleCliService = ProcessMeegleCliService(meegleExecutable = meegleExecutable),
-    private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(),
+    private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(gitExecutable = gitExecutable),
     private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
         listOf(CodexWorkspaceToolLauncher(), CursorWorkspaceToolLauncher()),
     ),
@@ -207,6 +238,10 @@ class DesktopApplication(
      */
     var configurationLoadError by mutableStateOf(initial.exceptionOrNull()?.message)
         private set
+    var configFileSnapshot by mutableStateOf(configStore.fileSnapshot())
+        private set
+    var configFileSnapshotRefreshing by mutableStateOf(false)
+        private set
     private val agentMonitor: AgentFileMonitor by lazy {
         AgentFileMonitor(onChange = { change ->
             scope.launch { agentInstructionsController.handleFileChange(change) }
@@ -215,9 +250,12 @@ class DesktopApplication(
 
     private val initialConfig = initial.getOrDefault(AppConfig()).also {
         meegleExecutablePath.set(it.meegleExecutablePath)
+        gitExecutablePath.set(it.gitExecutablePath)
     }
     private val initialTasks = scanTasks(initialConfig)
     private var taskScanWarning: String? = initialTasks.warning
+    var taskManifestIssues by mutableStateOf(initialTasks.manifestIssues)
+        private set
     val sessionStore = AppSessionStore(initialConfig, initialTasks.manifests)
     val operationCoordinator = OperationCoordinator(
         initialError = initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: initialTasks.warning,
@@ -288,6 +326,7 @@ class DesktopApplication(
             meegleProjectCatalog = meegleProjectCatalog,
             meegleCliService = meegleCliService,
             meegleExecutable = meegleExecutable,
+            gitExecutable = gitExecutable,
             localGitInspector = localGitInspector,
             scope = scope,
             ioDispatcher = ioDispatcher,
@@ -332,6 +371,7 @@ class DesktopApplication(
         get() = sessionStore.config
         private set(value) {
             meegleExecutablePath.set(value.meegleExecutablePath)
+            gitExecutablePath.set(value.gitExecutablePath)
             sessionStore.config = value
         }
     var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
@@ -435,6 +475,11 @@ class DesktopApplication(
         settingsController.updateMeegleExecutablePath(raw, onFailure)
 
     fun meegleCommandResolution(): Pair<String, MeegleCommandSource> = settingsController.meegleCommandResolution()
+
+    fun updateGitExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateGitExecutablePath(raw, onFailure)
+
+    fun gitCommandResolution(): Pair<String, GitCommandSource> = settingsController.gitCommandResolution()
 
 
     fun refreshCurrentTaskGitStatus() = taskController.refreshGitStatus()
@@ -650,6 +695,42 @@ class DesktopApplication(
     fun configBackups(): List<ConfigStore.Backup> = runCatching { configStore.backups() }.getOrDefault(emptyList())
     fun previewConfigImport(path: String): ConfigStore.ImportPreview = configStore.previewImport(Path.of(path))
 
+    fun configurationRecoveryGuidance(): String = recoveryGuidance(
+        subject = "系统主配置文件",
+        path = configFileSnapshot.path.toString(),
+        reason = configurationLoadError.orEmpty(),
+    )
+
+    fun taskManifestRecoveryGuidance(issue: TaskManifestIssue): String = recoveryGuidance(
+        subject = "任务清单",
+        path = issue.manifestPath,
+        reason = issue.reason,
+    )
+
+    /** Refreshes the raw, read-only configuration preview without parsing or writing it. */
+    fun refreshConfigFileSnapshot() {
+        if (configFileSnapshotRefreshing) return
+        configFileSnapshotRefreshing = true
+        scope.launch {
+            try {
+                configFileSnapshot = withContext(ioDispatcher) { configStore.fileSnapshot() }
+            } finally {
+                configFileSnapshotRefreshing = false
+            }
+        }
+    }
+
+    fun revealConfigFile() {
+        if (!configFileSnapshot.exists) {
+            showError(IllegalStateException("主配置文件尚未创建：${configFileSnapshot.path}"))
+            return
+        }
+        desktopActions.reveal(configFileSnapshot.path)
+    }
+
+    /** Re-scans the task root after a user repairs a task manifest outside AWM. */
+    fun refreshTaskManifestIssues() = reloadTasks()
+
     fun restoreConfigBackup(path: String): Boolean = operationRunner.run(
         "正在恢复配置备份…",
         "配置备份已恢复",
@@ -689,7 +770,10 @@ class DesktopApplication(
     fun copyText(text: String, message: String = "已复制") = desktopActions.copy(text, message)
 
     /** Called from Window.onFocusEvent as the inexpensive external-file fallback. */
-    fun onWindowFocused() = agentInstructionsController.onWindowFocused()
+    fun onWindowFocused() {
+        agentInstructionsController.onWindowFocused()
+        refreshConfigFileSnapshot()
+    }
     fun resolveAgentConflict(resolution: AgentConflictResolution) = agentInstructionsController.resolveConflict(resolution)
     fun dismissMessages() {
         operationCoordinator.dismiss()
@@ -725,6 +809,24 @@ class DesktopApplication(
         val scan = runCatching { manifests.scan(root) }.getOrElse { error ->
             return LoadedTasks(emptyList(), "任务目录扫描失败：${error.message ?: error::class.simpleName}")
         }
+        val issues = buildList {
+            scan.unsupportedDirectories.forEach { directory ->
+                add(
+                    TaskManifestIssue(
+                        manifestPath = directory.resolve(ManifestStore.FILE_NAME).toAbsolutePath().normalize().toString(),
+                        reason = scan.unsupportedReasons[directory] ?: "任务清单版本与当前 AWM 不兼容",
+                    ),
+                )
+            }
+            scan.failures.forEach { (directory, reason) ->
+                add(
+                    TaskManifestIssue(
+                        manifestPath = directory.resolve(ManifestStore.FILE_NAME).toAbsolutePath().normalize().toString(),
+                        reason = reason,
+                    ),
+                )
+            }
+        }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
                 add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.9.x 任务目录")
@@ -739,12 +841,14 @@ class DesktopApplication(
         return LoadedTasks(
             manifests = scan.current.map { it.second }.sortedByDescending(TaskManifest::updatedAt),
             warning = messages.takeIf { it.isNotEmpty() }?.joinToString("；"),
+            manifestIssues = issues,
         )
     }
 
     private fun reloadTasks(preferredFolder: String? = selectedTask?.folderName) {
         val loaded = scanTasks(config)
         taskScanWarning = loaded.warning
+        taskManifestIssues = loaded.manifestIssues
         sessionStore.replaceTasks(loaded.manifests, preferredFolder)
         deliveryController.reloadHistory()
         requirementController.reconcileTasks()
@@ -764,11 +868,19 @@ class DesktopApplication(
         updated.groups.forEach { group ->
             runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
         }
+        refreshConfigFileSnapshot()
     }
 
     private fun showStatus(message: String) {
         operationCoordinator.statusMessage = message
         operationCoordinator.errorMessage = null
+    }
+
+    private fun recoveryGuidance(subject: String, path: String, reason: String): String = buildString {
+        appendLine("$subject 加载失败")
+        appendLine("文件：$path")
+        if (reason.isNotBlank()) appendLine("原因：$reason")
+        append("请先备份该文件；确认无需保留时，可在文件管理器中手动删除它，然后重新打开 AWM。")
     }
 
 }

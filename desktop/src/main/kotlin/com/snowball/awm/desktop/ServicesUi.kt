@@ -1,12 +1,13 @@
 package com.snowball.awm.desktop
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountTree
@@ -29,7 +29,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -44,6 +43,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.snowball.awm.core.GroupConfig
@@ -57,41 +58,53 @@ internal fun ServicesScreen(controller: DesktopApplication) {
     var removeTarget by remember { mutableStateOf<Pair<String, GroupServiceConfig>?>(null) }
     var addToGroup by remember { mutableStateOf<String?>(null) }
     var selectedGroupId by remember { mutableStateOf(controller.config.groups.firstOrNull()?.id) }
-    LaunchedEffect(controller.config.groups.map(GroupConfig::id)) {
-        if (selectedGroupId !in controller.config.groups.map(GroupConfig::id)) {
-            selectedGroupId = controller.config.groups.firstOrNull()?.id
-        }
+    val groupIds = controller.config.groups.map(GroupConfig::id)
+    LaunchedEffect(groupIds) {
+        selectedGroupId = resolveServiceGroupSelection(selectedGroupId, groupIds)
     }
     val group = controller.config.groups.firstOrNull { it.id == selectedGroupId } ?: return
-    val serviceCount = group.services.size
-    val standardCount = group.services.sumOf { service -> service.modules.count { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE } }
-    val cloneCount = group.services.sumOf { service -> service.modules.count { it.strategy == WorkspaceStrategy.INDEPENDENT_CLONE } }
-    LazyColumn(
+    val showGroupNavigation = serviceGroupNavigationVisible(groupIds.size)
+    Row(
         Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item(key = "service-overview") {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        if (showGroupNavigation) {
+            Surface(
+                Modifier.width(250.dp).fillMaxHeight(),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
-                controller.config.groups.forEach { candidate ->
-                    FilterChip(
-                        selected = candidate.id == group.id,
-                        onClick = { selectedGroupId = candidate.id },
-                        label = { Text("${candidate.name} · ${candidate.services.size}") },
-                    )
+                LazyColumn(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(controller.config.groups, key = GroupConfig::id) { candidate ->
+                        val selected = candidate.id == group.id
+                        Surface(
+                            Modifier.fillMaxWidth().clickable { selectedGroupId = candidate.id },
+                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    candidate.name,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    "${candidate.services.size} 个服务",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard("当前组", group.name, "服务仓库", Modifier.weight(1f))
-                MetricCard("服务", serviceCount.toString(), "已配置仓库入口", Modifier.weight(1f))
-                MetricCard("Worktree", standardCount.toString(), "标准隔离工作区", Modifier.weight(1f))
-                MetricCard("独立克隆", cloneCount.toString(), "克隆模块", Modifier.weight(1f))
-            }
         }
-        item(key = "group-${group.id}") {
+        LazyColumn(
+            if (showGroupNavigation) Modifier.weight(1f).fillMaxHeight() else Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "group-${group.id}") {
             Surface(
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
                 shape = RoundedCornerShape(16.dp),
@@ -109,8 +122,8 @@ internal fun ServicesScreen(controller: DesktopApplication) {
                     Button(onClick = { addToGroup = group.id }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("添加仓库") }
                 }
             }
-        }
-        if (group.services.isEmpty()) item(key = "empty-${group.id}") {
+            }
+            if (group.services.isEmpty()) item(key = "empty-${group.id}") {
                 OutlinedCard(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
                     Row(Modifier.padding(22.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Info, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -118,15 +131,16 @@ internal fun ServicesScreen(controller: DesktopApplication) {
                         Text("该组还没有服务，添加一个 Git 仓库开始配置。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-        }
-        items(group.services, key = { "${group.id}-${it.id}" }) { service ->
-            val index = group.services.indexOfFirst { it.id == service.id }
-            val repository = controller.config.repositories.firstOrNull { it.id == service.repositoryId }
-            ServiceCard(service, repository, index > 0, index in 0 until group.services.lastIndex,
-                onEdit = { editTarget = group.id to service },
-                onUp = { controller.moveService(group.id, service.id, -1) },
-                onDown = { controller.moveService(group.id, service.id, 1) },
-                onRemove = { removeTarget = group.id to service })
+            }
+            items(group.services, key = { "${group.id}-${it.id}" }) { service ->
+                val index = group.services.indexOfFirst { it.id == service.id }
+                val repository = controller.config.repositories.firstOrNull { it.id == service.repositoryId }
+                ServiceCard(service, repository, index > 0, index in 0 until group.services.lastIndex,
+                    onEdit = { editTarget = group.id to service },
+                    onUp = { controller.moveService(group.id, service.id, -1) },
+                    onDown = { controller.moveService(group.id, service.id, 1) },
+                    onRemove = { removeTarget = group.id to service })
+            }
         }
     }
     addToGroup?.let { groupId -> AddRepositoryDialog(controller, onDismiss = { addToGroup = null }) { paths ->
@@ -139,11 +153,19 @@ internal fun ServicesScreen(controller: DesktopApplication) {
         ConfirmDialog(
             title = "从组中移除服务？",
             message = "将移除“${service.displayName}”在当前组中的配置，不会删除原仓库，也不会改动已有任务。仍被任务引用时操作会被安全阻止。",
+            confirmLabel = "移除服务",
+            destructive = true,
+            enabled = !controller.settingsBusy,
             onDismiss = { removeTarget = null },
             onConfirm = { controller.removeService(groupId, service.id) { removeTarget = null } },
         )
     }
 }
+
+internal fun serviceGroupNavigationVisible(groupCount: Int): Boolean = groupCount > 1
+
+internal fun resolveServiceGroupSelection(currentId: String?, groupIds: List<String>): String? =
+    currentId?.takeIf(groupIds::contains) ?: groupIds.firstOrNull()
 
 @Composable
 private fun ServiceCard(

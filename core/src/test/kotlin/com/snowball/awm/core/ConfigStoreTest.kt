@@ -40,6 +40,46 @@ class ConfigStoreTest {
     }
 
     @Test
+    fun `file snapshot exposes malformed content without parsing or rewriting it`() {
+        val paths = ApplicationPaths(temporary.resolve("preview-home"))
+        Files.createDirectories(paths.home)
+        val original = "{ invalid json"
+        Files.writeString(paths.config, original)
+
+        val snapshot = ConfigStore(paths).fileSnapshot()
+
+        assertEquals(paths.config.toAbsolutePath().normalize(), snapshot.path)
+        assertTrue(snapshot.exists)
+        assertEquals(original, snapshot.content)
+        assertEquals(null, snapshot.readError)
+        assertEquals(original, Files.readString(paths.config))
+    }
+
+    @Test
+    fun `file snapshot reports a configuration that has not been created`() {
+        val paths = ApplicationPaths(temporary.resolve("missing-preview-home"))
+
+        val snapshot = ConfigStore(paths).fileSnapshot()
+
+        assertEquals(paths.config.toAbsolutePath().normalize(), snapshot.path)
+        assertFalse(snapshot.exists)
+        assertEquals(null, snapshot.content)
+    }
+
+    @Test
+    fun `file snapshot returns the raw current configuration`() {
+        val paths = ApplicationPaths(temporary.resolve("current-preview-home"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig(taskRoot = "D:/tasks"))
+
+        val snapshot = store.fileSnapshot()
+
+        assertTrue(snapshot.exists)
+        assertTrue(snapshot.content.orEmpty().contains("\"schemaVersion\": \"$CURRENT_APP_CONFIG_SCHEMA_VERSION\""))
+        assertTrue(snapshot.content.orEmpty().contains("\"taskRoot\": \"D:/tasks\""))
+    }
+
+    @Test
     fun `concurrent config mutations are serialized and preserve both updates`() {
         val store = ConfigStore(ApplicationPaths(temporary.resolve("concurrent-home")))
         store.save(AppConfig())

@@ -10,7 +10,10 @@ class LocalGitEnvironmentInspectorTest {
     @Test
     fun `inspection reads only executable version and global git config`() {
         val runner = RecordingGitRunner()
-        val inspector = LocalGitEnvironmentInspector(runner, isWindows = true)
+        val inspector = LocalGitEnvironmentInspector(
+            runner,
+            ConfiguredGitExecutable({ null }, runner, osName = "Windows 11"),
+        )
         val snapshot = inspector.inspect()
 
         assertEquals("C:\\Program Files\\Git\\cmd\\git.exe", snapshot.gitExecutable)
@@ -45,7 +48,7 @@ class LocalGitEnvironmentInspectorTest {
             val joined = command.joinToString(" ")
             return when {
                 command.first() == "where.exe" -> ok("C:\\Program Files\\Git\\cmd\\git.exe\n")
-                joined == "git --version" -> ok("git version 2.50.1.windows.1\n")
+                joined == "C:\\Program Files\\Git\\cmd\\git.exe --version" -> ok("git version 2.50.1.windows.1\n")
                 joined.contains("config --global --show-origin --list") -> ok(
                     "file:C:/Users/alice/.gitconfig\tuser.name=Alice\n" +
                         "file:C:/Users/alice/.gitconfig\tuser.email=alice@example.com\n" +

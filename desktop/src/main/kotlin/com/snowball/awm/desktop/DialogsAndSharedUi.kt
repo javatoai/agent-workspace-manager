@@ -204,11 +204,26 @@ internal fun DeleteTaskDialog(controller: DesktopApplication, task: TaskManifest
     val inspectionError = inspection?.error
     val safetyCheckFailed = risks.any { it.statusCheckError != null }
     var discard by remember { mutableStateOf(false) }
+    var externalWindowsClosed by remember(task.taskDirectoryName) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除任务") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("会删除任务目录和其工作区，远程分支不会被修改。")
+            Text("即将永久删除“${task.folderName}”的任务目录和所有工作区，远程分支不会被修改。")
+            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(10.dp)) {
+                Text(
+                    deleteTaskExternalWindowWarning(),
+                    Modifier.padding(12.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().clickable { externalWindowsClosed = !externalWindowsClosed }.padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(externalWindowsClosed, { externalWindowsClosed = it })
+                Text("我已关闭上述 Codex 项目、IDE 窗口和文件夹")
+            }
             if (loading) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text("正在检查 Git 状态…", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -222,19 +237,44 @@ internal fun DeleteTaskDialog(controller: DesktopApplication, task: TaskManifest
             if (risks.any { it.statusCheckError == null }) Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(discard, { discard = it }); Text("确认丢弃未提交改动") }
         } },
         confirmButton = { Button(
-            onClick = {
-                controller.deleteTask(task, risks.isNotEmpty(), onCompleted = onDismiss)
-            },
-            enabled = !loading && inspectionError == null && !safetyCheckFailed && (risks.isEmpty() || discard) && !controller.busy,
+            onClick = { controller.deleteTask(task, risks.isNotEmpty(), onCompleted = onDismiss) },
+            enabled = !loading && inspectionError == null && !safetyCheckFailed && externalWindowsClosed && (risks.isEmpty() || discard) && !controller.busy,
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-        ) { Text("删除") } },
+        ) { Text("永久删除任务") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 
+internal fun deleteTaskExternalWindowWarning(): String =
+    "删除前请确认已关闭：Codex 中关联的项目或任务、IDE 中打开的此任务或工作区窗口，以及文件管理器中打开的任务目录。它们可能占用文件，导致删除失败。AWM 不会自动关闭这些外部窗口。"
+
 @Composable
-internal fun ConfirmDialog(title: String, message: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(message) }, confirmButton = { Button(onClick = onConfirm) { Text("确认") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+internal fun ConfirmDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    destructive: Boolean = false,
+    enabled: Boolean = true,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = enabled,
+                colors = if (destructive) {
+                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                } else {
+                    ButtonDefaults.buttonColors()
+                },
+            ) { Text(confirmLabel) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = enabled) { Text("取消") } },
+    )
 }
 
 @Composable

@@ -48,6 +48,12 @@ class ConfigStore(
     ) { ReentrantLock() }
 
     data class Backup(val path: Path, val modifiedAtMillis: Long)
+    data class FileSnapshot(
+        val path: Path,
+        val exists: Boolean,
+        val content: String? = null,
+        val readError: String? = null,
+    )
     data class ImportPreview(
         val source: Path,
         val changes: List<String>,
@@ -55,6 +61,24 @@ class ConfigStore(
     )
 
     fun exists(): Boolean = paths.config.exists()
+
+    /**
+     * Reads the on-disk configuration verbatim for a read-only desktop preview.
+     * It deliberately does not parse or validate the document, so users can
+     * inspect a malformed or incompatible file without risking an overwrite.
+     */
+    fun fileSnapshot(): FileSnapshot {
+        val path = paths.config.toAbsolutePath().normalize()
+        if (!Files.exists(path)) return FileSnapshot(path = path, exists = false)
+        return runCatching { FileSnapshot(path = path, exists = true, content = Files.readString(path)) }
+            .getOrElse { error ->
+                FileSnapshot(
+                    path = path,
+                    exists = true,
+                    readError = error.message ?: error::class.simpleName ?: "无法读取配置文件",
+                )
+            }
+    }
 
     override fun load(): AppConfig {
         if (!exists()) return AppConfig()

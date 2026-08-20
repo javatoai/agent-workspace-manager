@@ -555,6 +555,7 @@ internal fun CreateTaskDialog(
         ConfirmDialog(
             title = "替换任务人工说明？",
             message = "当前说明已被手动修改，应用模板“${template.name}”将替换现有内容。",
+            confirmLabel = "替换说明",
             onDismiss = { pendingTemplate = null },
             onConfirm = {
                 notes = template.content

@@ -58,6 +58,10 @@ class ManifestStoreTest {
         val scan = store.scan(temporary)
         kotlin.test.assertTrue(scan.current.isEmpty())
         kotlin.test.assertEquals(listOf(taskDirectory), scan.unsupportedDirectories)
+        kotlin.test.assertEquals(
+            "任务 JSON 版本不受支持：4，当前版本为 $CURRENT_TASK_MANIFEST_SCHEMA_VERSION",
+            scan.unsupportedReasons[taskDirectory],
+        )
         kotlin.test.assertEquals("""{"schemaVersion":4}""", Files.readString(taskDirectory.resolve(ManifestStore.FILE_NAME)))
     }
 

@@ -181,7 +181,7 @@ fun main() {
             DisposableEffect(window) {
                 fun nativeScale(): Pair<Double, Double> = window.graphicsConfiguration.defaultTransform.let { it.scaleX to it.scaleY }
                 val listener = object : WindowAdapter() {
-                    override fun windowGainedFocus(event: WindowEvent?) = controller.agentInstructionsController.onWindowFocused()
+                    override fun windowGainedFocus(event: WindowEvent?) = controller.onWindowFocused()
                 }
                 window.addWindowFocusListener(listener)
                 onDispose {

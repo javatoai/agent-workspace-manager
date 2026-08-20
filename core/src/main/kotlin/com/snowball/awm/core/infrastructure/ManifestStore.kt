@@ -16,6 +16,7 @@ data class ManifestScanResult(
     val current: List<Pair<Path, TaskManifest>>,
     val unsupportedDirectories: List<Path>,
     val failures: Map<Path, String> = emptyMap(),
+    val unsupportedReasons: Map<Path, String> = emptyMap(),
 )
 
 interface TaskManifestRepository {
@@ -78,6 +79,7 @@ class ManifestStore(
             val current = mutableListOf<Pair<Path, TaskManifest>>()
             val unsupported = mutableListOf<Path>()
             val failures = linkedMapOf<Path, String>()
+            val unsupportedReasons = linkedMapOf<Path, String>()
             directories.forEach { directory ->
                 runCatching {
                     val content = Files.readString(directory.resolve(FILE_NAME))
@@ -89,12 +91,13 @@ class ManifestStore(
                         current.add(directory to json.decodeFromJsonElement(json.parseToJsonElement(content)))
                     } else {
                         unsupported.add(directory)
+                        unsupportedReasons[directory] = "任务 JSON 版本不受支持：${version ?: "缺少 schemaVersion"}，当前版本为 $CURRENT_TASK_MANIFEST_SCHEMA_VERSION"
                     }
                 }.onFailure { error ->
                     failures[directory] = error.message ?: error::class.simpleName ?: "读取失败"
                 }
             }
-            ManifestScanResult(current, unsupported, failures)
+            ManifestScanResult(current, unsupported, failures, unsupportedReasons)
         }
     }
 

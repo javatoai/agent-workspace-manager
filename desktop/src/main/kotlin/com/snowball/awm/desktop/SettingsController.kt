@@ -17,6 +17,9 @@ import com.snowball.awm.core.MeegleCliStatus
 import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.MeegleExecutable
 import com.snowball.awm.core.normalizeMeegleExecutablePath
+import com.snowball.awm.core.GitCommandSource
+import com.snowball.awm.core.GitExecutable
+import com.snowball.awm.core.normalizeGitExecutablePath
 import com.snowball.awm.core.MeegleProjectSummary
 import com.snowball.awm.core.LocalGitEnvironmentInspector
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
@@ -60,14 +63,14 @@ sealed interface MeegleProjectCatalogState {
 
 sealed interface MeegleCliState {
     data object Idle : MeegleCliState
-    data object Loading : MeegleCliState
+    data class Loading(val previous: MeegleCliStatus? = null) : MeegleCliState
     data class Ready(val status: MeegleCliStatus) : MeegleCliState
     data class Failed(val message: String) : MeegleCliState
 }
 
 sealed interface LocalGitSettingsState {
     data object Idle : LocalGitSettingsState
-    data object Loading : LocalGitSettingsState
+    data class Loading(val previous: LocalGitEnvironmentSnapshot? = null) : LocalGitSettingsState
     data class Loaded(val snapshot: LocalGitEnvironmentSnapshot) : LocalGitSettingsState
     data class Failed(val message: String) : LocalGitSettingsState
 }
@@ -78,6 +81,16 @@ sealed interface RepositoryRemotesState {
     data class Loaded(val remotes: List<String>) : RepositoryRemotesState
     data class Failed(val message: String) : RepositoryRemotesState
 }
+
+private data class MeegleExecutableAutoSave(
+    val config: AppConfig,
+    val savedDetectedPath: Boolean,
+)
+
+private data class GitExecutableAutoSave(
+    val config: AppConfig,
+    val savedDetectedPath: Boolean,
+)
 
 /** Configuration and repository use cases with no dependency on DesktopApplication. */
 class SettingsController internal constructor(
@@ -90,6 +103,7 @@ class SettingsController internal constructor(
     private val meegleProjectCatalog: MeegleProjectCatalog,
     private val meegleCliService: MeegleCliService,
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
+    private val gitExecutable: GitExecutable = GitExecutable.pathFallback(),
     private val localGitInspector: LocalGitEnvironmentInspector,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -141,6 +155,21 @@ class SettingsController internal constructor(
     fun meegleCommandResolution(): Pair<String, MeegleCommandSource> =
         meegleExecutable.current() to meegleExecutable.source()
 
+    fun updateGitExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 Git 命令路径…",
+        "Git 命令路径已保存",
+        onFailure,
+        "git",
+        settingsOperations,
+        onCompleted = { refreshLocalGit(force = true) },
+    ) { config ->
+        config.copy(gitExecutablePath = normalizeGitExecutablePath(raw))
+    }
+
+    /** The currently effective Git command and where it came from; safe on the UI thread. */
+    fun gitCommandResolution(): Pair<String, GitCommandSource> =
+        gitExecutable.current() to gitExecutable.source()
+
     fun setTheme(theme: ThemePreference): Boolean = mutate(
         "正在更新主题…",
         "主题已更新",
@@ -156,9 +185,9 @@ class SettingsController internal constructor(
             Files.createDirectories(path)
             configStore.update { it.copy(taskRoot = path.toString()) }
         },
-        onSuccess = { applyConfig(it); reloadTasks(); setSaveState("basic", SettingsSaveState.SAVED) },
-        onFailure = { setSaveState("basic", SettingsSaveState.FAILED); onFailure(it) },
-    ).also { started -> setSaveState("basic", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
+        onSuccess = { applyConfig(it); reloadTasks(); setSaveState("paths", SettingsSaveState.SAVED) },
+        onFailure = { setSaveState("paths", SettingsSaveState.FAILED); onFailure(it) },
+    ).also { started -> setSaveState("paths", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
 
     fun updateDevelopmentTools(
         tools: List<DevelopmentToolConfig>,
@@ -208,14 +237,50 @@ class SettingsController internal constructor(
     fun refreshLocalGit(force: Boolean = false) {
         if (!force && localGit is LocalGitSettingsState.Loading) return
         localGitJob?.cancel()
-        localGit = LocalGitSettingsState.Loading
+        val shouldAutoDetect = session.config.gitExecutablePath.isNullOrBlank()
+        localGit = LocalGitSettingsState.Loading((localGit as? LocalGitSettingsState.Loaded)?.snapshot)
         localGitJob = scope.launch {
-            val result = withContext(ioDispatcher) { runCatching { localGitInspector.inspect() } }
+            val (autoSave, result) = withContext(ioDispatcher) {
+                val autoSaveResult = runCatching { autoSaveGitExecutablePath(shouldAutoDetect) }
+                if (autoSaveResult.isFailure) {
+                    null to Result.failure(autoSaveResult.exceptionOrNull()!!)
+                } else {
+                    autoSaveResult.getOrNull() to runCatching { localGitInspector.inspect() }
+                }
+            }
+            autoSave?.let {
+                applyConfig(it.config)
+                if (it.savedDetectedPath) {
+                    setSaveState("git", SettingsSaveState.SAVED)
+                    showStatus("已自动检测并保存 Git 命令路径")
+                }
+            }
+            if (shouldAutoDetect && autoSave == null && result.isFailure) {
+                setSaveState("git", SettingsSaveState.FAILED)
+            }
             localGit = result.fold(
                 onSuccess = { LocalGitSettingsState.Loaded(it) },
                 onFailure = { LocalGitSettingsState.Failed(it.message ?: "读取本地 Git 信息失败") },
             )
         }
+    }
+
+    private fun autoSaveGitExecutablePath(shouldAutoDetect: Boolean): GitExecutableAutoSave? {
+        if (!shouldAutoDetect) return null
+        val detected = gitExecutable.probe()
+        if (gitExecutable.source() != GitCommandSource.PROBED) return null
+        val normalized = normalizeGitExecutablePath(detected)
+            ?: error("自动探测到的 Git 命令路径为空")
+        var savedDetectedPath = false
+        val updated = configStore.update { current ->
+            if (current.gitExecutablePath.isNullOrBlank()) {
+                savedDetectedPath = true
+                current.copy(gitExecutablePath = normalized)
+            } else {
+                current
+            }
+        }
+        return GitExecutableAutoSave(updated, savedDetectedPath)
     }
 
     fun addGroup(name: String, onCompleted: () -> Unit = {}) = mutateWithService("正在创建组…", "组已创建", onCompleted) { groups.addGroup(name) }
@@ -239,11 +304,26 @@ class SettingsController internal constructor(
 
     fun refreshMeegleStatus(force: Boolean = false) {
         if (!force && meegleCli is MeegleCliState.Loading) return
-        meegleCli = MeegleCliState.Loading
+        val shouldAutoDetect = session.config.meegleExecutablePath.isNullOrBlank()
+        meegleCli = MeegleCliState.Loading((meegleCli as? MeegleCliState.Ready)?.status)
         scope.launch {
-            val result = withContext(ioDispatcher) {
-                if (force) runCatching { meegleExecutable.probe() }
-                runCatching { meegleCliService.status() }
+            val (autoSave, result) = withContext(ioDispatcher) {
+                val autoSaveResult = runCatching { autoSaveMeegleExecutablePath(shouldAutoDetect) }
+                if (autoSaveResult.isFailure) {
+                    null to Result.failure(autoSaveResult.exceptionOrNull()!!)
+                } else {
+                    autoSaveResult.getOrNull() to runCatching { meegleCliService.status() }
+                }
+            }
+            autoSave?.let {
+                applyConfig(it.config)
+                if (it.savedDetectedPath) {
+                    setSaveState("feishu", SettingsSaveState.SAVED)
+                    showStatus("已自动检测并保存 Meegle 命令路径")
+                }
+            }
+            if (shouldAutoDetect && autoSave == null && result.isFailure) {
+                setSaveState("feishu", SettingsSaveState.FAILED)
             }
             meegleCli = result.fold(
                 onSuccess = { MeegleCliState.Ready(it) },
@@ -251,6 +331,24 @@ class SettingsController internal constructor(
             )
             if (result.getOrNull()?.authenticated == true) loadMeegleProjects(force = true)
         }
+    }
+
+    private fun autoSaveMeegleExecutablePath(shouldAutoDetect: Boolean): MeegleExecutableAutoSave? {
+        if (!shouldAutoDetect) return null
+        val detected = meegleExecutable.probe()
+        if (meegleExecutable.source() != MeegleCommandSource.PROBED) return null
+        val normalized = normalizeMeegleExecutablePath(detected)
+            ?: error("自动探测到的 Meegle 命令路径为空")
+        var savedDetectedPath = false
+        val updated = configStore.update { current ->
+            if (current.meegleExecutablePath.isNullOrBlank()) {
+                savedDetectedPath = true
+                current.copy(meegleExecutablePath = normalized)
+            } else {
+                current
+            }
+        }
+        return MeegleExecutableAutoSave(updated, savedDetectedPath)
     }
 
     fun loginMeegle(): Boolean = meegleOperations.run(

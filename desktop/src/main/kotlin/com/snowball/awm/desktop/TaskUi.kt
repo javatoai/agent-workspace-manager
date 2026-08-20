@@ -35,6 +35,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.snowball.awm.core.LocalPushState
+import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.WorkspaceGitBatchMode
@@ -76,6 +78,11 @@ import com.snowball.awm.core.health
 @Composable
 internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
     var notes by remember(task.folderName, task.updatedAt, controller.agentRevision) { mutableStateOf(controller.readTaskNotes(task)) }
+    val templates = controller.agentTaskTemplates
+    var selectedTemplateId by remember(task.folderName, task.updatedAt, controller.agentRevision) {
+        mutableStateOf(selectedTemplateIdForNotes(notes, templates))
+    }
+    var pendingTemplate by remember(task.folderName) { mutableStateOf<AgentTaskTemplate?>(null) }
     var confirmArchive by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showAddServices by remember(task.folderName) { mutableStateOf(false) }
@@ -99,6 +106,17 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     val failedServiceIds = task.services.filter { it.health == WorkspaceHealth.FAILED }
         .map(ServiceWorkspace::groupServiceId).filter(String::isNotBlank).distinct()
     val tagOperationLoading = controller.busy && controller.activeOperation?.contains("Tag") == true
+    LaunchedEffect(controller.agentRevision) {
+        selectedTemplateId = selectedTemplateIdForNotes(notes, templates)
+        pendingTemplate = pendingTemplate?.takeIf { pending ->
+            templates.any { it.id == pending.id && it.content == pending.content }
+        }
+    }
+    fun applyTemplate(notesResult: TemplateFillResult.Applied) {
+        notes = notesResult.notes
+        selectedTemplateId = notesResult.selectedTemplateId
+        controller.markTaskNotesEdited(task, notesResult.notes)
+    }
     Surface(
         modifier,
         color = MaterialTheme.colorScheme.surface,
@@ -219,6 +237,29 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             SectionHeader("任务人工说明", "保存时会更新人工区并按最新配置重新生成 AGENTS.md 系统区")
+            if (templates.isNotEmpty()) {
+                Text(
+                    "从模板填充（单选）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    templates.forEach { template ->
+                        FilterChip(
+                            selected = selectedTemplateId == template.id,
+                            onClick = {
+                                val selected = templates.firstOrNull { it.id == selectedTemplateId }
+                                when (val result = resolveTemplateToggle(notes, selected, template)) {
+                                    is TemplateFillResult.Applied -> applyTemplate(result)
+                                    is TemplateFillResult.NeedsConfirmation -> pendingTemplate = result.target
+                                }
+                            },
+                            enabled = !controller.busy,
+                            label = { Text(template.name) },
+                        )
+                    }
+                }
+            }
             OutlinedTextField(notes, {
                 notes = it
                 controller.markTaskNotesEdited(task, it)
@@ -238,8 +279,26 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
             }
         }
     }
-    if (confirmArchive) ConfirmDialog("归档任务", "任务将移至已归档，工作区和代码不会被删除。", onDismiss = { confirmArchive = false }) {
+    if (confirmArchive) ConfirmDialog(
+        title = "归档任务",
+        message = "任务将移至已归档，工作区和代码不会被删除。",
+        confirmLabel = "归档任务",
+        enabled = !controller.busy,
+        onDismiss = { confirmArchive = false },
+    ) {
         controller.archiveTask(task, onCompleted = { confirmArchive = false })
+    }
+    pendingTemplate?.let { template ->
+        ConfirmDialog(
+            title = "替换任务人工说明？",
+            message = "当前说明已被手动修改，应用模板“${template.name}”将替换现有内容。",
+            confirmLabel = "替换说明",
+            onDismiss = { pendingTemplate = null },
+            onConfirm = {
+                applyTemplate(TemplateFillResult.Applied(template.content, template.id))
+                pendingTemplate = null
+            },
+        )
     }
     if (confirmDelete) DeleteTaskDialog(controller, task) {
         controller.clearDeleteRisk(task)

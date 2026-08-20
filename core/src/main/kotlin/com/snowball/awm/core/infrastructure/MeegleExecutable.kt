@@ -32,14 +32,32 @@ fun meegleFallbackCommand(isWindows: Boolean): String = if (isWindows) "meegle.c
  * macOS/Linux, so detection runs inside a login shell that sources the user's
  * profile (Homebrew puts `/opt/homebrew/bin` on PATH via ~/.zprofile).
  */
-fun meegleProbeCommand(osName: String): List<String> {
+private data class MeegleProbeDefinition(
+    val command: List<String>,
+    val displayCommand: String,
+)
+
+private fun meegleProbeDefinition(osName: String): MeegleProbeDefinition {
     val os = osName.lowercase(Locale.ROOT)
     return when {
-        os.contains("win") -> listOf("where.exe", "meegle")
-        os.contains("mac") -> listOf("/bin/zsh", "-lc", "command -v meegle")
-        else -> listOf("/bin/bash", "-lc", "command -v meegle")
+        os.contains("win") -> MeegleProbeDefinition(
+            command = listOf("where.exe", "meegle.cmd"),
+            displayCommand = "where.exe meegle.cmd",
+        )
+        os.contains("mac") -> MeegleProbeDefinition(
+            command = listOf("/bin/zsh", "-lc", "command -v meegle"),
+            displayCommand = "/bin/zsh -lc 'command -v meegle'",
+        )
+        else -> MeegleProbeDefinition(
+            command = listOf("/bin/bash", "-lc", "command -v meegle"),
+            displayCommand = "/bin/bash -lc 'command -v meegle'",
+        )
     }
 }
+
+fun meegleProbeCommand(osName: String): List<String> = meegleProbeDefinition(osName).command
+
+fun meegleProbeCommandDisplay(osName: String): String = meegleProbeDefinition(osName).displayCommand
 
 /** First output line that is an absolute path; anything else means "not found". */
 fun parseMeegleProbeOutput(output: String, osName: String): String? {
@@ -62,6 +80,7 @@ fun normalizeMeegleExecutablePath(raw: String): String? {
     val path = java.nio.file.Path.of(trimmed)
     require(path.isAbsolute) { "Meegle 命令路径必须是绝对路径" }
     require(java.nio.file.Files.exists(path)) { "Meegle 命令路径不存在：$trimmed" }
+    require(java.nio.file.Files.isRegularFile(path)) { "Meegle 命令路径必须是文件：$trimmed" }
     require(java.nio.file.Files.isExecutable(path)) { "Meegle 命令不可执行：$trimmed" }
     return trimmed
 }
@@ -79,29 +98,33 @@ class ConfiguredMeegleExecutable(
     @Volatile private var probedPath: String? = null
     @Volatile private var probeAttempted = false
 
-    override fun resolve(): String {
+    override fun resolve(): String = synchronized(this) {
         configured()?.let { return it }
-        if (!probeAttempted) probe()
+        if (!probeAttempted) probeLocked()
         return probedPath ?: meegleFallbackCommand(isWindows())
     }
 
     override fun current(): String =
         configured() ?: probedPath ?: meegleFallbackCommand(isWindows())
 
-    @Synchronized
-    override fun probe(): String {
+    override fun probe(): String = synchronized(this) {
         configured()?.let {
             probedPath = null
             probeAttempted = false
             return it
         }
+        probeAttempted = false
+        probeLocked()
+        return probedPath ?: meegleFallbackCommand(isWindows())
+    }
+
+    private fun probeLocked() {
         val found = runCatching {
             val result = runner.run(meegleProbeCommand(osName), timeout = probeTimeout)
             if (result.succeeded) parseMeegleProbeOutput(result.stdout, osName) else null
         }.getOrNull()
         probedPath = found
         probeAttempted = true
-        return found ?: meegleFallbackCommand(isWindows())
     }
 
     override fun source(): MeegleCommandSource = when {

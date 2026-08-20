@@ -25,23 +25,19 @@ data class LocalGitEnvironmentSnapshot(
  */
 class LocalGitEnvironmentInspector(
     private val runner: CommandRunner = ProcessCommandRunner(),
-    private val isWindows: Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true),
+    private val gitExecutable: GitExecutable = ConfiguredGitExecutable({ null }, runner),
 ) {
     fun inspect(): LocalGitEnvironmentSnapshot {
         val errors = mutableListOf<String>()
-        val executable = runLocal(
-            if (isWindows) listOf("where.exe", "git") else listOf("which", "git"),
-            errors,
-            "读取 Git 可执行文件",
-        )?.lineSequence()?.firstOrNull(String::isNotBlank)?.trim()
-        val version = runLocal(listOf("git", "--version"), errors, "读取 Git 版本")?.trim()
+        val executable = gitExecutable.resolve()
+        val version = runLocal(listOf(executable, "--version"), errors, "读取 Git 版本")?.trim()
         val globalConfig = runLocal(
-            listOf("git", "config", "--global", "--show-origin", "--list"),
+            listOf(executable, "config", "--global", "--show-origin", "--list"),
             errors,
             "读取全局 Git 配置",
         )?.let(::parseConfigValues).orEmpty()
         return LocalGitEnvironmentSnapshot(
-            gitExecutable = executable,
+            gitExecutable = executable.takeIf { gitExecutable.source() != GitCommandSource.PATH_FALLBACK },
             gitVersion = version,
             systemUser = System.getProperty("user.name").orEmpty(),
             globalUserName = globalConfig.lastOrNull { it.key == "user.name" },

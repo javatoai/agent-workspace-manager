@@ -301,8 +301,10 @@ private fun WorkspaceCardSummary(
     }
     if (confirmRerunBootstrap) {
         ConfirmDialog(
-            "重新执行 Bootstrap",
-            "将按当前服务配置对该工作区重新执行 Bootstrap 复制规则与命令；已有文件按规则覆盖，命令会重复执行一次。禁止覆盖的规则会因目标已存在而报警告。",
+            title = "重新执行 Bootstrap",
+            message = "将按当前服务配置对该工作区重新执行 Bootstrap 复制规则与命令；已有文件按规则覆盖，命令会重复执行一次。禁止覆盖的规则会因目标已存在而报警告。",
+            confirmLabel = "重新执行",
+            enabled = !controller.busy,
             onDismiss = { confirmRerunBootstrap = false },
         ) {
             confirmRerunBootstrap = false

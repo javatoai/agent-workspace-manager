@@ -36,6 +36,7 @@ data class RepositoryStatus(
 
 class GitClient(
     private val runner: CommandRunner = ProcessCommandRunner(),
+    private val executable: GitExecutable = GitExecutable.pathFallback(),
 ) {
     fun run(
         repository: Path,
@@ -44,7 +45,7 @@ class GitClient(
         check: Boolean = true,
     ): CommandResult {
         val result = runner.run(
-            listOf("git", "-c", "core.longpaths=true", "-C", repository.toString()) + arguments,
+            listOf(executable.resolve(), "-c", "core.longpaths=true", "-C", repository.toString()) + arguments,
             timeout = timeout,
         )
         if (check && !result.succeeded) {
@@ -61,7 +62,7 @@ class GitClient(
         check: Boolean = true,
     ): CommandResult {
         val result = runner.run(
-            listOf("git", "--no-optional-locks", "-c", "core.longpaths=true", "-C", repository.toString()) + arguments,
+            listOf(executable.resolve(), "--no-optional-locks", "-c", "core.longpaths=true", "-C", repository.toString()) + arguments,
             timeout = timeout,
         )
         if (check && !result.succeeded) {
@@ -109,7 +110,7 @@ class GitClient(
         target.parent?.createDirectories()
         val result = runner.run(
             listOf(
-                "git",
+                executable.resolve(),
                 "-c",
                 "core.longpaths=true",
                 "clone",
@@ -124,6 +125,9 @@ class GitClient(
             throw GitException("Git 克隆失败：$originUrl#$branch", result)
         }
     }
+
+    fun version(timeout: Duration = Duration.ofSeconds(10)): CommandResult =
+        runner.run(listOf(executable.resolve(), "--version"), timeout = timeout)
 
     fun worktrees(repository: Path): List<WorktreeRecord> {
         val records = mutableListOf<WorktreeRecord>()

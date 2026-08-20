@@ -32,11 +32,8 @@ internal fun TagScreen(controller: DesktopApplication) {
         Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
-        item {
-            SectionHeader("Tag 构建历史", "构建操作请在研发任务的工作区行中执行；这里仅保留结果记录")
-        }
         if (controller.tagHistory.isEmpty()) {
-            item { EmptyState("还没有 Tag 构建历史", "进入研发任务，在对应工作区点击“Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS } }
+            item { EmptyState("还没有构建记录", "进入研发任务，在对应工作区点击“Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS } }
         } else {
             items(controller.tagHistory, key = { it.operationId }) { operation ->
                 ElevatedCard(
