@@ -142,8 +142,8 @@ class MeegleCliMacEnvironmentIntegrationTest {
             """
             #!/bin/sh
             case "${'$'}2" in
-              --version) printf '0.9.6-test\\n' ;;
-              auth) printf '{"authenticated":false}\\n' ;;
+              --version) printf '0.9.7-test\n' ;;
+              auth) printf '{"authenticated":false}\n' ;;
               *) exit 1 ;;
             esac
             """.trimIndent() + "\n",
@@ -163,7 +163,7 @@ class MeegleCliMacEnvironmentIntegrationTest {
         ).status()
 
         assertTrue(status.installed)
-        assertEquals("0.9.6-test", status.version)
+        assertEquals("0.9.7-test", status.version)
         assertFalse(status.authenticated)
     }
 }

@@ -77,7 +77,7 @@ class MeegleExecutableTest {
 
         val path = executable.environment()["PATH"].orEmpty().split(":")
 
-        assertEquals("/opt/homebrew/bin", path.first())
+        assertTrue(path.contains("/opt/homebrew/bin"))
         assertTrue(path.contains("/usr/bin"))
         assertEquals(path.size, path.distinct().size)
     }

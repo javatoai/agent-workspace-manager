@@ -7,7 +7,7 @@ plugins {
 
 allprojects {
     group = "com.snowball.awm"
-    version = "0.9.6"
+    version = "0.9.7"
 }
 
 subprojects {
