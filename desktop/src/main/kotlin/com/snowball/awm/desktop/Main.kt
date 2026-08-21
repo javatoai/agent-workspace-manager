@@ -174,7 +174,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.9.4",
+            title = "Agent Workspace Manager 0.9.5",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {

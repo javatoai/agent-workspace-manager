@@ -2,6 +2,10 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 0.9.5
+
+- 修复 macOS 原生目录选择器的主线程队列桥接：使用 libdispatch 导出的主队列地址，兼容 Apple Silicon 与实际 macOS 运行环境。
+
 ## 0.9.4
 
 - 修复 macOS 原生目录选择器加载 libdispatch 的路径，兼容 Apple Silicon Runner 与实际 macOS 应用运行环境。
