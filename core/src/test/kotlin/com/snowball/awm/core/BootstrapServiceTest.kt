@@ -104,7 +104,7 @@ class BootstrapServiceTest {
         val result = BootstrapService(
             runner = runner,
             osName = "Windows 11",
-            environment = mapOf("PATH" to bin.toString(), "PATHEXT" to ".COM;.EXE;.BAT;.CMD"),
+            environment = mapOf("PATH" to bin.toString(), "PATHEXT" to ".com;.exe;.bat;.cmd"),
         ).initialize(
             source,
             target,
@@ -132,7 +132,7 @@ class BootstrapServiceTest {
 
         val result = BootstrapService(
             osName = "Windows 11",
-            environment = mapOf("PATH" to bin.toString(), "PATHEXT" to ".COM;.EXE;.BAT;.CMD"),
+            environment = mapOf("PATH" to bin.toString(), "PATHEXT" to ".com;.exe;.bat;.cmd"),
         ).initialize(source, target, BootstrapPresets.codeGraph())
 
         assertTrue(result.succeeded, result.warnings.joinToString())
