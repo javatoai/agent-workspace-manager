@@ -50,8 +50,8 @@ private object MacObjectiveC {
         NativeLibrary.getInstance("/System/Library/Frameworks/AppKit.framework/AppKit")
     }
     private val dispatch by lazy {
-        runCatching { NativeLibrary.getInstance("System") }
-            .getOrElse { NativeLibrary.getInstance("/usr/lib/system/libdispatch.dylib") }
+        runCatching { NativeLibrary.getInstance("/usr/lib/system/libdispatch.dylib") }
+            .getOrElse { NativeLibrary.getInstance("libSystem.B.dylib") }
     }
     private val objcGetClass by lazy { objc.getFunction("objc_getClass") }
     private val selRegisterName by lazy { objc.getFunction("sel_registerName") }
