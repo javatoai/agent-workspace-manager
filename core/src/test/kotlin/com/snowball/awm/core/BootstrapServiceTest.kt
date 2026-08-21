@@ -98,7 +98,7 @@ class BootstrapServiceTest {
         Files.createDirectories(source)
         Files.createDirectories(target)
         Files.createDirectories(bin)
-        val shim = Files.createFile(bin.resolve("codegraph.cmd")).toAbsolutePath().normalize()
+        val shim = Files.createFile(bin.resolve("codegraph.cmd")).toRealPath()
         val runner = RecordingRunner()
 
         val result = BootstrapService(
