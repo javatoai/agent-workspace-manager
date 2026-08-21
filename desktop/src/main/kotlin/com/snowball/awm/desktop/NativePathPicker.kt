@@ -24,12 +24,13 @@ class FileKitNativePathPicker : NativePathPicker {
         ?.file
         ?.absolutePath
 
-    override suspend fun pickDirectories(initialPath: String?): List<String>? =
-        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
-            WindowsMultiDirectoryPicker.pick(initialPath)
-        } else {
-            pickDirectory(initialPath)?.let(::listOf)
-        }
+    override suspend fun pickDirectories(initialPath: String?): List<String>? = pickDirectoriesForOs(
+        osName = System.getProperty("os.name"),
+        initialPath = initialPath,
+        windowsPicker = { WindowsMultiDirectoryPicker.pick(it) },
+        macPicker = { MacMultiDirectoryPicker.pick(it) },
+        singlePicker = { path -> pickDirectory(path)?.let(::listOf) },
+    )
 
     override suspend fun pickFile(initialPath: String?, extensions: List<String>): String? = FileKit
         .openFilePicker(
@@ -57,7 +58,21 @@ class FileKitNativePathPicker : NativePathPicker {
 
 /** Application pickers filter to .app bundles only on macOS; Windows keeps any file. */
 internal fun applicationPickerExtensions(osName: String): List<String> =
-    if (osName.startsWith("Mac", ignoreCase = true)) listOf("app") else emptyList()
+    if (isMacOs(osName)) listOf("app") else emptyList()
+
+internal fun isMacOs(osName: String): Boolean = osName.startsWith("Mac", ignoreCase = true)
+
+internal suspend fun pickDirectoriesForOs(
+    osName: String,
+    initialPath: String?,
+    windowsPicker: suspend (String?) -> List<String>?,
+    macPicker: suspend (String?) -> List<String>?,
+    singlePicker: suspend (String?) -> List<String>?,
+): List<String>? = when {
+    osName.startsWith("Windows", ignoreCase = true) -> windowsPicker(initialPath)
+    isMacOs(osName) -> macPicker(initialPath)
+    else -> singlePicker(initialPath)
+}
 
 /** Small testable coordinator that guarantees cancellation never clears a field. */
 class PathSelectionCoordinator(
