@@ -114,10 +114,7 @@ private object MacObjectiveC {
                 outcome = runCatching(block)
             }
         }
-        dispatchSyncF.invoke(
-            Void.TYPE,
-            arrayOf(mainQueue(), null, CallbackReference.getFunctionPointer(callback)),
-        )
+        dispatchSyncF.invokeVoid(arrayOf(mainQueue(), null, CallbackReference.getFunctionPointer(callback)))
         return checkNotNull(outcome) { "macOS 主线程选择器未返回结果" }.getOrThrow()
     }
 
@@ -152,7 +149,7 @@ private object MacObjectiveC {
         sendInt(classPointer("NSThread"), selector("isMainThread")) != 0
 
     private fun mainQueue(): Pointer =
-        dispatchGetMainQueue.invoke(Pointer::class.java, emptyArray()) as Pointer
+        dispatchGetMainQueue.invokePointer(emptyArray())
 
     private fun classPointer(name: String): Pointer = invokePointer(
         objcGetClass,
@@ -168,14 +165,14 @@ private object MacObjectiveC {
         invokePointer(objcMsgSend, arrayOf(receiver, selector, *args))
 
     private fun sendVoid(receiver: Pointer, selector: Pointer, vararg args: Any?) {
-        objcMsgSend.invoke(Void.TYPE, arrayOf(receiver, selector, *args))
+        objcMsgSend.invokeVoid(arrayOf(receiver, selector, *args))
     }
 
     private fun sendInt(receiver: Pointer, selector: Pointer, vararg args: Any?): Int =
-        objcMsgSend.invoke(Int::class.javaObjectType, arrayOf(receiver, selector, *args)) as Int
+        objcMsgSend.invokeInt(arrayOf(receiver, selector, *args))
 
     private fun sendLong(receiver: Pointer, selector: Pointer, vararg args: Any?): Long =
-        objcMsgSend.invoke(Long::class.javaObjectType, arrayOf(receiver, selector, *args)) as Long
+        objcMsgSend.invokeLong(arrayOf(receiver, selector, *args))
 
     private fun sendString(receiver: Pointer, selector: Pointer, value: String) {
         nsString(value)?.let { sendVoid(receiver, selector, it) }
@@ -187,7 +184,7 @@ private object MacObjectiveC {
     }
 
     private fun invokePointer(function: Function, args: Array<Any?>): Pointer? =
-        function.invoke(Pointer::class.java, args) as Pointer?
+        function.invokePointer(args)
 
     private fun cString(value: String): Memory = Memory(value.toByteArray(Charsets.UTF_8).size.toLong() + 1).also {
         it.setString(0, value, "UTF-8")

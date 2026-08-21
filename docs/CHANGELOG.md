@@ -2,6 +2,10 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 0.9.3
+
+- 修复 Apple Silicon macOS 上原生目录选择器桥接调用的 ABI 兼容性；发布校验可稳定创建并配置 `NSOpenPanel` 多目录选择面板。
+
 ## 0.9.2
 
 - macOS 服务仓库选择支持原生 Cmd 多选目录；Windows 多目录选择和 Linux 单目录回退行为保持不变。
