@@ -95,7 +95,8 @@ class NativePathPickerTest {
         val configuration = runCatching {
             MacMultiDirectoryPicker.inspectNativePanelConfiguration()
         }.onFailure { error ->
-            println("MAC_NATIVE_PICKER_FAILURE\n${error.stackTraceToString()}")
+            System.err.println("MAC_NATIVE_PICKER_FAILURE\n${error.stackTraceToString()}")
+            System.err.flush()
         }.getOrThrow()
         assertEquals(
             MacNativePanelConfiguration(
