@@ -56,7 +56,10 @@ private object MacObjectiveC {
     private val objcGetClass by lazy { objc.getFunction("objc_getClass") }
     private val selRegisterName by lazy { objc.getFunction("sel_registerName") }
     private val objcMsgSend by lazy { objc.getFunction("objc_msgSend") }
-    private val dispatchGetMainQueue by lazy { dispatch.getFunction("dispatch_get_main_queue") }
+    private val dispatchMainQueue by lazy {
+        runCatching { dispatch.getGlobalVariableAddress("dispatch_main_q") }
+            .getOrElse { dispatch.getGlobalVariableAddress("_dispatch_main_q") }
+    }
     private val dispatchSyncF by lazy { dispatch.getFunction("dispatch_sync_f") }
 
     fun pickDirectories(initialPath: String?): List<String>? {
@@ -149,7 +152,7 @@ private object MacObjectiveC {
         sendInt(classPointer("NSThread"), selector("isMainThread")) != 0
 
     private fun mainQueue(): Pointer =
-        dispatchGetMainQueue.invokePointer(emptyArray())
+        dispatchMainQueue
 
     private fun classPointer(name: String): Pointer = invokePointer(
         objcGetClass,
