@@ -2,6 +2,10 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 0.9.8
+
+- 修复 Windows Bootstrap 执行 npm `.cmd` 命令：旧配置中的裸 `codegraph` 会自动解析为 PATH 中可直接启动的 `codegraph.cmd`。
+
 ## 0.9.7
 
 - 修正 macOS Meegle Node 环境回归测试夹具，并确认 `/usr/bin/env node` 链路在 macOS Runner 上可执行。

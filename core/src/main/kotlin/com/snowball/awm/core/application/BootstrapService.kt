@@ -47,7 +47,11 @@ fun BootstrapConfig.validated(): BootstrapConfig = apply {
 class BootstrapService(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val git: GitClient = GitClient(runner),
+    osName: String = System.getProperty("os.name"),
+    environment: Map<String, String> = System.getenv(),
 ) {
+    private val commandResolver = BootstrapCommandResolver(osName, environment)
+
     fun initialize(
         sourceRepository: Path,
         worktree: Path,
@@ -86,7 +90,7 @@ class BootstrapService(
                         "命令工作目录不存在：$workingDirectory"
                     }
                     runner.run(
-                        command = listOf(command.executable) + command.arguments,
+                        command = listOf(commandResolver.resolve(command.executable)) + command.arguments,
                         workingDirectory = workingDirectory,
                         timeout = Duration.ofSeconds(command.timeoutSeconds),
                     )

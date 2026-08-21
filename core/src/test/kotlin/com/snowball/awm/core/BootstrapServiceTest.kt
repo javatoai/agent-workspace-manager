@@ -1,9 +1,12 @@
 package com.snowball.awm.core
 
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.time.Duration
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -88,6 +91,55 @@ class BootstrapServiceTest {
     }
 
     @Test
+    fun `resolves codegraph to cmd shim on Windows before running bootstrap`() {
+        val source = temporary.resolve("source-codegraph")
+        val target = temporary.resolve("target-codegraph")
+        val bin = temporary.resolve("bin")
+        Files.createDirectories(source)
+        Files.createDirectories(target)
+        Files.createDirectories(bin)
+        val shim = Files.createFile(bin.resolve("codegraph.cmd")).toAbsolutePath().normalize()
+        val runner = RecordingRunner()
+
+        val result = BootstrapService(
+            runner = runner,
+            osName = "Windows 11",
+            environment = mapOf("PATH" to bin.toString(), "PATHEXT" to ".COM;.EXE;.BAT;.CMD"),
+        ).initialize(
+            source,
+            target,
+            BootstrapPresets.codeGraph(),
+        )
+
+        assertTrue(result.succeeded, result.warnings.joinToString())
+        assertEquals(listOf(shim.toString(), "init", "-i"), runner.commands.single())
+    }
+
+    @Test
+    fun `runs the resolved Windows cmd shim through the real process runner`() {
+        assumeTrue(System.getProperty("os.name").contains("win", ignoreCase = true))
+
+        val source = temporary.resolve("source-codegraph-process")
+        val target = temporary.resolve("target-codegraph-process")
+        val bin = temporary.resolve("bin-codegraph-process")
+        Files.createDirectories(source)
+        Files.createDirectories(target)
+        Files.createDirectories(bin)
+        Files.writeString(
+            bin.resolve("codegraph.cmd"),
+            "@echo off\r\necho codegraph shim ok\r\nexit /b 0\r\n",
+        )
+
+        val result = BootstrapService(
+            osName = "Windows 11",
+            environment = mapOf("PATH" to bin.toString(), "PATHEXT" to ".COM;.EXE;.BAT;.CMD"),
+        ).initialize(source, target, BootstrapPresets.codeGraph())
+
+        assertTrue(result.succeeded, result.warnings.joinToString())
+        assertTrue(result.steps.single().message.contains("codegraph shim ok"))
+    }
+
+    @Test
     fun `rejects symbolic link copy sources`() {
         val source = temporary.resolve("source-link")
         val target = temporary.resolve("target-link")
@@ -116,5 +168,19 @@ class BootstrapServiceTest {
 
     private fun assertEqualsCompat(expected: Int, actual: Int) {
         assertTrue(expected == actual, "expected=$expected actual=$actual")
+    }
+
+    private class RecordingRunner : CommandRunner {
+        val commands = mutableListOf<List<String>>()
+
+        override fun run(
+            command: List<String>,
+            workingDirectory: Path?,
+            timeout: Duration,
+            environment: Map<String, String>,
+        ): CommandResult {
+            commands += command
+            return CommandResult(0, "", "")
+        }
     }
 }
