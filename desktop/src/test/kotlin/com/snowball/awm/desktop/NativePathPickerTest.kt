@@ -92,13 +92,18 @@ class NativePathPickerTest {
     fun `macOS native panel is configured for multi-directory selection`() {
         if (!isMacOs(System.getProperty("os.name"))) return
 
+        val configuration = runCatching {
+            MacMultiDirectoryPicker.inspectNativePanelConfiguration()
+        }.onFailure { error ->
+            println("MAC_NATIVE_PICKER_FAILURE\n${error.stackTraceToString()}")
+        }.getOrThrow()
         assertEquals(
             MacNativePanelConfiguration(
                 canChooseFiles = false,
                 canChooseDirectories = true,
                 allowsMultipleSelection = true,
             ),
-            MacMultiDirectoryPicker.inspectNativePanelConfiguration(),
+            configuration,
         )
     }
 }
