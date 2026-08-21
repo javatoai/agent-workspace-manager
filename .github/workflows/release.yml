@@ -41,7 +41,14 @@ jobs:
         run: |
           perl -pi -e 's/\r$//' ./gradlew
           chmod +x ./gradlew
-          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
+          if ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests; then
+            exit 0
+          else
+            status=$?
+            echo '--- macOS JUnit reports (diagnostic) ---'
+            find desktop/build/test-results -type f -name '*.xml' -print -exec cat {} \;
+            exit "$status"
+          fi
 
   windows:
     name: Windows packages
