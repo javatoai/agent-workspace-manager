@@ -16,7 +16,10 @@ class MeegleRequirementLinkSource(
 ) : RequirementLinkSource() {
     override val sourceId: String = "meegle"
     private fun command() = meegleExecutable.resolve()
-    override fun isInstalled(): Boolean = runCatching { runner.run(listOf(command(), "version"), timeout = Duration.ofSeconds(4)).succeeded }.getOrDefault(false)
+    private fun environment() = meegleExecutable.environment()
+    override fun isInstalled(): Boolean = runCatching {
+        runner.run(listOf(command(), "version"), timeout = Duration.ofSeconds(4), environment = environment()).succeeded
+    }.getOrDefault(false)
     override fun load(projects: List<MeegleProjectConfig>): RequirementLinkLoadResult {
         val links = linkedSetOf<String>(); val failures = mutableListOf<RequirementLinkFailure>()
         projects.forEach { project ->
@@ -35,7 +38,13 @@ class MeegleRequirementLinkSource(
     }
     private fun query(project: MeegleProjectConfig, type: String, where: String, failures: MutableList<RequirementLinkFailure>, sprint: String?): List<String> {
         val mql = "SELECT `Item Id` FROM `${project.projectKey}`.`$type` WHERE $where LIMIT 100"
-        val result = runCatching { runner.run(listOf(command(), "workitem", "query", "--project-key", project.projectKey, "--mql", mql, "--auto-paginate", "--format", "json"), timeout = Duration.ofSeconds(20)) }.getOrElse {
+        val result = runCatching {
+            runner.run(
+                listOf(command(), "workitem", "query", "--project-key", project.projectKey, "--mql", mql, "--auto-paginate", "--format", "json"),
+                timeout = Duration.ofSeconds(20),
+                environment = environment(),
+            )
+        }.getOrElse {
             failures += RequirementLinkFailure("query", project.projectKey, sprint, type, it.message.orEmpty()); return emptyList()
         }
         if (!result.succeeded) { failures += RequirementLinkFailure("query", project.projectKey, sprint, type, result.stderr.take(300)); return emptyList() }

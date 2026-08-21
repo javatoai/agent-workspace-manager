@@ -23,9 +23,10 @@ class MeegleRequirementMetadataProvider(
     override fun fetch(requirementLink: String, projectKey: String): RequirementMetadata? {
         val workItem = FeishuWorkItemLink.parse(requirementLink) ?: return null
         val result = runCatching {
+            val command = meegleExecutable.resolve()
             runner.run(
                 command = listOf(
-                    meegleExecutable.resolve(),
+                    command,
                     "workitem",
                     "get",
                     "--project-key",
@@ -38,6 +39,7 @@ class MeegleRequirementMetadataProvider(
                 // Metadata is optional while creating a task. A short bound
                 // prevents an unavailable local CLI from blocking the form.
                 timeout = Duration.ofSeconds(8),
+                environment = meegleExecutable.environment(),
             )
         }.getOrNull() ?: return null
         if (!result.succeeded) return null

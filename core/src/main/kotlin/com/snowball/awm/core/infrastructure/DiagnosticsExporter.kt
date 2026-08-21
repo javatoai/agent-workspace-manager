@@ -46,8 +46,9 @@ class DiagnosticsExporter(
         appendLine("Java: ${System.getProperty("java.version")} (${System.getProperty("java.vendor")})")
         appendLine("Git: ${gitVersion()}")
         val meegle = meegleExecutable.resolve()
-        appendLine("Meegle: ${command(listOf(meegle, "--version"))}")
-        appendLine("Meegle auth: ${command(listOf(meegle, "auth", "status", "--format", "json"))}")
+        val environment = meegleExecutable.environment()
+        appendLine("Meegle: ${command(listOf(meegle, "--version"), environment)}")
+        appendLine("Meegle auth: ${command(listOf(meegle, "auth", "status", "--format", "json"), environment)}")
     }
 
     private fun repositorySummary(config: AppConfig): String = buildString {
@@ -64,8 +65,8 @@ class DiagnosticsExporter(
         }
     }
 
-    private fun command(command: List<String>): String = runCatching {
-        val result = runner.run(command, timeout = Duration.ofSeconds(10))
+    private fun command(command: List<String>, environment: Map<String, String> = emptyMap()): String = runCatching {
+        val result = runner.run(command, timeout = Duration.ofSeconds(10), environment = environment)
         result.stdout.ifBlank { result.stderr }.trim().ifBlank { "exit=${result.exitCode}" }
     }.getOrElse { "unavailable: ${it.message}" }
 

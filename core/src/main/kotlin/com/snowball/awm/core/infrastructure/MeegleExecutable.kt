@@ -1,5 +1,7 @@
 package com.snowball.awm.core
 
+import java.io.File
+import java.nio.file.Path
 import java.time.Duration
 import java.util.Locale
 
@@ -12,6 +14,14 @@ fun interface MeegleExecutable {
 
     /** The current command without triggering a probe; safe on the UI thread. */
     fun current(): String = resolve()
+
+    /**
+     * Environment additions required by the command when it is launched from
+     * a GUI process.  Most executables need no additions; macOS Node-based
+     * scripts use the user's login-shell PATH so `/usr/bin/env node` can find
+     * the runtime even when AWM was opened from Finder or a DMG.
+     */
+    fun environment(): Map<String, String> = emptyMap()
 
     /** Re-detects the command; static implementations never change. */
     fun probe(): String = resolve()
@@ -94,9 +104,11 @@ class ConfiguredMeegleExecutable(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val osName: String = System.getProperty("os.name"),
     private val probeTimeout: Duration = Duration.ofSeconds(5),
+    private val loginShellPathProvider: () -> String? = ::loadMacLoginShellPath,
 ) : MeegleExecutable {
     @Volatile private var probedPath: String? = null
     @Volatile private var probeAttempted = false
+    private val loginShellPath: Lazy<String?> = lazy(loginShellPathProvider)
 
     override fun resolve(): String = synchronized(this) {
         configured()?.let { return it }
@@ -106,6 +118,26 @@ class ConfiguredMeegleExecutable(
 
     override fun current(): String =
         configured() ?: probedPath ?: meegleFallbackCommand(isWindows())
+
+    override fun environment(): Map<String, String> {
+        if (!isMac()) return emptyMap()
+        val separator = pathSeparator()
+        val pathEntries = buildList {
+            executableDirectory(current())?.let(::add)
+            loginShellPath.value
+                ?.split(separator)
+                ?.forEach(::add)
+            System.getenv("PATH")
+                ?.split(separator)
+                ?.forEach(::add)
+        }
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+        return pathEntries.takeIf(List<String>::isNotEmpty)
+            ?.let { mapOf("PATH" to it.joinToString(separator)) }
+            ?: emptyMap()
+    }
 
     override fun probe(): String = synchronized(this) {
         configured()?.let {
@@ -136,4 +168,29 @@ class ConfiguredMeegleExecutable(
     private fun configured(): String? = configuredPath()?.trim()?.takeIf(String::isNotEmpty)
 
     private fun isWindows(): Boolean = osName.lowercase(Locale.ROOT).contains("win")
+
+    private fun isMac(): Boolean = osName.lowercase(Locale.ROOT).contains("mac")
+
+    private fun pathSeparator(): String = if (isWindows()) File.pathSeparator else ":"
+
+    private fun executableDirectory(command: String): String? = runCatching {
+        Path.of(command).takeIf(Path::isAbsolute)?.parent?.toString()
+    }.getOrNull()
 }
+
+/**
+ * Finder-launched applications do not inherit the interactive terminal PATH.
+ * Read the user's macOS login-shell PATH once so Node-backed CLI scripts can
+ * resolve their `#!/usr/bin/env node` interpreter.
+ */
+private fun loadMacLoginShellPath(): String? = runCatching {
+    val result = ProcessCommandRunner().run(
+        command = listOf("/bin/zsh", "-lc", "printf '%s\\n' \"\$PATH\""),
+        timeout = Duration.ofSeconds(3),
+    )
+    if (!result.succeeded) return@runCatching null
+    result.stdout.lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .lastOrNull()
+}.getOrNull()

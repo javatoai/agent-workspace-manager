@@ -2,6 +2,7 @@ package com.snowball.awm.core
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
@@ -63,6 +64,36 @@ class MeegleExecutableTest {
         assertEquals("/custom/meegle", executable.resolve())
         assertEquals(MeegleCommandSource.CONFIGURED, executable.source())
         assertEquals(0, runner.calls)
+    }
+
+    @Test
+    fun `macOS executable environment combines login shell and executable directories`() {
+        val executable = ConfiguredMeegleExecutable(
+            configuredPath = { "/custom/meegle" },
+            runner = RecordingRunner(CommandResult(0, "", "")),
+            osName = "Mac OS X",
+            loginShellPathProvider = { "/opt/homebrew/bin:/usr/bin" },
+        )
+
+        val path = executable.environment()["PATH"].orEmpty().split(":")
+
+        assertEquals("/opt/homebrew/bin", path.first())
+        assertTrue(path.contains("/usr/bin"))
+        assertEquals(path.size, path.distinct().size)
+    }
+
+    @Test
+    fun `non macOS executable does not override the child environment`() {
+        var providerCalls = 0
+        val executable = ConfiguredMeegleExecutable(
+            configuredPath = { "C:\\tools\\meegle.cmd" },
+            runner = RecordingRunner(CommandResult(0, "", "")),
+            osName = "Windows 11",
+            loginShellPathProvider = { providerCalls += 1; "ignored" },
+        )
+
+        assertEquals(emptyMap<String, String>(), executable.environment())
+        assertEquals(0, providerCalls)
     }
 
     @Test

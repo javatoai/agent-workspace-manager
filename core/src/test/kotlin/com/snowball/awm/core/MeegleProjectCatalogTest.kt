@@ -1,5 +1,9 @@
 package com.snowball.awm.core
 
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import kotlin.test.Test
@@ -67,6 +71,34 @@ class MeegleCliServiceTest {
     }
 
     @Test
+    fun `status forwards the macOS login shell environment to both CLI calls`() {
+        val environments = mutableListOf<Map<String, String>>()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                environments += environment
+                return if (environments.size == 1) {
+                    CommandResult(0, "1.0.19\n", "")
+                } else {
+                    CommandResult(0, "{\"authenticated\":false}", "")
+                }
+            }
+        }
+        val executable = ConfiguredMeegleExecutable(
+            configuredPath = { "/opt/homebrew/bin/meegle" },
+            runner = runner,
+            osName = "Mac OS X",
+            loginShellPathProvider = { "/opt/homebrew/bin:/usr/bin" },
+        )
+
+        ProcessMeegleCliService(runner, isWindows = false, meegleExecutable = executable).status()
+
+        assertEquals(2, environments.size)
+        environments.forEach { environment ->
+            assertTrue(environment["PATH"].orEmpty().split(":").contains("/opt/homebrew/bin"))
+        }
+    }
+
+    @Test
     fun `missing executable is represented as not installed`() {
         val runner = object : CommandRunner {
             override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult =
@@ -95,5 +127,43 @@ class MeegleCliServiceTest {
 
         assertEquals(listOf("meegle", "auth", "login", "--host", "project.feishu.cn", "--format", "json"), capturedCommand)
         assertEquals(Duration.ofMinutes(10), capturedTimeout)
+    }
+}
+
+class MeegleCliMacEnvironmentIntegrationTest {
+    @TempDir
+    lateinit var temporary: Path
+
+    @Test
+    @EnabledOnOs(OS.MAC)
+    fun `node shebang CLI runs when only the login shell exposes its runtime`() {
+        val node = Files.writeString(
+            temporary.resolve("node"),
+            """
+            #!/bin/sh
+            case "${'$'}2" in
+              --version) printf '0.9.6-test\\n' ;;
+              auth) printf '{"authenticated":false}\\n' ;;
+              *) exit 1 ;;
+            esac
+            """.trimIndent() + "\n",
+        )
+        val meegle = Files.writeString(temporary.resolve("meegle"), "#!/usr/bin/env node\n")
+        check(node.toFile().setExecutable(true))
+        check(meegle.toFile().setExecutable(true))
+
+        val executable = ConfiguredMeegleExecutable(
+            configuredPath = { meegle.toString() },
+            osName = "Mac OS X",
+            loginShellPathProvider = { temporary.toString() },
+        )
+        val status = ProcessMeegleCliService(
+            isWindows = false,
+            meegleExecutable = executable,
+        ).status()
+
+        assertTrue(status.installed)
+        assertEquals("0.9.6-test", status.version)
+        assertFalse(status.authenticated)
     }
 }

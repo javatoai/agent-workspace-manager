@@ -35,16 +35,23 @@ class ProcessMeegleCliService(
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(isWindows),
 ) : MeegleCliService {
     override fun status(): MeegleCliStatus {
+        val command = executable()
+        val environment = meegleExecutable.environment()
         val versionResult = runCatching {
-            runner.run(listOf(executable(), "--version"), timeout = Duration.ofSeconds(10))
+            runner.run(
+                listOf(command, "--version"),
+                timeout = Duration.ofSeconds(10),
+                environment = environment,
+            )
         }.getOrElse { return MeegleCliStatus(installed = false, version = null) }
         check(versionResult.succeeded) {
             "读取 Meegle CLI 版本失败：${commandError(versionResult)}"
         }
         val version = versionResult.stdout.trim().ifBlank { versionResult.stderr.trim() }.ifBlank { "未知" }
         val authResult = runner.run(
-            listOf(executable(), "auth", "status", "--format", "json"),
+            listOf(command, "auth", "status", "--format", "json"),
             timeout = Duration.ofSeconds(15),
+            environment = environment,
         )
         check(authResult.succeeded) { "检查 Meegle 登录状态失败：${commandError(authResult)}" }
         val auth = runCatching { json.decodeFromString<AuthResponse>(authResult.stdout) }
@@ -60,9 +67,11 @@ class ProcessMeegleCliService(
 
     override fun login(host: String) {
         require(host.isNotBlank()) { "Meegle 登录站点不能为空" }
+        val command = executable()
         val result = runner.run(
-            listOf(executable(), "auth", "login", "--host", host, "--format", "json"),
+            listOf(command, "auth", "login", "--host", host, "--format", "json"),
             timeout = Duration.ofMinutes(10),
+            environment = meegleExecutable.environment(),
         )
         check(result.succeeded) { "Meegle OAuth 登录失败：${commandError(result)}" }
     }
@@ -90,9 +99,10 @@ class CliMeegleProjectCatalog(
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(isWindows),
 ) : MeegleProjectCatalog {
     override fun list(): List<MeegleProjectSummary> {
+        val command = meegleExecutable.resolve()
         val result = runner.run(
             listOf(
-                meegleExecutable.resolve(),
+                command,
                 "project",
                 "search",
                 "--auto-paginate",
@@ -100,6 +110,7 @@ class CliMeegleProjectCatalog(
                 "json",
             ),
             timeout = Duration.ofSeconds(20),
+            environment = meegleExecutable.environment(),
         )
         check(result.succeeded) {
             "读取 Meegle 项目失败：${result.stderr.ifBlank { result.stdout }.trim().ifBlank { "退出码 ${result.exitCode}" }}"
