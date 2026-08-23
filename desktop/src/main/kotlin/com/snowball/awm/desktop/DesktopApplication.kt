@@ -516,6 +516,8 @@ class DesktopApplication(
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
+    fun updateRequirementDocumentationRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateRequirementDocumentationRoot(value, onFailure)
     fun updateDevelopmentTools(
         tools: List<com.snowball.awm.core.DevelopmentToolConfig>,
         defaultTool: com.snowball.awm.core.DevelopmentToolType,

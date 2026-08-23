@@ -17,4 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "agent-workspace-manager"
 
 include(":core")
+include(":cli")
 include(":desktop")

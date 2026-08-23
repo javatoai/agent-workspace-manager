@@ -98,6 +98,9 @@ import java.nio.file.Path
 @Composable
 internal fun SettingsScreen(controller: DesktopApplication) {
     var taskRoot by remember(controller.config.taskRoot) { mutableStateOf(controller.config.taskRoot.orEmpty()) }
+    var requirementDocumentationRoot by remember(controller.config.requirementDocumentationRoot) {
+        mutableStateOf(controller.config.requirementDocumentationRoot.orEmpty())
+    }
     val developmentToolPaths = remember(controller.config.developmentTools) {
         mutableStateMapOf<DevelopmentToolType, String>().apply {
             DevelopmentToolType.entries.forEach { type ->
@@ -280,6 +283,8 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     controller = controller,
                     taskRoot = taskRoot,
                     onTaskRootChange = { taskRoot = it },
+                    requirementDocumentationRoot = requirementDocumentationRoot,
+                    onRequirementDocumentationRootChange = { requirementDocumentationRoot = it },
                     saving = saving("paths"),
                     backupMenuExpanded = backupMenuExpanded,
                     onBackupMenuExpandedChange = { backupMenuExpanded = it },
@@ -466,6 +471,8 @@ private fun SettingsPathsSection(
     controller: DesktopApplication,
     taskRoot: String,
     onTaskRootChange: (String) -> Unit,
+    requirementDocumentationRoot: String,
+    onRequirementDocumentationRootChange: (String) -> Unit,
     saving: Boolean,
     backupMenuExpanded: Boolean,
     onBackupMenuExpandedChange: (Boolean) -> Unit,
@@ -473,7 +480,7 @@ private fun SettingsPathsSection(
     onImportPreview: (ConfigStore.ImportPreview) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard("任务路径设置", "选择 AWM 扫描和创建任务的根目录。") {
+        SettingsCard("任务路径设置", "选择 AWM 扫描任务的根目录，以及 Agent CLI 写入需求过程文档的根目录。") {
             AutoSaveStatus(controller, "paths")
             PathField(
                 "任务根目录",
@@ -491,6 +498,31 @@ private fun SettingsPathsSection(
                     controller.updateTaskRoot(selected) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
                 }
             }
+            PathField(
+                "需求过程文档根目录（仅 Agent CLI）",
+                requirementDocumentationRoot,
+                onRequirementDocumentationRootChange,
+                !controller.pathPickerBusy && !controller.busy && !saving,
+                Modifier.onFocusChanged { focus ->
+                    if (!focus.isFocused && requirementDocumentationRoot != controller.config.requirementDocumentationRoot.orEmpty()) {
+                        controller.updateRequirementDocumentationRoot(requirementDocumentationRoot) {
+                            onRequirementDocumentationRootChange(controller.config.requirementDocumentationRoot.orEmpty())
+                        }
+                    }
+                },
+            ) {
+                controller.chooseDirectory(requirementDocumentationRoot) { selected ->
+                    onRequirementDocumentationRootChange(selected)
+                    controller.updateRequirementDocumentationRoot(selected) {
+                        onRequirementDocumentationRootChange(controller.config.requirementDocumentationRoot.orEmpty())
+                    }
+                }
+            }
+            Text(
+                "用于 <迭代>/<需求编号-中文简写> 的需求分析、方案和交接资料。人工在桌面端创建任务不会读取或创建该目录。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             TaskManifestIssues(controller)
         }
         SettingsCard("系统主配置文件", "只读预览 AWM 的全局配置文件，并管理配置备份。") {

@@ -16,6 +16,10 @@ data class CreateGroupedTaskRequest(
     val confirmedBranchReuseKeys: Set<BranchReuseKey> = emptySet(),
     val baseOverrides: List<ModuleBaseOverride> = emptyList(),
     val serviceSelections: List<TaskServiceSelection> = emptyList(),
+    /** Set exclusively by the Agent CLI operation service. */
+    val agentContext: AgentTaskContext? = null,
+    /** Set together with [agentContext] so the task is never returned without a handoff. */
+    val agentHandoffMarkdown: String? = null,
 )
 
 data class AddGroupedTaskServicesRequest(
@@ -231,6 +235,9 @@ class TaskApplicationService(
         require(!BranchPrefixResolver.containsUnresolvedPlaceholder(featureBranch)) {
             "任务分支仍包含未解析的 {num}"
         }
+        require((request.agentContext == null) == (request.agentHandoffMarkdown == null)) {
+            "Agent 任务上下文与交接文档必须同时提供"
+        }
         require(branchValidator.isValid(featureBranch)) { "任务分支不是合法的 Git 分支名：$featureBranch" }
         val group = config.group(request.groupId)
         val services = resolveSelections(
@@ -281,6 +288,7 @@ class TaskApplicationService(
                 lifecycleStatus = TaskLifecycleStatus.ACTIVE,
                 services = workspaces,
                 groupId = group.id,
+                agentContext = request.agentContext,
             )
             manifests.save(taskDirectory, manifest)
             agentDocuments.writeTaskDocument(
@@ -289,6 +297,9 @@ class TaskApplicationService(
                 config.repositories.map(RepositoryConfig::toInfo),
                 request.taskNotes,
             )
+            if (request.agentContext != null) {
+                HandoffDocumentWriter.write(taskDirectory, request.agentHandoffMarkdown)
+            }
             return manifest
         } catch (error: Throwable) {
             // Roll back only resources created by this request. Existing repositories
@@ -315,6 +326,8 @@ class TaskApplicationService(
                 }
                 Files.deleteIfExists(taskDirectory.resolve(ManifestStore.FILE_NAME))
                 Files.deleteIfExists(taskDirectory.resolve("AGENTS.md"))
+                Files.deleteIfExists(taskDirectory.resolve(HandoffDocumentWriter.DIRECTORY_NAME).resolve(HandoffDocumentWriter.FILE_NAME))
+                Files.deleteIfExists(taskDirectory.resolve(HandoffDocumentWriter.DIRECTORY_NAME))
             }
             if (taskDirectory.exists()) {
                 val remaining = Files.list(taskDirectory).use { it.toList() }
