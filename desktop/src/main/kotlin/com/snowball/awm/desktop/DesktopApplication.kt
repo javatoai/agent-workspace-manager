@@ -416,6 +416,14 @@ class DesktopApplication(
         onFailure = { refreshCliInstallationStatus() },
         onSuccess = { cliInstallationStatus = it },
     )
+
+    fun uninstallCli(): Boolean = settingsOperationRunner.run(
+        activeMessage = "正在卸载 AWM CLI…",
+        successMessage = "AWM CLI 已卸载；已从用户 PATH 移除。",
+        block = cliInstallationService::uninstall,
+        onFailure = { refreshCliInstallationStatus() },
+        onSuccess = { cliInstallationStatus = it },
+    )
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
     val tagResult: TagOperation? get() = deliveryController.state.result

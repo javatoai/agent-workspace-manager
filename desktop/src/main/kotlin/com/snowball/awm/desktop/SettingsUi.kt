@@ -567,6 +567,7 @@ private fun SettingsPathsSection(
 @Composable
 private fun SettingsCliSection(controller: DesktopApplication) {
     val status = controller.cliInstallationStatus
+    var confirmUninstall by remember { mutableStateOf(false) }
     SettingsCard("AWM CLI", "将绿色包内置的 Agent CLI 安装为当前用户可用的 awm 命令。") {
         Text("安装状态", style = MaterialTheme.typography.titleSmall)
         SelectionContainer {
@@ -601,6 +602,14 @@ private fun SettingsCliSection(controller: DesktopApplication) {
                     Spacer(Modifier.width(5.dp))
                     Text("刷新状态")
                 }
+                OutlinedButton(
+                    onClick = { confirmUninstall = true },
+                    enabled = status.installed && !controller.settingsBusy,
+                ) {
+                    Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("卸载 CLI")
+                }
             }
         } else {
             Text(
@@ -609,6 +618,20 @@ private fun SettingsCliSection(controller: DesktopApplication) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+    if (confirmUninstall) {
+        ConfirmDialog(
+            title = "卸载 AWM CLI？",
+            message = "将删除 AWM 安装的所有 CLI 版本和随附运行时，并从当前用户 PATH 移除 awm。不会删除任务、配置、项目文件或系统 Java。",
+            confirmLabel = "卸载 CLI",
+            destructive = true,
+            enabled = !controller.settingsBusy,
+            onDismiss = { confirmUninstall = false },
+            onConfirm = {
+                controller.uninstallCli()
+                confirmUninstall = false
+            },
+        )
     }
 }
 

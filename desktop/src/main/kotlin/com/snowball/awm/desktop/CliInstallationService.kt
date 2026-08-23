@@ -35,6 +35,7 @@ data class CliInstallationStatus(
 internal interface CliInstallationService {
     fun inspect(): CliInstallationStatus
     fun install(): CliInstallationStatus
+    fun uninstall(): CliInstallationStatus
 }
 
 /**
@@ -93,7 +94,7 @@ internal class WindowsCliInstallationService(
                 bundledPayloadAvailable = false,
                 installed = false,
                 commandPath = command,
-                message = "未找到绿色包内置的 CLI 或运行时；开发模式不会复制本机 JDK。",
+                message = "当前应用未提供内置的 CLI 或运行时。",
             )
         }
     }
@@ -124,6 +125,17 @@ internal class WindowsCliInstallationService(
         writeStableCommand(bundled.version)
         addCommandDirectoryToUserPath()
         environmentChanged()
+        return inspect()
+    }
+
+    override fun uninstall(): CliInstallationStatus {
+        require(isWindows()) { "一键 CLI 卸载仅支持 Windows" }
+
+        removeCommandDirectoryFromUserPath()
+        environmentChanged()
+        Files.deleteIfExists(commandDirectory().resolve(COMMAND_FILE))
+        Files.deleteIfExists(commandDirectory().resolve(VERSION_FILE))
+        deleteTree(cliVersionsDirectory())
         return inspect()
     }
 
@@ -168,6 +180,13 @@ internal class WindowsCliInstallationService(
         val entries = current.split(';').map(String::trim).filter(String::isNotEmpty)
         if (entries.any { it.equals(directory, ignoreCase = true) }) return
         userPath.write((entries + directory).joinToString(";"))
+    }
+
+    private fun removeCommandDirectoryFromUserPath() {
+        val directory = commandDirectory().toAbsolutePath().normalize().toString()
+        val entries = userPath.read().split(';').map(String::trim).filter(String::isNotEmpty)
+        val retained = entries.filterNot { it.equals(directory, ignoreCase = true) }
+        if (retained.size != entries.size) userPath.write(retained.joinToString(";"))
     }
 
     private fun readInstalledVersion(): String? = runCatching {

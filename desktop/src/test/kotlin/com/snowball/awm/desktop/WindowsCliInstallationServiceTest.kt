@@ -121,6 +121,39 @@ class WindowsCliInstallationServiceTest {
     }
 
     @Test
+    fun `uninstall removes AWM cli payload and its path entry but preserves other user files`() {
+        val root = Files.createTempDirectory("awm-cli-uninstall")
+        try {
+            val localApplicationData = root.resolve("local-app-data")
+            val pathStore = InMemoryUserPathStore("C:\\Tools;C:\\Other")
+            var environmentNotifications = 0
+            val service = WindowsCliInstallationService(
+                source = { bundledSource(root.resolve("bundle"), version = "0.9.10") },
+                localApplicationData = { localApplicationData },
+                userPath = pathStore,
+                isWindows = { true },
+                environmentChanged = { environmentNotifications += 1 },
+            )
+            service.install()
+            val commandDirectory = localApplicationData.resolve("AgentWorkspaceManager/bin")
+            Files.writeString(commandDirectory.resolve("keep.txt"), "not managed by AWM CLI")
+
+            val status = service.uninstall()
+
+            assertFalse(status.installed)
+            assertTrue(status.bundledPayloadAvailable)
+            assertFalse(Files.exists(localApplicationData.resolve("AgentWorkspaceManager/cli")))
+            assertFalse(Files.exists(commandDirectory.resolve("awm.cmd")))
+            assertFalse(Files.exists(commandDirectory.resolve("awm.version")))
+            assertTrue(Files.isRegularFile(commandDirectory.resolve("keep.txt")))
+            assertEquals("C:\\Tools;C:\\Other", pathStore.value)
+            assertEquals(2, environmentNotifications)
+        } finally {
+            deleteTree(root)
+        }
+    }
+
+    @Test
     fun `non Windows host never writes installation files`() {
         val root = Files.createTempDirectory("awm-cli-non-windows")
         try {
@@ -133,6 +166,7 @@ class WindowsCliInstallationServiceTest {
 
             assertFalse(service.inspect().supported)
             assertFailsWith<IllegalArgumentException> { service.install() }
+            assertFailsWith<IllegalArgumentException> { service.uninstall() }
             assertFalse(Files.exists(root.resolve("local-app-data")))
         } finally {
             deleteTree(root)
