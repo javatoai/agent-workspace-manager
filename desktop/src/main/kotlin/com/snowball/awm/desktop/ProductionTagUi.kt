@@ -84,8 +84,10 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
         repository?.let { controller.loadRemoteBranches(it.id) }
     }
 
-    LaunchedEffect(pipeline?.id, pipeline?.releaseSha, pipeline?.featureState) {
-        if (pipeline?.releaseSha != null && pipeline.featureState == ProductionFeatureBatchState.MERGED && state.expectedTag == null) {
+    LaunchedEffect(pipeline?.id, pipeline?.releaseSha, pipeline?.featureState, state.featureBranches) {
+        if (pipeline?.releaseSha != null && pipeline.featureState == ProductionFeatureBatchState.MERGED &&
+            state.featureBranches.all { it.isBlank() } && state.expectedTag == null
+        ) {
             feature.refreshExpectedTag()
         }
     }

@@ -33,7 +33,7 @@ class ProductionTagServiceTest {
         val released = service.createRelease(config, created.id)
         val selected = service.selectFeatures(config, created.id, listOf("feature/a", "feature/b"))
         val merged = service.mergeFeatures(config, created.id)
-        val built = service.buildTag(config, created.id)
+        val built = service.buildConfirmedTag(config, created.id)
 
         assertEquals(ProductionBaselineState.ALREADY_CONTAINED, created.baselineState)
         assertEquals("3.11.71", created.baseVersion)
@@ -176,7 +176,7 @@ class ProductionTagServiceTest {
         service.selectFeatures(config, pipeline.id, listOf("feature/a"))
         service.mergeFeatures(config, pipeline.id)
 
-        assertFailsWith<IllegalStateException> { service.buildTag(config, pipeline.id) }
+        assertFailsWith<IllegalStateException> { service.buildConfirmedTag(config, pipeline.id) }
 
         val interrupted = store.get(pipeline.id)!!
         assertEquals(ProductionTagBuildState.PUSHING, interrupted.buildRecords.single().state)
@@ -215,7 +215,7 @@ class ProductionTagServiceTest {
         service.selectFeatures(config, pipeline.id, listOf("feature/a"))
         service.mergeFeatures(config, pipeline.id)
 
-        assertFailsWith<IllegalStateException> { service.buildTag(config, pipeline.id) }
+        assertFailsWith<IllegalStateException> { service.buildConfirmedTag(config, pipeline.id) }
         interrupt = false
         val recovered = service.resume(config, pipeline.id)
 
@@ -223,6 +223,33 @@ class ProductionTagServiceTest {
         assertEquals("release-with-features", recovered.buildRecords.single().remoteTagSha)
         assertEquals(ProductionAuditState.RECOVERED, recovered.auditEvents.last().state)
         assertEquals(null, recovered.activeOperation)
+    }
+
+    @Test
+    fun `uncertain tag push result keeps the lease and resumes from remote evidence`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val git = FakeProductionGitGateway(throwAfterTagWrite = true)
+        val service = ProductionTagService(
+            store = ProductionTagPipelineStore(ApplicationPaths(temporary.resolve("uncertain-tag-push-home"))),
+            versions = ProductionVersionProvider {
+                ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+            },
+            git = git,
+            now = { "now" },
+            id = { "uncertain-tag-push" },
+        )
+        val pipeline = service.create(config, repository.id)
+        service.createRelease(config, pipeline.id)
+        service.selectFeatures(config, pipeline.id, listOf("feature/a"))
+        service.mergeFeatures(config, pipeline.id)
+
+        assertFailsWith<IllegalStateException> { service.buildConfirmedTag(config, pipeline.id) }
+        assertEquals(ProductionOperationAction.BUILD_TAG, service.get(pipeline.id).activeOperation?.action)
+
+        val recovered = service.resume(config, pipeline.id)
+        assertEquals(ProductionTagBuildState.PUSHED, recovered.buildRecords.single().state)
+        assertEquals(ProductionAuditState.RECOVERED, recovered.auditEvents.last().state)
     }
 
     @Test
@@ -246,7 +273,7 @@ class ProductionTagServiceTest {
         first.mergeFeatures(config, pipeline.id)
         val executor = Executors.newSingleThreadExecutor()
         try {
-            val build = executor.submit<ProductionTagPipeline> { first.buildTag(config, pipeline.id) }
+            val build = executor.submit<ProductionTagPipeline> { first.buildConfirmedTag(config, pipeline.id) }
             assertTrue(enteredPush.await(10, TimeUnit.SECONDS))
             val second = ProductionTagService(ProductionTagPipelineStore(paths), provider, git)
 
@@ -290,6 +317,43 @@ class ProductionTagServiceTest {
         assertEquals("master-sha", recovered.releaseSha)
         assertEquals(ProductionAuditState.RECOVERED, recovered.auditEvents.last().state)
         assertEquals(null, recovered.activeOperation)
+    }
+
+    @Test
+    fun `tag build cancels when the page confirmation is stale`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val git = FakeProductionGitGateway()
+        val service = ProductionTagService(
+            store = ProductionTagPipelineStore(ApplicationPaths(temporary.resolve("stale-tag-confirmation-home"))),
+            versions = ProductionVersionProvider {
+                ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+            },
+            git = git,
+            now = { "now" },
+            id = { "stale-tag-confirmation" },
+        )
+        val pipeline = service.create(config, repository.id)
+        service.createRelease(config, pipeline.id)
+        service.selectFeatures(config, pipeline.id, listOf("feature/a"))
+        service.mergeFeatures(config, pipeline.id)
+        git.publishExternalTag("3.11.71", "older-release")
+        val confirmation = service.tagConfirmation(config, pipeline.id)
+        assertEquals("3.11.71.1", confirmation.tag)
+        git.publishExternalTag("3.11.71.1", "another-release")
+
+        assertFailsWith<ProductionTagConfirmationChangedException> {
+            service.buildTag(
+                config,
+                pipeline.id,
+                confirmation.tag,
+                confirmation.releaseSha,
+                confirmation.pipelineRevision,
+            )
+        }
+
+        assertEquals(0, git.tagPushCalls)
+        assertTrue(service.get(pipeline.id).buildRecords.isEmpty())
     }
 
     @Test
@@ -375,6 +439,35 @@ class ProductionTagServiceTest {
         assertEquals("https://gitlab.example/mr", recovered.mergeRequest?.url)
         assertEquals(ProductionAuditState.AWAITING_MERGE_REQUEST, recovered.auditEvents.last().state)
         assertEquals(null, recovered.activeOperation)
+    }
+
+    @Test
+    fun `unknown merge request platform finalizes the operation without a remote write`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "unknown://host/repo")
+        val config = managedConfig(repository)
+        val service = ProductionTagService(
+            store = ProductionTagPipelineStore(ApplicationPaths(temporary.resolve("unknown-mr-platform-home"))),
+            versions = ProductionVersionProvider {
+                ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+            },
+            git = FakeProductionGitGateway(
+                baselineState = ProductionBaselineState.MERGE_REQUIRED,
+                mergeRequestUnavailable = true,
+            ),
+            now = { "now" },
+            id = { "unknown-mr-platform" },
+        )
+        val pipeline = service.create(config, repository.id)
+
+        val error = assertFailsWith<ProductionMergeRequestUnavailableException> {
+            service.mergeProduction(config, pipeline.id)
+        }
+        val failed = service.get(pipeline.id)
+
+        assertEquals("无合并权限，无法生成合并请求链接", error.message)
+        assertEquals(null, failed.activeOperation)
+        assertEquals(ProductionAuditState.FAILED, failed.auditEvents.last().state)
+        assertEquals(error.message, failed.auditEvents.last().reason)
     }
 
     @Test
@@ -483,9 +576,12 @@ class ProductionTagServiceTest {
         private val featureMergeAwaiting: Boolean = false,
         private val releaseNoPushPermission: Boolean = false,
         private val onTagPush: () -> Unit = {},
+        private val throwAfterTagWrite: Boolean = false,
+        private val mergeRequestUnavailable: Boolean = false,
     ) : ProductionGitGateway {
         var mergedBranches: List<String> = emptyList()
         var productionMergeCalls: Int = 0
+        var tagPushCalls: Int = 0
         var formalTagValues: List<String> = listOf("3.11.70", "3.11.71.beta-1")
         private var remoteReleaseSha: String? = unadoptedReleaseSha
         private val remoteTags = mutableListOf<ProductionRemoteTag>()
@@ -509,6 +605,7 @@ class ProductionTagServiceTest {
 
         override fun mergeProduction(repository: RepositoryConfig, pipeline: ProductionTagPipeline): ProductionBranchWrite {
             productionMergeCalls += 1
+            if (mergeRequestUnavailable) throw ProductionMergeRequestUnavailableException()
             return if (currentBaselineState == ProductionBaselineState.MERGE_REQUIRED && !directProductionMerge) {
                 val request = ProductionMergeRequest(
                     "GITLAB",
@@ -593,11 +690,18 @@ class ProductionTagServiceTest {
             return ProductionFeatureWrite.Direct(head, merges)
         }
 
-        override fun pushTag(repository: RepositoryConfig, releaseBranch: String, tag: String, releaseSha: String) =
-            if (throwDuringTagPush) error("simulated process interruption") else ProductionTagPush.Pushed(releaseSha).also {
-                onTagPush()
-                remoteTags += ProductionRemoteTag(tag, releaseSha)
-            }
+        override fun pushTag(repository: RepositoryConfig, releaseBranch: String, tag: String, releaseSha: String): ProductionTagPush {
+            if (throwDuringTagPush) error("simulated process interruption")
+            tagPushCalls += 1
+            onTagPush()
+            remoteTags += ProductionRemoteTag(tag, releaseSha)
+            if (throwAfterTagWrite) error("network lost after server accepted tag")
+            return ProductionTagPush.Pushed(releaseSha)
+        }
+
+        fun publishExternalTag(tag: String, sha: String) {
+            remoteTags += ProductionRemoteTag(tag, sha)
+        }
 
         override fun mergedTargetSha(repository: RepositoryConfig, targetBranch: String, expectedCommit: String) = mergedTargetSha
     }
@@ -610,4 +714,9 @@ class ProductionTagServiceTest {
             services = listOf(GroupServiceConfig.standard("service", repository.id, repository.name)),
         )),
     )
+
+    private fun ProductionTagService.buildConfirmedTag(config: AppConfig, pipelineId: String): ProductionTagPipeline {
+        val confirmation = tagConfirmation(config, pipelineId)
+        return buildTag(config, pipelineId, confirmation.tag, confirmation.releaseSha, confirmation.pipelineRevision)
+    }
 }

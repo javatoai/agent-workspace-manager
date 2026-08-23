@@ -208,6 +208,16 @@ data class GroupConfig(
     }
 }
 
+/** One bounded, credential-free Genbu detection result retained for local diagnostics. */
+@Serializable
+data class GenbuDetectionAuditEvent(
+    val detectedAt: String,
+    val status: String,
+    val command: String? = null,
+    val source: String? = null,
+    val message: String? = null,
+)
+
 /** Version 0.9.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
@@ -238,6 +248,8 @@ data class AppConfig(
     val genbuExecutablePath: String? = null,
     /** True only when AWM persisted the path found by automatic Genbu detection. */
     val genbuExecutableAutoDetected: Boolean = false,
+    /** Credential-free bounded history of automatic/manual Genbu executable checks. */
+    val genbuDetectionAudit: List<GenbuDetectionAuditEvent> = emptyList(),
     /** Controls only opening the create-task dialog; it never runs at app startup. */
     val meegleAutoLoadRequirementLinks: Boolean = false,
 ) {

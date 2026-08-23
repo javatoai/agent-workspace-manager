@@ -10,6 +10,14 @@ data class ProductionBaselineEvidence(
     val state: ProductionBaselineState,
 )
 
+data class ProductionTagConfirmation(
+    val expectation: ProductionTagExpectation,
+    val releaseSha: String,
+    val pipelineRevision: Long,
+) {
+    val tag: String get() = expectation.tag
+}
+
 sealed interface ProductionBranchWrite {
     data class Direct(val targetSha: String) : ProductionBranchWrite
     data class AwaitingRequest(val request: ProductionMergeRequest) : ProductionBranchWrite
@@ -81,6 +89,14 @@ class ProductionBaselineChangedException(
 ) : IllegalStateException("生产环境或 master 已发生变化，旧操作已取消，请核对最新基线后重试")
 
 class ProductionNoPushPermissionException : IllegalStateException("无推送权限")
+
+class ProductionFeatureTopologyException(message: String) : IllegalStateException(message)
+
+class ProductionMergeRequestUnavailableException :
+    IllegalStateException("无合并权限，无法生成合并请求链接")
+
+class ProductionTagConfirmationChangedException :
+    IllegalStateException("预期 Tag 或 Release SHA 已变化，旧确认已取消，请核对页面最新值后重新点击")
 
 class ProductionTagService(
     private val store: ProductionTagPipelineStore = ProductionTagPipelineStore(),
@@ -179,7 +195,7 @@ class ProductionTagService(
                 state = ProductionTagBuildState.ALREADY_EXISTS,
                 remoteTagSha = remoteRelease,
                 completedAt = now(),
-                remoteUrl = repository.originUrl,
+                remoteUrl = auditRemote(repository),
                 actualTag = expectation.tag,
             )
         } else {
@@ -187,7 +203,7 @@ class ProductionTagService(
                 state = ProductionTagBuildState.FAILED,
                 completedAt = now(),
                 failureReason = "AWM 上次操作中断；远端未出现该 Tag，已安全结束旧记录",
-                remoteUrl = repository.originUrl,
+                remoteUrl = auditRemote(repository),
             )
         }
         save(current.copy(
@@ -348,11 +364,20 @@ class ProductionTagService(
         }
     }
 
-    fun buildTag(config: AppConfig, pipelineId: String): ProductionTagPipeline = store.withOperationLock(pipelineId) {
+    fun buildTag(
+        config: AppConfig,
+        pipelineId: String,
+        confirmedTag: String,
+        confirmedReleaseSha: String,
+        confirmedPipelineRevision: Long,
+    ): ProductionTagPipeline = store.withOperationLock(pipelineId) {
         var current = get(pipelineId)
         requireOpen(current)
         requireIdle(current)
         val releaseSha = current.releaseSha ?: error("Release 尚未创建")
+        if (current.revision != confirmedPipelineRevision || releaseSha != confirmedReleaseSha) {
+            throw ProductionTagConfirmationChangedException()
+        }
         check(current.featureState == ProductionFeatureBatchState.MERGED) { "Feature 尚未成功合入 Release" }
         val repository = repository(config, current.repositoryId)
         val expectation = ProductionTagVersioning.expectation(
@@ -360,35 +385,8 @@ class ProductionTagService(
             releaseSha,
             git.tagsForBase(repository, current.baseVersion),
         )
-        if (expectation is ProductionTagExpectation.AlreadyBuilt) {
-            val pendingIndex = current.buildRecords.indexOfLast {
-                it.expectedTag == expectation.tag && it.releaseSha == releaseSha &&
-                    it.state in setOf(ProductionTagBuildState.PREPARING, ProductionTagBuildState.PUSHING)
-            }
-            val record = ProductionTagBuildRecord(
-                expectation.tag,
-                releaseSha,
-                ProductionTagBuildState.ALREADY_EXISTS,
-                remoteTagSha = releaseSha,
-                startedAt = current.buildRecords.getOrNull(pendingIndex)?.startedAt ?: now(),
-                completedAt = now(),
-                remoteUrl = repository.originUrl,
-                actualTag = expectation.tag,
-            )
-            val updated = if (pendingIndex >= 0) current.copy(
-                buildRecords = current.buildRecords.toMutableList().also { it[pendingIndex] = record },
-            ) else current.copy(buildRecords = current.buildRecords + record)
-            val timestamp = now()
-            return@withOperationLock save(updated.copy(auditEvents = updated.auditEvents + auditEvent(
-                pipeline = updated,
-                operationId = id(),
-                action = ProductionOperationAction.BUILD_TAG.name,
-                state = ProductionAuditState.SUCCEEDED,
-                startedAt = timestamp,
-                completedAt = timestamp,
-                reason = "Tag 已存在且指向当前 Release：${expectation.tag}",
-                repository = repository,
-            )))
+        if (expectation !is ProductionTagExpectation.Create || expectation.tag != confirmedTag) {
+            throw ProductionTagConfirmationChangedException()
         }
         val tag = expectation.tag
         val started = now()
@@ -397,7 +395,7 @@ class ProductionTagService(
             releaseSha,
             ProductionTagBuildState.PREPARING,
             startedAt = started,
-            remoteUrl = repository.originUrl,
+            remoteUrl = auditRemote(repository),
         )), repository, ProductionOperationAction.BUILD_TAG, expectedTag = tag, expectedTargetSha = releaseSha)
         current = save(current.copy(buildRecords = current.buildRecords.dropLast(1) +
             current.buildRecords.last().copy(state = ProductionTagBuildState.PUSHING)))
@@ -408,18 +406,18 @@ class ProductionTagService(
         }
         val record = when (push) {
             is ProductionTagPush.Pushed -> ProductionTagBuildRecord(
-                tag, releaseSha, ProductionTagBuildState.PUSHED, push.tagSha, started, now(), remoteUrl = repository.originUrl, actualTag = tag,
+                tag, releaseSha, ProductionTagBuildState.PUSHED, push.tagSha, started, now(), remoteUrl = auditRemote(repository), actualTag = tag,
             )
             is ProductionTagPush.NoPermission -> ProductionTagBuildRecord(
                 tag, releaseSha, ProductionTagBuildState.NO_PERMISSION, startedAt = started, completedAt = now(), failureReason = push.reason,
-                remoteUrl = repository.originUrl,
+                remoteUrl = auditRemote(repository),
             )
             is ProductionTagPush.AlreadyExists -> ProductionTagBuildRecord(
-                tag, releaseSha, ProductionTagBuildState.ALREADY_EXISTS, push.tagSha, started, now(), remoteUrl = repository.originUrl, actualTag = tag,
+                tag, releaseSha, ProductionTagBuildState.ALREADY_EXISTS, push.tagSha, started, now(), remoteUrl = auditRemote(repository), actualTag = tag,
             )
             is ProductionTagPush.Failed -> ProductionTagBuildRecord(
                 tag, releaseSha, ProductionTagBuildState.FAILED, startedAt = started, completedAt = now(), failureReason = push.reason,
-                remoteUrl = repository.originUrl,
+                remoteUrl = auditRemote(repository),
             )
         }
         if (push is ProductionTagPush.Pushed) afterRemoteWrite(ProductionOperationAction.BUILD_TAG)
@@ -435,15 +433,19 @@ class ProductionTagService(
         )
     }
 
-    fun expectedTag(config: AppConfig, pipelineId: String): ProductionTagExpectation {
+    fun tagConfirmation(config: AppConfig, pipelineId: String): ProductionTagConfirmation {
         val current = get(pipelineId)
         val releaseSha = current.releaseSha ?: error("Release 尚未创建")
-        return ProductionTagVersioning.expectation(
+        val expectation = ProductionTagVersioning.expectation(
             current.baseVersion,
             releaseSha,
             git.tagsForBase(repository(config, current.repositoryId), current.baseVersion),
         )
+        return ProductionTagConfirmation(expectation, releaseSha, current.revision)
     }
+
+    fun expectedTag(config: AppConfig, pipelineId: String): ProductionTagExpectation =
+        tagConfirmation(config, pipelineId).expectation
 
     fun close(pipelineId: String): ProductionTagPipeline {
         val current = get(pipelineId)
@@ -454,6 +456,9 @@ class ProductionTagService(
 
     private fun save(pipeline: ProductionTagPipeline): ProductionTagPipeline =
         store.save(pipeline.copy(updatedAt = now()))
+
+    private fun auditRemote(repository: RepositoryConfig): String? =
+        GitAuditSanitizer.remoteDisplay(repository.originUrl)
 
     private fun repository(config: AppConfig, id: String): RepositoryConfig {
         val managedRepositoryIds = config.groups
@@ -531,7 +536,10 @@ class ProductionTagService(
 
     /** Finalizes failures for which the gateway proved that no remote write happened. */
     private fun finishKnownFailure(pipeline: ProductionTagPipeline, error: Throwable) {
-        if (error is ProductionNoPushPermissionException) {
+        if (error is ProductionNoPushPermissionException ||
+            error is ProductionFeatureTopologyException ||
+            error is ProductionMergeRequestUnavailableException
+        ) {
             finishOperation(pipeline, ProductionAuditState.FAILED, error.message)
         }
     }
@@ -559,7 +567,7 @@ class ProductionTagService(
         releaseBranch = pipeline.releaseBranch,
         releaseSha = pipeline.releaseSha,
         features = features,
-        remoteUrl = repository.originUrl,
+        remoteUrl = auditRemote(repository),
         sourceBranch = pipeline.activeOperation?.sourceBranch,
         targetRef = when (pipeline.activeOperation?.action) {
             ProductionOperationAction.MERGE_PRODUCTION -> "refs/heads/master"
@@ -697,13 +705,13 @@ class ProductionTagService(
                     state = ProductionTagBuildState.PUSHED,
                     remoteTagSha = remote,
                     completedAt = now(),
-                    remoteUrl = repository.originUrl,
+                    remoteUrl = auditRemote(repository),
                     actualTag = expectedTag,
                 ) else record.copy(
                     state = ProductionTagBuildState.FAILED,
                     completedAt = now(),
                     failureReason = if (remote == null) "重启后确认远端 Tag 不存在" else "远端 Tag 指向非预期提交：$remote",
-                    remoteUrl = repository.originUrl,
+                    remoteUrl = auditRemote(repository),
                 )
                 val records = if (index >= 0) pipeline.buildRecords.toMutableList().also { it[index] = reconciled }
                 else pipeline.buildRecords + reconciled

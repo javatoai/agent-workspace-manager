@@ -144,6 +144,14 @@ class ConfigStoreTest {
             defaultDevelopmentTool = DevelopmentToolType.VISUAL_STUDIO_CODE,
             allowTemporaryDevelopmentToolSelection = true,
             hiddenTaskDetailBranches = listOf("master", "develop"),
+            genbuDetectionAudit = listOf(
+                GenbuDetectionAuditEvent(
+                    detectedAt = "2026-08-24 12:00:00",
+                    status = "LOADED",
+                    command = "T:\\Downloads\\genbu.exe",
+                    source = "PROBED",
+                ),
+            ),
             repositories = listOf(repository),
             groups = listOf(
                 GroupConfig(

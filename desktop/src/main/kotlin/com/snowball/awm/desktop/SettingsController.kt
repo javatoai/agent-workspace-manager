@@ -23,6 +23,7 @@ import com.snowball.awm.core.GitExecutable
 import com.snowball.awm.core.normalizeGitExecutablePath
 import com.snowball.awm.core.GenbuCommandSource
 import com.snowball.awm.core.GenbuExecutable
+import com.snowball.awm.core.GenbuDetectionAuditEvent
 import com.snowball.awm.core.normalizeGenbuExecutablePath
 import com.snowball.awm.core.MeegleProjectSummary
 import com.snowball.awm.core.LocalGitEnvironmentInspector
@@ -251,14 +252,43 @@ class SettingsController internal constructor(
                     showStatus("已自动检测并保存 Genbu 命令路径")
                 }
             }
-            genbu = result.fold(
+            val detectedAt = AwmTime.format(java.time.Instant.now())
+            val resolved = result.fold(
                 onSuccess = { (command, source) -> GenbuSettingsState.Loaded(
                     command,
                     if (session.config.genbuExecutableAutoDetected) GenbuCommandSource.PROBED else source,
-                    AwmTime.format(java.time.Instant.now()),
+                    detectedAt,
                 ) },
                 onFailure = { GenbuSettingsState.Failed(it.message ?: "检测 Genbu 失败") },
             )
+            val audit = when (resolved) {
+                is GenbuSettingsState.Loaded -> GenbuDetectionAuditEvent(
+                    detectedAt = detectedAt,
+                    status = "LOADED",
+                    command = resolved.command,
+                    source = resolved.source.name,
+                )
+                is GenbuSettingsState.Failed -> GenbuDetectionAuditEvent(
+                    detectedAt = detectedAt,
+                    status = "FAILED",
+                    message = resolved.message,
+                )
+                else -> error("Genbu 检测结束状态不合法")
+            }
+            val auditedConfig = try {
+                withContext(ioDispatcher) {
+                    configStore.update { current ->
+                        current.copy(genbuDetectionAudit = (current.genbuDetectionAudit + audit).takeLast(100))
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                genbu = GenbuSettingsState.Failed("Genbu 检测结果无法写入审计：${error.message ?: "未知错误"}")
+                return@launch
+            }
+            applyConfig(auditedConfig)
+            genbu = resolved
         }
     }
 

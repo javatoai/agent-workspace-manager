@@ -7,6 +7,7 @@ import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ProductionFeatureBatchState
 import com.snowball.awm.core.ProductionBaselineChangedException
 import com.snowball.awm.core.ProductionTagExpectation
+import com.snowball.awm.core.ProductionTagConfirmation
 import com.snowball.awm.core.ProductionTagPipeline
 import com.snowball.awm.core.ProductionTagService
 import com.snowball.awm.core.ProductionVersionUnavailableException
@@ -18,6 +19,8 @@ data class ProductionTagUiState(
     val featureBranches: List<String> = listOf(""),
     val expectedTag: String? = null,
     val expectedTagAlreadyBuilt: Boolean = false,
+    val confirmedReleaseSha: String? = null,
+    val confirmedPipelineRevision: Long? = null,
     val inlineError: String? = null,
 ) {
     val pipeline: ProductionTagPipeline?
@@ -50,6 +53,8 @@ class ProductionTagController internal constructor(
             featureBranches = listOf(""),
             expectedTag = null,
             expectedTagAlreadyBuilt = false,
+            confirmedReleaseSha = null,
+            confirmedPipelineRevision = null,
             inlineError = null,
         )
     }
@@ -62,6 +67,8 @@ class ProductionTagController internal constructor(
             featureBranches = pipeline.selectedFeatures.map { it.branch }.ifEmpty { listOf("") },
             expectedTag = null,
             expectedTagAlreadyBuilt = false,
+            confirmedReleaseSha = null,
+            confirmedPipelineRevision = null,
             inlineError = null,
         )
         if (!pipeline.closed) {
@@ -72,16 +79,34 @@ class ProductionTagController internal constructor(
     }
 
     fun addFeatureInput() {
-        state = state.copy(featureBranches = state.featureBranches + "")
+        state = state.copy(
+            featureBranches = state.featureBranches + "",
+            expectedTag = null,
+            expectedTagAlreadyBuilt = false,
+            confirmedReleaseSha = null,
+            confirmedPipelineRevision = null,
+        )
     }
 
     fun updateFeatureInput(index: Int, value: String) {
-        state = state.copy(featureBranches = state.featureBranches.toMutableList().also { it[index] = value })
+        state = state.copy(
+            featureBranches = state.featureBranches.toMutableList().also { it[index] = value },
+            expectedTag = null,
+            expectedTagAlreadyBuilt = false,
+            confirmedReleaseSha = null,
+            confirmedPipelineRevision = null,
+        )
     }
 
     fun removeFeatureInput(index: Int) {
         val updated = state.featureBranches.toMutableList().also { it.removeAt(index) }
-        state = state.copy(featureBranches = updated.ifEmpty { listOf("") })
+        state = state.copy(
+            featureBranches = updated.ifEmpty { listOf("") },
+            expectedTag = null,
+            expectedTagAlreadyBuilt = false,
+            confirmedReleaseSha = null,
+            confirmedPipelineRevision = null,
+        )
     }
 
     fun moveFeatureInput(index: Int, offset: Int) {
@@ -90,7 +115,13 @@ class ProductionTagController internal constructor(
         val updated = state.featureBranches.toMutableList()
         val value = updated.removeAt(index)
         updated.add(target, value)
-        state = state.copy(featureBranches = updated)
+        state = state.copy(
+            featureBranches = updated,
+            expectedTag = null,
+            expectedTagAlreadyBuilt = false,
+            confirmedReleaseSha = null,
+            confirmedPipelineRevision = null,
+        )
     }
 
     fun createPipeline(): Boolean {
@@ -146,7 +177,10 @@ class ProductionTagController internal constructor(
     fun buildTag(): Boolean = withPipeline { id ->
         runPipeline("正在构建并推送生产 Tag…", "生产 Tag 操作完成", resolveExpectedTag = true) {
             check(state.featureBranches.all { it.isBlank() }) { "仍有待确认或待合并的 Feature，请先完成检测并合并" }
-            service.buildTag(config(), id)
+            val confirmedTag = state.expectedTag ?: error("请先刷新并确认预期 Tag")
+            val confirmedReleaseSha = state.confirmedReleaseSha ?: error("请先刷新并确认 Release SHA")
+            val confirmedRevision = state.confirmedPipelineRevision ?: error("请先刷新并确认流水线状态")
+            service.buildTag(config(), id, confirmedTag, confirmedReleaseSha, confirmedRevision)
         }
     }
 
@@ -162,14 +196,16 @@ class ProductionTagController internal constructor(
             val pipeline = pipelines.firstOrNull { it.id == state.selectedPipelineId }
             val expectation = if (pipeline?.releaseSha != null &&
                 pipeline.featureState == ProductionFeatureBatchState.MERGED
-            ) service.expectedTag(config(), pipeline.id) else null
+            ) service.tagConfirmation(config(), pipeline.id) else null
             pipelines to expectation
         },
         onSuccess = { (pipelines, expectation) ->
             state = state.copy(
                 pipelines = pipelines,
                 expectedTag = expectation?.tag,
-                expectedTagAlreadyBuilt = expectation is ProductionTagExpectation.AlreadyBuilt,
+                expectedTagAlreadyBuilt = expectation?.expectation is ProductionTagExpectation.AlreadyBuilt,
+                confirmedReleaseSha = expectation?.releaseSha,
+                confirmedPipelineRevision = expectation?.pipelineRevision,
                 inlineError = null,
             )
         },
@@ -191,7 +227,7 @@ class ProductionTagController internal constructor(
             val expectation = if (resolveExpectedTag && pipeline.releaseSha != null &&
                 pipeline.featureState == ProductionFeatureBatchState.MERGED
             ) {
-                service.expectedTag(config(), pipeline.id)
+                service.tagConfirmation(config(), pipeline.id)
             } else null
             pipeline to expectation
         },
@@ -215,7 +251,7 @@ class ProductionTagController internal constructor(
 
     private fun applyPipeline(
         pipeline: ProductionTagPipeline,
-        expectation: ProductionTagExpectation?,
+        expectation: ProductionTagConfirmation?,
     ) {
         val pipelines = state.pipelines.filterNot { it.id == pipeline.id } + pipeline
         state = state.copy(
@@ -226,7 +262,9 @@ class ProductionTagController internal constructor(
                 if (pipeline.featureState == ProductionFeatureBatchState.MERGED) listOf("") else state.featureBranches
             },
             expectedTag = expectation?.tag,
-            expectedTagAlreadyBuilt = expectation is ProductionTagExpectation.AlreadyBuilt,
+            expectedTagAlreadyBuilt = expectation?.expectation is ProductionTagExpectation.AlreadyBuilt,
+            confirmedReleaseSha = expectation?.releaseSha,
+            confirmedPipelineRevision = expectation?.pipelineRevision,
             inlineError = null,
         )
     }
@@ -237,11 +275,13 @@ class ProductionTagController internal constructor(
         operations.run(
             "正在计算预期生产 Tag…",
             "预期生产 Tag 已更新",
-            block = { service.expectedTag(config(), pipeline.id) },
+            block = { service.tagConfirmation(config(), pipeline.id) },
             onSuccess = {
                 state = state.copy(
                     expectedTag = it.tag,
-                    expectedTagAlreadyBuilt = it is ProductionTagExpectation.AlreadyBuilt,
+                    expectedTagAlreadyBuilt = it.expectation is ProductionTagExpectation.AlreadyBuilt,
+                    confirmedReleaseSha = it.releaseSha,
+                    confirmedPipelineRevision = it.pipelineRevision,
                     inlineError = null,
                 )
             },

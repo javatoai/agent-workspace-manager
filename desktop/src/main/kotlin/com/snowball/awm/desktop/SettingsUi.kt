@@ -535,6 +535,22 @@ private fun SettingsProductionTagSection(
                 Text("重新自动检测")
             }
         }
+        if (controller.config.genbuDetectionAudit.isNotEmpty()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("最近检测记录", style = MaterialTheme.typography.titleSmall)
+            controller.config.genbuDetectionAudit.asReversed().take(5).forEach { audit ->
+                val result = if (audit.status == "LOADED") {
+                    listOfNotNull(audit.source, audit.command).joinToString(" · ")
+                } else {
+                    audit.message ?: "检测失败"
+                }
+                Text(
+                    "${audit.detectedAt} · ${audit.status} · $result",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (audit.status == "LOADED") SuccessGreen else MaterialTheme.colorScheme.error,
+                )
+            }
+        }
         if (controller.genbuSettingsState is GenbuSettingsState.Failed ||
             (controller.config.genbuExecutablePath != null && !controller.config.genbuExecutableAutoDetected)
         ) {

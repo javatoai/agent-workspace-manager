@@ -124,6 +124,65 @@ class ProductionTagGitIntegrationTest {
     }
 
     @Test
+    fun `dependent feature order is rejected while legacy skipped merges remain recoverable`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("feature-topology-fixture"))
+        GitTestSupport.run(seed, "tag", "1.0.0")
+        GitTestSupport.run(seed, "push", "origin", "refs/tags/1.0.0")
+        GitTestSupport.run(seed, "switch", "-c", "feature/base")
+        Files.writeString(seed.resolve("base.txt"), "base\n")
+        GitTestSupport.run(seed, "add", "base.txt")
+        GitTestSupport.run(seed, "commit", "-m", "feature base")
+        GitTestSupport.run(seed, "push", "origin", "feature/base")
+        GitTestSupport.run(seed, "switch", "-c", "feature/dependent")
+        Files.writeString(seed.resolve("dependent.txt"), "dependent\n")
+        GitTestSupport.run(seed, "add", "dependent.txt")
+        GitTestSupport.run(seed, "commit", "-m", "feature dependent")
+        GitTestSupport.run(seed, "push", "origin", "feature/dependent")
+        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("feature-topology-repository"))
+        val repository = repository(repositoryPath, remote, "feature-topology")
+        val gateway = GitProductionTagGateway(paths = ApplicationPaths(temporary.resolve("feature-topology-home")))
+        val baseline = gateway.inspectBaseline(repository, "1.0.0")
+        val releaseSha = gateway.createRelease(repository, pipelineForRelease(repository, baseline, "1.0.1"))
+        val features = gateway.resolveFeatures(repository, listOf("feature/dependent", "feature/base"))
+        val pipeline = ProductionTagPipeline(
+            id = "feature-topology",
+            repositoryId = repository.id,
+            serviceName = repository.name,
+            productionTag = baseline.productionTag,
+            productionTagSha = baseline.productionTagSha,
+            masterSha = baseline.masterSha,
+            baselineState = baseline.state,
+            baseVersion = "1.0.1",
+            releaseBranch = "release/1.0.1",
+            releaseSha = releaseSha,
+            activeOperation = ProductionOperationLease(
+                id = "feature-topology-write",
+                action = ProductionOperationAction.MERGE_FEATURES,
+                startedAt = "now",
+                expectedTargetSha = releaseSha,
+                features = features,
+                sourceBranch = "awm/production-tag/merge_features/feature-topology",
+            ),
+        )
+
+        assertFailsWith<ProductionFeatureTopologyException> {
+            gateway.mergeFeatures(repository, pipeline, features)
+        }
+        assertEquals(releaseSha, gateway.releaseHead(repository, "release/1.0.1"))
+
+        GitTestSupport.run(repositoryPath, "switch", "-c", "legacy-feature-topology", releaseSha)
+        GitTestSupport.run(repositoryPath, "merge", "--no-ff", features.first().sha, "-m", "legacy dependent merge")
+        GitTestSupport.run(repositoryPath, "push", "origin", "HEAD:refs/heads/release/1.0.1")
+        val recovered = assertIs<ProductionFeatureWrite.Direct>(
+            gateway.recoverFeatureWrite(repository, "release/1.0.1", null, releaseSha, features),
+        )
+
+        assertEquals(1, recovered.merges.size)
+        assertEquals("feature/dependent", recovered.merges.single().branch)
+        assertEquals(gateway.releaseHead(repository, "release/1.0.1"), recovered.releaseSha)
+    }
+
+    @Test
     fun `tag build rejects a stale release sha and creates no remote tag`() {
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("stale-release-fixture"))
         GitTestSupport.run(seed, "tag", "1.0.0")

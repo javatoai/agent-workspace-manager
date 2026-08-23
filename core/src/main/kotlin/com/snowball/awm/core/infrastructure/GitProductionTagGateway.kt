@@ -116,8 +116,13 @@ class GitProductionTagGateway(
         val recoveredSource = recoverExactMerge(root, stableSource, beforeSha, productionSha)
             ?: return@locked null
         val (_, sourceHead) = recoveredSource
+        val request = try {
+            buildMergeRequest(repository, stableSource, targetBranch, sourceHead)
+        } catch (_: ProductionMergeRequestUnavailableException) {
+            return@locked null
+        }
         ProductionBranchWrite.AwaitingRequest(
-            buildMergeRequest(repository, stableSource, targetBranch, sourceHead),
+            request,
         )
     }
 
@@ -242,10 +247,15 @@ class GitProductionTagGateway(
         }
         val stableSource = sourceBranch ?: return@locked null
         val sourceWrite = recoverFeatureMerges(root, stableSource, beforeSha, features) ?: return@locked null
+        val request = try {
+            buildMergeRequest(repository, stableSource, releaseBranch, sourceWrite.releaseSha)
+        } catch (_: ProductionMergeRequestUnavailableException) {
+            return@locked null
+        }
         ProductionFeatureWrite.AwaitingRequest(
             releaseSha = sourceWrite.releaseSha,
             merges = sourceWrite.merges,
-            request = buildMergeRequest(repository, stableSource, releaseBranch, sourceWrite.releaseSha),
+            request = request,
         )
     }
 
@@ -280,7 +290,10 @@ class GitProductionTagGateway(
             check = false,
         )
         if (!push.succeeded) {
-            val racedTag = runCatching { remoteTagCommit(root, tag) }.getOrNull()
+            // A failed/aborted client response does not prove the server rejected the
+            // write. If this verification is also unavailable, propagate the error so
+            // the persisted operation lease remains recoverable.
+            val racedTag = remoteTagCommit(root, tag)
             if (racedTag != null) {
                 return@locked if (racedTag == releaseSha) ProductionTagPush.AlreadyExists(racedTag)
                 else ProductionTagPush.Failed("远端同名 Tag 已指向其他提交：$tag")
@@ -288,7 +301,7 @@ class GitProductionTagGateway(
             return@locked if (isPermissionFailure(push)) {
                 ProductionTagPush.NoPermission("无推送权限：${failureSummary(push)}")
             } else {
-                ProductionTagPush.Failed(push.stderr.ifBlank { push.stdout }.trim())
+                ProductionTagPush.Failed(GitAuditSanitizer.summary(push))
             }
         }
         val remoteSha = remoteTagCommit(root, tag)
@@ -347,6 +360,8 @@ class GitProductionTagGateway(
         targetBranch: String,
         expectedCommit: String,
     ): ProductionMergeRequest {
+        // Validate platform/link generation before creating any remote source branch.
+        val request = buildMergeRequest(repository, sourceBranch, targetBranch, expectedCommit)
         val push = git.run(
             root,
             "push",
@@ -363,7 +378,7 @@ class GitProductionTagGateway(
             "用于合并请求的源分支已被其他操作占用：$sourceBranch"
         }
         check(remoteBranchCommit(root, sourceBranch) == expectedCommit) { "合并请求源分支推送后校验失败：$sourceBranch" }
-        return buildMergeRequest(repository, sourceBranch, targetBranch, expectedCommit)
+        return request
     }
 
     private fun buildMergeRequest(
@@ -372,9 +387,9 @@ class GitProductionTagGateway(
         targetBranch: String,
         expectedCommit: String,
     ): ProductionMergeRequest {
-        val origin = repository.originUrl ?: error("仓库未配置 origin 地址")
+        val origin = GitAuditSanitizer.remoteDisplay(repository.originUrl) ?: error("仓库未配置 origin 地址")
         val link = MergeRequestLinkBuilder.build(origin, sourceBranch, targetBranch)
-            ?: error("当前代码托管平台无法自动生成合并请求链接")
+            ?: throw ProductionMergeRequestUnavailableException()
         return ProductionMergeRequest(
             platform = link.platform.name,
             url = link.url,
@@ -407,15 +422,19 @@ class GitProductionTagGateway(
     ): ProductionFeatureWrite.Direct? {
         val head = remoteBranchCommit(root, branch) ?: return null
         if (!git.isAncestor(root, beforeSha, head) || features.any { !git.isAncestor(root, it.sha, head) }) return null
-        val required = features.filterNot { git.isAncestor(root, it.sha, beforeSha) }
         val commits = firstParentCommits(root, beforeSha, head)
         var searchFrom = 0
+        var integratedHead = beforeSha
         val records = mutableListOf<ProductionFeatureMergeRecord>()
-        for (feature in required) {
-            val relativeIndex = commits.drop(searchFrom).indexOfFirst { commit -> parent(root, commit, 2) == feature.sha }
+        for (feature in features) {
+            if (git.isAncestor(root, feature.sha, integratedHead)) continue
+            val relativeIndex = commits.drop(searchFrom).indexOfFirst { commit ->
+                parent(root, commit, 1) == integratedHead && parent(root, commit, 2) == feature.sha
+            }
             if (relativeIndex < 0) return null
             val absoluteIndex = searchFrom + relativeIndex
             records += ProductionFeatureMergeRecord(feature.branch, feature.sha, commits[absoluteIndex], now())
+            integratedHead = commits[absoluteIndex]
             searchFrom = absoluteIndex + 1
         }
         return ProductionFeatureWrite.Direct(head, records)
@@ -493,6 +512,20 @@ class GitProductionTagGateway(
             check(remoteBranchCommit(root, feature.branch) == feature.sha) {
                 "Feature 分支已发生变化，请重新选择：${feature.branch}"
             }
+        }
+        features.forEachIndexed { index, feature ->
+            if (git.isAncestor(root, feature.sha, releaseSha)) {
+                throw ProductionFeatureTopologyException(
+                    "Feature 已包含在当前 Release 中，无法形成独立合并点，请移除：${feature.branch}",
+                )
+            }
+            features.drop(index + 1)
+                .firstOrNull { later -> git.isAncestor(root, later.sha, feature.sha) }
+                ?.let { later ->
+                    throw ProductionFeatureTopologyException(
+                        "Feature 顺序无法形成独立合并点：请将依赖分支 ${later.branch} 排在 ${feature.branch} 之前",
+                    )
+                }
         }
     }
 
@@ -614,14 +647,7 @@ class GitProductionTagGateway(
         ).any(output::contains)
     }
 
-    private fun failureSummary(result: CommandResult): String = result.stderr
-        .lineSequence()
-        .plus(result.stdout.lineSequence())
-        .map(String::trim)
-        .firstOrNull(String::isNotBlank)
-        ?.replace(Regex("(?i)(token|password|authorization)=[^\\s&]+"), "${'$'}1=<redacted>")
-        ?.take(300)
-        ?: "远端拒绝推送"
+    private fun failureSummary(result: CommandResult): String = GitAuditSanitizer.summary(result)
 
     private companion object {
         val FORMAL_TAG = Regex("""\d+\.\d+\.\d+""")
