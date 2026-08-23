@@ -18,11 +18,13 @@ class WindowsCliInstallationServiceTest {
             val localApplicationData = root.resolve("local-app-data")
             val bundled = bundledSource(root.resolve("bundle"), version = "0.9.10")
             val pathStore = InMemoryUserPathStore("C:\\Tools")
+            var environmentNotifications = 0
             val service = WindowsCliInstallationService(
                 source = { bundled },
                 localApplicationData = { localApplicationData },
                 userPath = pathStore,
                 isWindows = { true },
+                environmentChanged = { environmentNotifications += 1 },
             )
 
             val installed = service.install()
@@ -37,9 +39,11 @@ class WindowsCliInstallationServiceTest {
             assertTrue(Files.isRegularFile(versionDirectory.resolve("runtime/bin/java.exe")))
             assertContains(Files.readString(commandDirectory.resolve("awm.cmd")), "..\\cli\\0.9.10\\cli\\bin\\awm.cmd")
             assertEquals("C:\\Tools;${commandDirectory.toAbsolutePath().normalize()}", pathStore.value)
+            assertEquals(1, environmentNotifications)
 
             service.install()
             assertEquals("C:\\Tools;${commandDirectory.toAbsolutePath().normalize()}", pathStore.value)
+            assertEquals(2, environmentNotifications)
         } finally {
             deleteTree(root)
         }

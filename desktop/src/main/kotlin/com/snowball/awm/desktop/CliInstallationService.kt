@@ -1,7 +1,13 @@
 package com.snowball.awm.desktop
 
+import com.sun.jna.Memory
+import com.sun.jna.Native
+import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.Advapi32Util
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinReg
+import com.sun.jna.platform.win32.WinUser
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -33,7 +39,7 @@ internal interface CliInstallationService {
 
 /**
  * Installs the CLI from a Windows green package into the current user's local
- * application-data directory. The current packaged jlink runtime is copied
+ * application-data directory. Its dedicated packaged jlink runtime is copied
  * with the CLI so `awm` never depends on a machine-wide JDK.
  */
 internal class WindowsCliInstallationService(
@@ -41,6 +47,7 @@ internal class WindowsCliInstallationService(
     private val localApplicationData: () -> Path = ::defaultLocalApplicationData,
     private val userPath: UserPathStore = WindowsRegistryUserPathStore(),
     private val isWindows: () -> Boolean = { System.getProperty("os.name").startsWith("Windows", ignoreCase = true) },
+    private val environmentChanged: () -> Unit = ::broadcastEnvironmentChange,
 ) : CliInstallationService {
     override fun inspect(): CliInstallationStatus {
         if (!isWindows()) {
@@ -116,6 +123,7 @@ internal class WindowsCliInstallationService(
         Files.createDirectories(commandDirectory())
         writeStableCommand(bundled.version)
         addCommandDirectoryToUserPath()
+        environmentChanged()
         return inspect()
     }
 
@@ -220,18 +228,40 @@ internal class WindowsCliInstallationService(
         private fun packagedSource(): PortableCliSource? {
             val resources = System.getProperty("compose.application.resources.dir") ?: return null
             val cliHome = Path.of(resources).resolve("cli")
-            val runtimeHome = Path.of(System.getProperty("java.home"))
+            val runtimeHome = Path.of(resources).resolve("cli-runtime")
             val version = runCatching { Files.readString(cliHome.resolve("VERSION"), StandardCharsets.UTF_8).trim() }.getOrNull()
                 ?: return null
-            // A development run points to the developer JDK. Installing that as a
-            // user CLI would be surprising and potentially very large.
-            if (Files.exists(runtimeHome.resolve("bin/javac.exe"))) return null
             return PortableCliSource(cliHome, runtimeHome, version)
         }
 
         private fun defaultLocalApplicationData(): Path =
             System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)?.let(Path::of)
                 ?: Path.of(System.getProperty("user.home"), "AppData", "Local")
+
+        /**
+         * Notifies Explorer and other Windows applications that the user PATH
+         * changed. Existing shells still keep their inherited environments and
+         * must be reopened by their host application.
+         */
+        private fun broadcastEnvironmentChange() {
+            val message = Memory((ENVIRONMENT_VALUE.length + 1L) * Native.WCHAR_SIZE)
+            message.setWideString(0, ENVIRONMENT_VALUE)
+            runCatching {
+                User32.INSTANCE.SendMessageTimeout(
+                    WinUser.HWND_BROADCAST,
+                    WM_SETTING_CHANGE,
+                    WinDef.WPARAM(0),
+                    WinDef.LPARAM(Pointer.nativeValue(message)),
+                    WinUser.SMTO_ABORTIFHUNG,
+                    ENVIRONMENT_CHANGE_TIMEOUT_MILLIS,
+                    WinDef.DWORDByReference(),
+                )
+            }
+        }
+
+        private const val WM_SETTING_CHANGE = 0x001A
+        private const val ENVIRONMENT_CHANGE_TIMEOUT_MILLIS = 5_000
+        private const val ENVIRONMENT_VALUE = "Environment"
     }
 }
 

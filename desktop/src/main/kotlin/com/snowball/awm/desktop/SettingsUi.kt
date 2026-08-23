@@ -583,7 +583,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
         }
         if (status.supported) {
             Text(
-                "安装会复制绿色包中的 CLI 与 Java 运行时至当前用户的 LOCALAPPDATA，并将其命令目录加入用户 PATH；不需要管理员权限。完成后请打开新的终端。",
+                "安装会复制绿色包中的 CLI 与 Java 运行时至当前用户的 LOCALAPPDATA，并将其命令目录加入用户 PATH；不需要管理员权限。完成后请重开终端；若从 Codex、IDE 或 Windows Terminal 打开终端，请重启对应应用。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

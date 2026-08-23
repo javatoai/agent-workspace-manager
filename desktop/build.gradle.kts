@@ -1,16 +1,78 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.Sync
+import org.gradle.api.tasks.TaskAction
+import java.nio.file.Files
+import java.util.Comparator
+
+abstract class CreateJlinkRuntime : DefaultTask() {
+    @get:InputFile
+    abstract val jlinkExecutable: RegularFileProperty
+
+    @get:Input
+    abstract val modules: ListProperty<String>
+
+    @get:OutputDirectory
+    abstract val destination: DirectoryProperty
+
+    @TaskAction
+    fun create() {
+        val output = destination.get().asFile.toPath()
+        deleteTree(output)
+        val process = ProcessBuilder(
+            jlinkExecutable.get().asFile.absolutePath,
+            "--add-modules", modules.get().joinToString(","),
+            "--strip-debug",
+            "--no-header-files",
+            "--no-man-pages",
+            "--compress=zip-6",
+            "--output", output.toString(),
+        ).redirectErrorStream(true).start()
+        val log = process.inputStream.bufferedReader().use { it.readText() }
+        if (process.waitFor() != 0) {
+            throw GradleException("无法构建 AWM CLI 运行时：${log.ifBlank { "jlink 退出失败" }}")
+        }
+    }
+
+    private fun deleteTree(path: java.nio.file.Path) {
+        if (!Files.exists(path)) return
+        Files.walk(path).use { entries ->
+            entries.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        }
+    }
+}
 
 val macPackageVersion = providers.gradleProperty("macPackageVersion").orElse("3.0.1")
 val portableCliVersion = layout.buildDirectory.file("generated/portable-cli/VERSION")
 val portableCliVersionText = version.toString()
+val portableCliRuntime = layout.buildDirectory.dir("generated/portable-cli-runtime")
+val jlinkFileName = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "jlink.exe" else "jlink"
+val portableCliJlink = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(21))
+}.map { launcher ->
+    launcher.metadata.installationPath.file("bin/$jlinkFileName")
+}
 
 val writePortableCliVersion = tasks.register<Copy>("writePortableCliVersion") {
     from(resources.text.fromString("$portableCliVersionText\n")) {
         rename(".*", "VERSION")
     }
     into(portableCliVersion.map { it.asFile.parentFile })
+}
+
+/** Creates a compact runtime with `java` retained specifically for the CLI. */
+val preparePortableCliRuntime = tasks.register<CreateJlinkRuntime>("preparePortableCliRuntime") {
+    jlinkExecutable.set(portableCliJlink)
+    modules.set(listOf("java.base"))
+    destination.set(portableCliRuntime)
 }
 
 /**
@@ -22,7 +84,7 @@ val writePortableCliVersion = tasks.register<Copy>("writePortableCliVersion") {
  * installed JDK.
  */
 val preparePortableCli = tasks.register<Sync>("preparePortableCli") {
-    dependsOn(":cli:installDist", writePortableCliVersion)
+    dependsOn(":cli:installDist", writePortableCliVersion, preparePortableCliRuntime)
     from(project(":cli").layout.buildDirectory.dir("install/awm")) {
         include("lib/**")
         into("cli")
@@ -32,6 +94,9 @@ val preparePortableCli = tasks.register<Sync>("preparePortableCli") {
     }
     from(portableCliVersion) {
         into("cli")
+    }
+    from(portableCliRuntime) {
+        into("cli-runtime")
     }
     into(layout.buildDirectory.dir("app-resources/common"))
 }

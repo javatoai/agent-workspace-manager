@@ -6,10 +6,8 @@ CLI_HOME=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 if [ -x "$CLI_HOME/../runtime/bin/java" ]; then
   AWM_JAVA="$CLI_HOME/../runtime/bin/java"
-elif [ -x "$CLI_HOME/../../../runtime/bin/java" ]; then
-  AWM_JAVA="$CLI_HOME/../../../runtime/bin/java"
-elif [ -x "$CLI_HOME/../../../runtime/Contents/Home/bin/java" ]; then
-  AWM_JAVA="$CLI_HOME/../../../runtime/Contents/Home/bin/java"
+elif [ -x "$CLI_HOME/../cli-runtime/bin/java" ]; then
+  AWM_JAVA="$CLI_HOME/../cli-runtime/bin/java"
 elif [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
   AWM_JAVA="$JAVA_HOME/bin/java"
 else
