@@ -6,6 +6,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -496,6 +498,77 @@ class ProductionTagServiceTest {
             assertEquals(ProductionTagBuildState.PUSHED, firstBuild.get(5, TimeUnit.SECONDS).buildRecords.last().state)
             val failure = assertFailsWith<ExecutionException> { secondBuild.get(5, TimeUnit.SECONDS) }
             assertTrue(failure.cause is ProductionTagConfirmationChangedException)
+
+            val completed = first.get(pipeline.id)
+            assertEquals(1, git.tagPushCalls)
+            assertEquals(
+                listOf(ProductionTagBuildState.PUSHED, ProductionTagBuildState.FAILED),
+                completed.buildRecords.map { it.state },
+            )
+            assertEquals(ProductionAuditState.FAILED, completed.auditEvents.last().state)
+            assertEquals(ProductionOperationAction.BUILD_TAG.name, completed.auditEvents.last().action)
+        } finally {
+            releaseFirstPush.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `interrupted queued build still waits for the writer and records the stale click`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val paths = ApplicationPaths(temporary.resolve("interrupted-tag-build-home"))
+        val provider = ProductionVersionProvider {
+            ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+        }
+        val firstPushEntered = CountDownLatch(1)
+        val releaseFirstPush = CountDownLatch(1)
+        val secondClickEntered = CountDownLatch(1)
+        val secondThread = AtomicReference<Thread>()
+        val interruptedAtExit = AtomicBoolean(false)
+        val git = FakeProductionGitGateway(onTagPush = {
+            firstPushEntered.countDown()
+            check(releaseFirstPush.await(10, TimeUnit.SECONDS)) { "test did not release the first Tag push" }
+        })
+        val first = ProductionTagService(
+            ProductionTagPipelineStore(paths),
+            provider,
+            git,
+            now = { "now" },
+            id = { "interrupted-tag-build" },
+        )
+        val pipeline = first.create(config, repository.id)
+        first.createRelease(config, pipeline.id)
+        first.selectFeatures(config, pipeline.id, listOf("feature/a"))
+        first.mergeFeatures(config, pipeline.id)
+        val confirmation = first.tagConfirmation(config, pipeline.id)
+        val second = ProductionTagService(ProductionTagPipelineStore(paths), provider, git, now = { "later" })
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val firstBuild = executor.submit<ProductionTagPipeline> {
+                first.buildTag(config, pipeline.id, confirmation.tag, confirmation.releaseSha, confirmation.pipelineRevision)
+            }
+            assertTrue(firstPushEntered.await(5, TimeUnit.SECONDS))
+            val secondBuild = executor.submit<ProductionTagPipeline> {
+                secondThread.set(Thread.currentThread())
+                secondClickEntered.countDown()
+                try {
+                    second.buildTag(config, pipeline.id, confirmation.tag, confirmation.releaseSha, confirmation.pipelineRevision)
+                } finally {
+                    interruptedAtExit.set(Thread.currentThread().isInterrupted)
+                }
+            }
+            assertTrue(secondClickEntered.await(5, TimeUnit.SECONDS))
+            Thread.sleep(100)
+            secondThread.get().interrupt()
+            Thread.sleep(100)
+            assertFalse(secondBuild.isDone)
+
+            releaseFirstPush.countDown()
+            assertEquals(ProductionTagBuildState.PUSHED, firstBuild.get(5, TimeUnit.SECONDS).buildRecords.last().state)
+            val failure = assertFailsWith<ExecutionException> { secondBuild.get(5, TimeUnit.SECONDS) }
+            assertTrue(failure.cause is ProductionTagConfirmationChangedException)
+            assertTrue(interruptedAtExit.get())
 
             val completed = first.get(pipeline.id)
             assertEquals(1, git.tagPushCalls)

@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
-import java.time.Duration
 import java.util.Locale
 import kotlin.io.path.createDirectories
 
@@ -29,37 +28,34 @@ internal object FileLocking {
 
     fun <T> withExclusiveLockWaiting(
         lockPath: Path,
-        timeout: Duration,
-        failureMessage: String,
         block: () -> T,
     ): T {
-        require(!timeout.isNegative && !timeout.isZero) { "lock timeout must be greater than zero" }
         lockPath.parent.createDirectories()
-        FileChannel.open(
-            lockPath,
-            StandardOpenOption.CREATE,
-            StandardOpenOption.WRITE,
-        ).use { channel ->
-            val startedAt = System.nanoTime()
-            val timeoutNanos = timeout.toNanos()
-            while (true) {
-                val lock = try {
-                    channel.tryLock()
-                } catch (_: OverlappingFileLockException) {
-                    null
-                }
-                if (lock != null) lock.use { return block() }
-                val elapsed = System.nanoTime() - startedAt
-                if (elapsed >= timeoutNanos) throw IllegalStateException(failureMessage)
-                val remainingNanos = timeoutNanos - elapsed
-                val waitMillis = minOf(50L, maxOf(1L, remainingNanos / 1_000_000L))
-                try {
-                    Thread.sleep(waitMillis)
-                } catch (interrupted: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw interrupted
+        var interrupted = false
+        try {
+            FileChannel.open(
+                lockPath,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+            ).use { channel ->
+                while (true) {
+                    val lock = try {
+                        channel.tryLock()
+                    } catch (_: OverlappingFileLockException) {
+                        null
+                    }
+                    if (lock != null) lock.use { return block() }
+                    try {
+                        Thread.sleep(50)
+                    } catch (_: InterruptedException) {
+                        // An accepted Build click must still be reconciled after the active writer.
+                        // Preserve cancellation for the caller without losing its build/audit record.
+                        interrupted = true
+                    }
                 }
             }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
         }
     }
 
