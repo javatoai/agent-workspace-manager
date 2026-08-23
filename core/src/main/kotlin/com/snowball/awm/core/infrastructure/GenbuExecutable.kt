@@ -83,7 +83,9 @@ class ConfiguredGenbuExecutable(
         probeAttempted = true
     }
 
-    private fun configured(): String? = configuredPath()?.trim()?.takeIf(String::isNotEmpty)
+    private fun configured(): String? = configuredPath()?.trim()?.takeIf(String::isNotEmpty)?.let { raw ->
+        runCatching { normalizeGenbuExecutablePath(raw) }.getOrNull()
+    }
     private fun fallback(): String = if (isWindows()) "genbu.exe" else "genbu"
     private fun isWindows(): Boolean = osName.lowercase(Locale.ROOT).contains("win")
 }

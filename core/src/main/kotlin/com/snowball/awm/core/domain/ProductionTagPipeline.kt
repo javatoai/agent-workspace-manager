@@ -93,4 +93,6 @@ data class ProductionTagPipeline(
     val closed: Boolean = false,
     val createdAt: String = "",
     val updatedAt: String = "",
+    /** Optimistic concurrency token for cross-process pipeline updates. */
+    val revision: Long = 0,
 )

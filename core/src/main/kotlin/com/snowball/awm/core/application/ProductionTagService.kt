@@ -49,10 +49,19 @@ interface ProductionGitGateway {
         features: List<ProductionFeatureSelection>,
     ): ProductionFeatureWrite
     fun tagsForBase(repository: RepositoryConfig, baseVersion: String): List<ProductionRemoteTag>
-    fun pushTag(repository: RepositoryConfig, tag: String, releaseSha: String): ProductionTagPush
+    fun pushTag(
+        repository: RepositoryConfig,
+        releaseBranch: String,
+        tag: String,
+        releaseSha: String,
+    ): ProductionTagPush
     /** Returns the current remote target SHA only when it contains the expected commit. */
     fun mergedTargetSha(repository: RepositoryConfig, targetBranch: String, expectedCommit: String): String?
 }
+
+class ProductionBaselineChangedException(
+    val refreshed: ProductionTagPipeline,
+) : IllegalStateException("生产环境或 master 已发生变化，旧操作已取消，请核对最新基线后重试")
 
 class ProductionTagService(
     private val store: ProductionTagPipelineStore = ProductionTagPipelineStore(),
@@ -70,12 +79,11 @@ class ProductionTagService(
     fun create(config: AppConfig, repositoryId: String): ProductionTagPipeline {
         check(config.productionTagBuildEnabled) { "生产 Tag 构建功能已关闭" }
         val repository = repository(config, repositoryId)
-        check(store.activeFor(repositoryId).isEmpty()) { "该服务已有进行中的生产 Tag 流水线" }
         val runtime = versions.current(repository.name)
         val evidence = git.inspectBaseline(repository, runtime.version)
         val baseVersion = ProductionTagVersioning.nextBase(git.formalTags(repository))
         val timestamp = now()
-        return store.save(
+        return store.create(
             ProductionTagPipeline(
                 id = id(),
                 repositoryId = repository.id,
@@ -95,6 +103,7 @@ class ProductionTagService(
     fun refresh(config: AppConfig, pipelineId: String): ProductionTagPipeline {
         val current = get(pipelineId)
         requireOpen(current)
+        check(current.releaseSha == null) { "Release 已创建，生产基线不可再刷新" }
         check(current.mergeRequest == null) { "当前有待处理的合并请求，请使用“刷新合并状态”" }
         val repository = repository(config, current.repositoryId)
         val runtime = versions.current(repository.name)
@@ -109,7 +118,7 @@ class ProductionTagService(
     }
 
     fun mergeProduction(config: AppConfig, pipelineId: String): ProductionTagPipeline {
-        val current = get(pipelineId)
+        val current = revalidateBaseline(config, get(pipelineId))
         requireOpen(current)
         check(current.baselineState == ProductionBaselineState.MERGE_REQUIRED) { "当前生产 Tag 无需合并" }
         return when (val outcome = git.mergeProduction(repository(config, current.repositoryId), current)) {
@@ -126,7 +135,7 @@ class ProductionTagService(
     }
 
     fun createRelease(config: AppConfig, pipelineId: String): ProductionTagPipeline {
-        val current = get(pipelineId)
+        val current = revalidateBaseline(config, get(pipelineId))
         requireOpen(current)
         check(current.baselineState == ProductionBaselineState.ALREADY_CONTAINED) { "生产基线尚未进入 master" }
         check(current.releaseSha == null) { "Release 已创建" }
@@ -181,6 +190,7 @@ class ProductionTagService(
 
     fun refreshMergeRequest(config: AppConfig, pipelineId: String): ProductionTagPipeline {
         val current = get(pipelineId)
+        requireOpen(current)
         val request = current.mergeRequest ?: error("当前没有等待中的合并请求")
         val repository = repository(config, current.repositoryId)
         val targetSha = git.mergedTargetSha(repository, request.targetBranch, request.expectedCommit) ?: return current
@@ -200,7 +210,7 @@ class ProductionTagService(
     }
 
     fun buildTag(config: AppConfig, pipelineId: String): ProductionTagPipeline {
-        val current = get(pipelineId)
+        var current = get(pipelineId)
         requireOpen(current)
         val releaseSha = current.releaseSha ?: error("Release 尚未创建")
         check(current.featureState == ProductionFeatureBatchState.MERGED) { "Feature 尚未成功合入 Release" }
@@ -211,17 +221,33 @@ class ProductionTagService(
             git.tagsForBase(repository, current.baseVersion),
         )
         if (expectation is ProductionTagExpectation.AlreadyBuilt) {
-            return save(current.copy(buildRecords = current.buildRecords + ProductionTagBuildRecord(
+            val pendingIndex = current.buildRecords.indexOfLast {
+                it.expectedTag == expectation.tag && it.releaseSha == releaseSha &&
+                    it.state in setOf(ProductionTagBuildState.PREPARING, ProductionTagBuildState.PUSHING)
+            }
+            val record = ProductionTagBuildRecord(
                 expectation.tag,
                 releaseSha,
                 ProductionTagBuildState.ALREADY_EXISTS,
-                startedAt = now(),
+                remoteTagSha = releaseSha,
+                startedAt = current.buildRecords.getOrNull(pendingIndex)?.startedAt ?: now(),
                 completedAt = now(),
-            )))
+            )
+            return if (pendingIndex >= 0) save(current.copy(
+                buildRecords = current.buildRecords.toMutableList().also { it[pendingIndex] = record },
+            )) else save(current.copy(buildRecords = current.buildRecords + record))
         }
         val tag = expectation.tag
         val started = now()
-        val record = when (val push = git.pushTag(repository, tag, releaseSha)) {
+        current = save(current.copy(buildRecords = current.buildRecords + ProductionTagBuildRecord(
+            tag,
+            releaseSha,
+            ProductionTagBuildState.PREPARING,
+            startedAt = started,
+        )))
+        current = save(current.copy(buildRecords = current.buildRecords.dropLast(1) +
+            current.buildRecords.last().copy(state = ProductionTagBuildState.PUSHING)))
+        val record = when (val push = git.pushTag(repository, current.releaseBranch, tag, releaseSha)) {
             is ProductionTagPush.Pushed -> ProductionTagBuildRecord(
                 tag, releaseSha, ProductionTagBuildState.PUSHED, push.tagSha, started, now(),
             )
@@ -235,7 +261,7 @@ class ProductionTagService(
                 tag, releaseSha, ProductionTagBuildState.FAILED, startedAt = started, completedAt = now(), failureReason = push.reason,
             )
         }
-        return save(current.copy(buildRecords = current.buildRecords + record))
+        return save(current.copy(buildRecords = current.buildRecords.dropLast(1) + record))
     }
 
     fun expectedTag(config: AppConfig, pipelineId: String): ProductionTagExpectation {
@@ -256,8 +282,36 @@ class ProductionTagService(
     private fun save(pipeline: ProductionTagPipeline): ProductionTagPipeline =
         store.save(pipeline.copy(updatedAt = now()))
 
-    private fun repository(config: AppConfig, id: String): RepositoryConfig =
-        config.repositories.firstOrNull { it.id == id } ?: error("找不到仓库配置：$id")
+    private fun repository(config: AppConfig, id: String): RepositoryConfig {
+        val managedRepositoryIds = config.groups
+            .flatMap { it.services }
+            .filter { it.enabled }
+            .map { it.repositoryId }
+            .toSet()
+        check(id in managedRepositoryIds) { "该仓库不是 AWM 已启用的服务：$id" }
+        return config.repositories.firstOrNull { it.id == id } ?: error("找不到仓库配置：$id")
+    }
+
+    private fun revalidateBaseline(config: AppConfig, pipeline: ProductionTagPipeline): ProductionTagPipeline {
+        requireOpen(pipeline)
+        check(pipeline.mergeRequest == null) { "当前有待处理的合并请求，请使用“刷新合并状态”" }
+        val repository = repository(config, pipeline.repositoryId)
+        val runtime = versions.current(repository.name)
+        val evidence = git.inspectBaseline(repository, runtime.version)
+        val changed = evidence.productionTag != pipeline.productionTag ||
+            evidence.productionTagSha != pipeline.productionTagSha ||
+            evidence.masterSha != pipeline.masterSha ||
+            evidence.state != pipeline.baselineState
+        if (!changed) return pipeline
+        val refreshed = save(pipeline.copy(
+            productionTag = evidence.productionTag,
+            productionTagSha = evidence.productionTagSha,
+            masterSha = evidence.masterSha,
+            baselineState = evidence.state,
+            mergeRequest = null,
+        ))
+        throw ProductionBaselineChangedException(refreshed)
+    }
 
     private fun requireOpen(pipeline: ProductionTagPipeline) {
         check(!pipeline.closed) { "生产 Tag 流水线已关闭" }

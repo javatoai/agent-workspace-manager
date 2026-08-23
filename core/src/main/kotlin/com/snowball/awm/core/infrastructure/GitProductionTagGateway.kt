@@ -1,6 +1,7 @@
 package com.snowball.awm.core
 
 import java.nio.file.Path
+import java.nio.file.Files
 import java.time.Instant
 import java.util.UUID
 import kotlin.io.path.Path
@@ -20,8 +21,11 @@ class GitProductionTagGateway(
         git.fetch(root)
         git.fetchTags(root)
         val tagRef = "refs/tags/$productionTag"
-        require(git.refExists(root, tagRef)) { "生产 Tag 在远端仓库中不存在：$productionTag" }
+        val remoteTagSha = remoteTagCommit(root, productionTag)
+            ?: error("生产 Tag 在远端仓库中不存在：$productionTag")
+        require(git.refExists(root, tagRef)) { "生产 Tag 对象未同步到本地：$productionTag" }
         val productionTagSha = git.resolve(root, tagRef)
+        check(productionTagSha == remoteTagSha) { "生产 Tag 本地对象与远端不一致：$productionTag" }
         val masterSha = git.resolve(root, "refs/remotes/origin/master")
         ProductionBaselineEvidence(
             productionTag = productionTag,
@@ -47,7 +51,7 @@ class GitProductionTagGateway(
         git.fetchTags(root)
         val remoteMaster = git.resolve(root, "refs/remotes/origin/master")
         check(remoteMaster == pipeline.masterSha) { "master 已发生变化，请先刷新生产基线" }
-        check(git.resolve(root, "refs/tags/${pipeline.productionTag}") == pipeline.productionTagSha) {
+        check(remoteTagCommit(root, pipeline.productionTag) == pipeline.productionTagSha) {
             "生产 Tag 已发生变化，请先刷新生产基线"
         }
         temporaryWorktree(root, repository, "production", remoteMaster) { worktree, sourceBranch ->
@@ -68,7 +72,7 @@ class GitProductionTagGateway(
                 )
             }
             val expectedCommit = git.resolve(worktree, "HEAD")
-            pushBranchOrRequest(root, repository, sourceBranch, "master", expectedCommit)
+            pushBranchOrRequest(root, repository, sourceBranch, "master", remoteMaster, expectedCommit)
         }
     }
 
@@ -77,17 +81,26 @@ class GitProductionTagGateway(
         branch: String,
         masterSha: String,
     ): String = locked(repository) { root ->
+        requireValidBranch(root, branch, "Release")
         git.fetch(root)
         val remoteMaster = git.resolve(root, "refs/remotes/origin/master")
         check(remoteMaster == masterSha) { "master 已发生变化，请先刷新生产基线" }
         check(remoteBranchCommit(root, branch) == null) { "远端 Release 分支已存在：$branch" }
-        temporaryWorktree(root, repository, "release", masterSha) { worktree, _ ->
-            val result = git.run(worktree, "push", "origin", "HEAD:refs/heads/$branch", check = false)
-            if (!result.succeeded) throw GitException("创建远端 Release 分支失败：$branch", result)
-            val remoteSha = remoteBranchCommit(root, branch)
-            check(remoteSha == masterSha) { "Release 分支推送后校验失败：$branch" }
-            remoteSha
+        val result = git.run(
+            root,
+            "push",
+            "--force-with-lease=refs/heads/$branch:",
+            "origin",
+            "$masterSha:refs/heads/$branch",
+            check = false,
+        )
+        if (!result.succeeded) {
+            if (remoteBranchCommit(root, branch) != null) error("远端 Release 分支已存在：$branch")
+            throw GitException("创建远端 Release 分支失败：$branch", result)
         }
+        val remoteSha = remoteBranchCommit(root, branch)
+        check(remoteSha == masterSha) { "Release 分支推送后校验失败：$branch" }
+        remoteSha
     }
 
     override fun resolveFeatures(
@@ -96,9 +109,8 @@ class GitProductionTagGateway(
     ): List<ProductionFeatureSelection> = locked(repository) { root ->
         git.fetch(root)
         branches.map { branch ->
-            require(branch.isNotBlank() && !branch.startsWith("-") && !branch.contains("..")) {
-                "Feature 分支名不合法：$branch"
-            }
+            require(branch.startsWith("feature/")) { "Feature 分支必须以 feature/ 开头：$branch" }
+            requireValidBranch(root, branch, "Feature")
             val sha = remoteBranchCommit(root, branch) ?: error("远端 Feature 分支不存在：$branch")
             ProductionFeatureSelection(branch, sha)
         }
@@ -109,53 +121,36 @@ class GitProductionTagGateway(
         pipeline: ProductionTagPipeline,
         features: List<ProductionFeatureSelection>,
     ): ProductionFeatureWrite = locked(repository) { root ->
-        git.fetch(root)
         val releaseSha = pipeline.releaseSha ?: error("Release 尚未创建")
-        val currentReleaseSha = remoteBranchCommit(root, pipeline.releaseBranch)
-            ?: error("远端 Release 分支不存在：${pipeline.releaseBranch}")
-        check(currentReleaseSha == releaseSha) { "Release 分支已发生变化，请刷新后重试" }
-        features.forEach { feature ->
-            check(remoteBranchCommit(root, feature.branch) == feature.sha) {
-                "Feature 分支已发生变化，请重新选择：${feature.branch}"
-            }
+        revalidateFeatureHeads(root, pipeline, features, releaseSha)
+        val preflight = temporaryWorktree(root, repository, "features-check", releaseSha) { worktree, _ ->
+            mergeFeatureBatch(worktree, pipeline.releaseBranch, features)
         }
-        temporaryWorktree(root, repository, "features", releaseSha) { worktree, sourceBranch ->
-            val merges = mutableListOf<ProductionFeatureMergeRecord>()
-            for (feature in features) {
-                val result = git.run(
-                    worktree,
-                    "merge",
-                    "--no-ff",
-                    feature.sha,
-                    "-m",
-                    "Merge ${feature.branch} into ${pipeline.releaseBranch}",
-                    check = false,
-                )
-                if (!result.succeeded) {
-                    return@temporaryWorktree ProductionFeatureWrite.Conflict(
-                        listOf(ProductionConflict(feature.branch, conflictFiles(worktree), feature.sha)),
-                    )
-                }
-                merges += ProductionFeatureMergeRecord(
-                    branch = feature.branch,
-                    sourceSha = feature.sha,
-                    mergeCommit = git.resolve(worktree, "HEAD"),
-                    completedAt = now(),
-                )
-            }
+        preflight.conflict?.let { return@locked ProductionFeatureWrite.Conflict(listOf(it)) }
+
+        // The conflict simulation never authorizes a write by itself. Refresh every
+        // remote head and repeat the merge from the exact validated Release commit.
+        revalidateFeatureHeads(root, pipeline, features, releaseSha)
+        temporaryWorktree(root, repository, "features-write", releaseSha) { worktree, sourceBranch ->
+            val write = mergeFeatureBatch(worktree, pipeline.releaseBranch, features)
+            write.conflict?.let { return@temporaryWorktree ProductionFeatureWrite.Conflict(listOf(it)) }
             val expectedCommit = git.resolve(worktree, "HEAD")
             val push = git.run(
                 worktree,
                 "push",
+                "--force-with-lease=refs/heads/${pipeline.releaseBranch}:$releaseSha",
                 "origin",
                 "HEAD:refs/heads/${pipeline.releaseBranch}",
                 check = false,
             )
             if (push.succeeded) {
-                ProductionFeatureWrite.Direct(expectedCommit, merges)
+                check(remoteBranchCommit(root, pipeline.releaseBranch) == expectedCommit) {
+                    "Release 分支推送后远端校验失败：${pipeline.releaseBranch}"
+                }
+                ProductionFeatureWrite.Direct(expectedCommit, write.merges)
             } else if (isPermissionFailure(push)) {
                 val request = pushSourceBranch(root, repository, sourceBranch, pipeline.releaseBranch, expectedCommit)
-                ProductionFeatureWrite.AwaitingRequest(expectedCommit, merges, request)
+                ProductionFeatureWrite.AwaitingRequest(expectedCommit, write.merges, request)
             } else {
                 throw GitException("Feature 合并结果推送失败：${pipeline.releaseBranch}", push)
             }
@@ -166,31 +161,35 @@ class GitProductionTagGateway(
         repository: RepositoryConfig,
         baseVersion: String,
     ): List<ProductionRemoteTag> = locked(repository) { root ->
-        git.fetchTags(root)
-        remoteTags(root)
-            .filter { it == baseVersion || it.matches(Regex("${Regex.escape(baseVersion)}\\.\\d+")) }
-            .map { tag -> ProductionRemoteTag(tag, git.resolve(root, "refs/tags/$tag")) }
+        remoteTagRefs(root)
+            .filterKeys { it == baseVersion || it.matches(Regex("${Regex.escape(baseVersion)}\\.\\d+")) }
+            .map { (tag, sha) -> ProductionRemoteTag(tag, sha) }
     }
 
     override fun pushTag(
         repository: RepositoryConfig,
+        releaseBranch: String,
         tag: String,
         releaseSha: String,
     ): ProductionTagPush = locked(repository) { root ->
         git.fetch(root)
-        git.fetchTags(root)
-        val remoteExisting = remoteTagCommit(root, tag)
-        if (remoteExisting != null) return@locked ProductionTagPush.AlreadyExists(remoteExisting)
-
-        val localRef = "refs/tags/$tag"
-        val createdLocally = !git.refExists(root, localRef)
-        if (!createdLocally && git.resolve(root, localRef) != releaseSha) {
-            return@locked ProductionTagPush.Failed("本地同名 Tag 指向了其他提交：$tag")
+        val remoteReleaseSha = remoteBranchCommit(root, releaseBranch)
+            ?: return@locked ProductionTagPush.Failed("远端 Release 分支不存在：$releaseBranch")
+        if (remoteReleaseSha != releaseSha) {
+            return@locked ProductionTagPush.Failed("Release 分支已发生变化，请刷新后重试")
         }
-        if (createdLocally) git.run(root, "tag", tag, releaseSha)
-        val push = git.run(root, "push", "origin", "refs/tags/$tag", check = false)
+        val remoteExisting = remoteTagCommit(root, tag)
+        if (remoteExisting != null) {
+            return@locked if (remoteExisting == releaseSha) {
+                ProductionTagPush.AlreadyExists(remoteExisting)
+            } else {
+                ProductionTagPush.Failed("远端同名 Tag 已指向其他提交：$tag")
+            }
+        }
+        // Push the commit object directly so a stale local annotated tag can never
+        // be reused as the formal lightweight production tag.
+        val push = git.run(root, "push", "origin", "$releaseSha:refs/tags/$tag", check = false)
         if (!push.succeeded) {
-            if (createdLocally) git.run(root, "tag", "-d", tag, check = false)
             return@locked if (isPermissionFailure(push)) {
                 ProductionTagPush.NoPermission("无推送权限")
             } else {
@@ -198,7 +197,7 @@ class GitProductionTagGateway(
             }
         }
         val remoteSha = remoteTagCommit(root, tag)
-        if (remoteSha == null) ProductionTagPush.Failed("Tag 推送后远端校验失败：$tag")
+        if (remoteSha != releaseSha) ProductionTagPush.Failed("Tag 推送后远端校验失败：$tag")
         else ProductionTagPush.Pushed(remoteSha)
     }
 
@@ -217,10 +216,21 @@ class GitProductionTagGateway(
         repository: RepositoryConfig,
         sourceBranch: String,
         targetBranch: String,
+        targetShaBeforeWrite: String,
         expectedCommit: String,
     ): ProductionBranchWrite {
-        val direct = git.run(root, "push", "origin", "$expectedCommit:refs/heads/$targetBranch", check = false)
+        val direct = git.run(
+            root,
+            "push",
+            "--force-with-lease=refs/heads/$targetBranch:$targetShaBeforeWrite",
+            "origin",
+            "$expectedCommit:refs/heads/$targetBranch",
+            check = false,
+        )
         return if (direct.succeeded) {
+            check(remoteBranchCommit(root, targetBranch) == expectedCommit) {
+                "生产基线推送后远端校验失败：$targetBranch"
+            }
             ProductionBranchWrite.Direct(expectedCommit)
         } else if (isPermissionFailure(direct)) {
             ProductionBranchWrite.AwaitingRequest(
@@ -240,7 +250,8 @@ class GitProductionTagGateway(
     ): ProductionMergeRequest {
         val push = git.run(root, "push", "origin", "$expectedCommit:refs/heads/$sourceBranch", check = false)
         if (!push.succeeded) throw GitException("无法推送用于合并请求的源分支：$sourceBranch", push)
-        val origin = repository.originUrl ?: git.remoteUrl(root) ?: error("仓库未配置 origin 地址")
+        check(remoteBranchCommit(root, sourceBranch) == expectedCommit) { "合并请求源分支推送后校验失败：$sourceBranch" }
+        val origin = repository.originUrl ?: error("仓库未配置 origin 地址")
         val link = MergeRequestLinkBuilder.build(origin, sourceBranch, targetBranch)
             ?: error("当前代码托管平台无法自动生成合并请求链接")
         return ProductionMergeRequest(
@@ -256,22 +267,19 @@ class GitProductionTagGateway(
         git.run(worktree, "diff", "--name-only", "--diff-filter=U", check = false)
             .stdout.lineSequence().map(String::trim).filter(String::isNotBlank).toList()
 
-    private fun remoteTags(root: Path): List<String> =
-        git.readOnly(root, "ls-remote", "--tags", "--refs", "origin")
-            .stdout.lineSequence()
-            .mapNotNull { it.substringAfter("refs/tags/", "").ifBlank { null } }
-            .distinct()
-            .toList()
+    private fun remoteTags(root: Path): List<String> = remoteTagRefs(root).keys.toList()
 
-    private fun remoteBranchCommit(root: Path, branch: String): String? =
-        git.readOnly(root, "ls-remote", "--heads", "origin", "refs/heads/$branch", check = false)
-            .takeIf { it.succeeded }
-            ?.stdout
-            ?.lineSequence()
-            ?.firstOrNull()
-            ?.substringBefore('\t')
-            ?.trim()
-            ?.ifBlank { null }
+    private fun remoteBranchCommit(root: Path, branch: String): String? {
+        val expectedRef = "refs/heads/$branch"
+        val matches = git.readOnly(root, "ls-remote", "--heads", "origin", expectedRef)
+            .stdout.lineSequence()
+            .filter(String::isNotBlank)
+            .map { line -> line.substringBefore('\t').trim() to line.substringAfter('\t', "").trim() }
+            .filter { (_, ref) -> ref == expectedRef }
+            .toList()
+        check(matches.size <= 1) { "远端分支解析结果不唯一：$branch" }
+        return matches.singleOrNull()?.first?.ifBlank { null }
+    }
 
     private fun remoteTagCommit(root: Path, tag: String): String? {
         val result = git.readOnly(
@@ -281,12 +289,86 @@ class GitProductionTagGateway(
             "origin",
             "refs/tags/$tag",
             "refs/tags/$tag^{}",
-            check = false,
+            check = true,
         )
-        if (!result.succeeded) return null
         val lines = result.stdout.lineSequence().filter(String::isNotBlank).toList()
         val peeled = lines.firstOrNull { it.endsWith("refs/tags/$tag^{}") }
         return (peeled ?: lines.firstOrNull())?.substringBefore('\t')?.trim()?.ifBlank { null }
+    }
+
+    private fun remoteTagRefs(root: Path): Map<String, String> {
+        val result = git.readOnly(root, "ls-remote", "--tags", "origin")
+        val direct = linkedMapOf<String, String>()
+        val peeled = linkedMapOf<String, String>()
+        result.stdout.lineSequence().filter(String::isNotBlank).forEach { line ->
+            val sha = line.substringBefore('\t').trim()
+            val ref = line.substringAfter('\t', "").trim()
+            if (!ref.startsWith("refs/tags/")) return@forEach
+            val raw = ref.removePrefix("refs/tags/")
+            if (raw.endsWith("^{}")) peeled[raw.removeSuffix("^{}")] = sha else direct[raw] = sha
+        }
+        return direct.mapValues { (name, sha) -> peeled[name] ?: sha }
+    }
+
+    private fun revalidateFeatureHeads(
+        root: Path,
+        pipeline: ProductionTagPipeline,
+        features: List<ProductionFeatureSelection>,
+        releaseSha: String,
+    ) {
+        git.fetch(root)
+        val currentReleaseSha = remoteBranchCommit(root, pipeline.releaseBranch)
+            ?: error("远端 Release 分支不存在：${pipeline.releaseBranch}")
+        check(currentReleaseSha == releaseSha) { "Release 分支已发生变化，请刷新后重试" }
+        features.forEach { feature ->
+            require(feature.branch.startsWith("feature/")) { "Feature 分支必须以 feature/ 开头：${feature.branch}" }
+            requireValidBranch(root, feature.branch, "Feature")
+            check(remoteBranchCommit(root, feature.branch) == feature.sha) {
+                "Feature 分支已发生变化，请重新选择：${feature.branch}"
+            }
+        }
+    }
+
+    private data class FeatureMergeAttempt(
+        val merges: List<ProductionFeatureMergeRecord>,
+        val conflict: ProductionConflict? = null,
+    )
+
+    private fun mergeFeatureBatch(
+        worktree: Path,
+        releaseBranch: String,
+        features: List<ProductionFeatureSelection>,
+    ): FeatureMergeAttempt {
+        val merges = mutableListOf<ProductionFeatureMergeRecord>()
+        for (feature in features) {
+            val result = git.run(
+                worktree,
+                "merge",
+                "--no-ff",
+                feature.sha,
+                "-m",
+                "Merge ${feature.branch} into $releaseBranch",
+                check = false,
+            )
+            if (!result.succeeded) {
+                return FeatureMergeAttempt(
+                    emptyList(),
+                    ProductionConflict(feature.branch, conflictFiles(worktree), feature.sha),
+                )
+            }
+            merges += ProductionFeatureMergeRecord(
+                branch = feature.branch,
+                sourceSha = feature.sha,
+                mergeCommit = git.resolve(worktree, "HEAD"),
+                completedAt = now(),
+            )
+        }
+        return FeatureMergeAttempt(merges)
+    }
+
+    private fun requireValidBranch(root: Path, branch: String, kind: String) {
+        val result = git.readOnly(root, "check-ref-format", "--branch", branch, check = false)
+        require(result.succeeded && result.stdout.trim() == branch) { "$kind 分支名不合法：$branch" }
     }
 
     private fun <T> temporaryWorktree(
@@ -314,8 +396,30 @@ class GitProductionTagGateway(
 
     private fun <T> locked(repository: RepositoryConfig, block: (Path) -> T): T {
         val root = Path(repository.rootPath).toAbsolutePath().normalize()
-        return locks.withLock(root) { block(root) }
+        val expectedCommon = Path(repository.gitCommonDirectory).toAbsolutePath().normalize()
+        return locks.withLock(expectedCommon) {
+            validateRepositoryIdentity(repository, root, expectedCommon)
+            block(root)
+        }
     }
+
+    private fun validateRepositoryIdentity(repository: RepositoryConfig, root: Path, expectedCommon: Path) {
+        require(Files.isDirectory(root)) { "仓库路径不存在：$root" }
+        check(git.topLevel(root) == root) { "仓库根目录已发生变化：$root" }
+        check(git.commonDirectory(root) == expectedCommon) { "仓库 git-common-dir 已发生变化：$root" }
+        val expectedOrigin = repository.originUrl?.takeIf(String::isNotBlank)
+            ?: error("生产 Tag 服务必须配置 origin 地址：${repository.name}")
+        val actualOrigin = git.remoteUrl(root) ?: error("仓库缺少 origin：${repository.name}")
+        check(normalizeOrigin(actualOrigin) == normalizeOrigin(expectedOrigin)) {
+            "仓库 origin 已发生变化，请重新扫描服务：${repository.name}"
+        }
+    }
+
+    private fun normalizeOrigin(value: String): String = value.trim()
+        .replace('\\', '/')
+        .removeSuffix("/")
+        .removeSuffix(".git")
+        .lowercase()
 
     private fun isPermissionFailure(result: CommandResult): Boolean {
         val output = "${result.stderr}\n${result.stdout}".lowercase()
@@ -324,7 +428,6 @@ class GitProductionTagGateway(
             "not allowed",
             "not permitted",
             "protected branch",
-            "pre-receive hook declined",
             "access denied",
             "http 403",
             "error: 403",

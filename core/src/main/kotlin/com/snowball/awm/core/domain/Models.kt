@@ -236,6 +236,8 @@ data class AppConfig(
     val productionTagBuildEnabled: Boolean = true,
     /** Absolute path to the Genbu CLI executable; null means auto-detect. */
     val genbuExecutablePath: String? = null,
+    /** True only when AWM persisted the path found by automatic Genbu detection. */
+    val genbuExecutableAutoDetected: Boolean = false,
     /** Controls only opening the create-task dialog; it never runs at app startup. */
     val meegleAutoLoadRequirementLinks: Boolean = false,
 ) {

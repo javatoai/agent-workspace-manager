@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -53,6 +54,7 @@ import com.snowball.awm.core.ProductionBaselineState
 import com.snowball.awm.core.ProductionFeatureBatchState
 import com.snowball.awm.core.ProductionTagBuildState
 import com.snowball.awm.core.ProductionTagPipeline
+import com.snowball.awm.desktop.GenbuSettingsState
 
 @Composable
 internal fun ProductionTagScreen(controller: DesktopApplication) {
@@ -60,6 +62,12 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
     val state = feature.state
     val repository = controller.config.repositories.firstOrNull { it.id == state.selectedRepositoryId }
     val pipeline = state.pipeline
+    val managedRepositories = controller.config.groups
+        .flatMap { it.services }
+        .filter { it.enabled }
+        .map { it.repositoryId }
+        .distinct()
+        .mapNotNull { id -> controller.config.repositories.firstOrNull { it.id == id } }
     var serviceMenu by remember { mutableStateOf(false) }
     var historyMenu by remember { mutableStateOf(false) }
     var featureMenuIndex by remember { mutableStateOf<Int?>(null) }
@@ -95,7 +103,7 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
                                 Icon(Icons.Outlined.KeyboardArrowDown, null)
                             }
                             DropdownMenu(serviceMenu, onDismissRequest = { serviceMenu = false }) {
-                                controller.config.repositories.forEach { candidate ->
+                                managedRepositories.forEach { candidate ->
                                     DropdownMenuItem(
                                         text = { Text(candidate.name) },
                                         onClick = {
@@ -135,7 +143,8 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
                     if (pipeline == null || pipeline.closed) {
                         Button(
                             onClick = feature::createPipeline,
-                            enabled = repository != null && !controller.busy,
+                            enabled = repository != null && !controller.busy &&
+                                controller.genbuSettingsState is GenbuSettingsState.Loaded,
                         ) {
                             Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
@@ -193,7 +202,7 @@ private fun BaselineCard(controller: DesktopApplication, pipeline: ProductionTag
             MergeRequestActions(controller, request.url)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (pipeline.mergeRequest == null) {
+            if (pipeline.mergeRequest == null && pipeline.releaseSha == null) {
                 OutlinedButton(onClick = feature::refreshBaseline, enabled = !controller.busy) {
                     Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
@@ -285,6 +294,17 @@ private fun FeatureCard(
                 IconButton(onClick = { feature.removeFeatureInput(index) }, enabled = !controller.busy && pipeline.mergeRequest == null) {
                     Icon(Icons.Outlined.Delete, "移除")
                 }
+                IconButton(
+                    onClick = { feature.moveFeatureInput(index, -1) },
+                    enabled = !controller.busy && pipeline.mergeRequest == null && index > 0,
+                ) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
+                IconButton(
+                    onClick = { feature.moveFeatureInput(index, 1) },
+                    enabled = !controller.busy && pipeline.mergeRequest == null && index < state.featureBranches.lastIndex,
+                ) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
+            }
+            pipeline.selectedFeatures.getOrNull(index)?.takeIf { it.branch == value && it.sha.isNotBlank() }?.let { selected ->
+                Text("已固定 SHA：${selected.sha}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

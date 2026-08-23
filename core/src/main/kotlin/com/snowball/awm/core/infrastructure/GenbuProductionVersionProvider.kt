@@ -48,8 +48,13 @@ object GenbuProductionSnapshotParser {
                 restartCount = pod["restart_count"]?.jsonPrimitive?.intOrNull ?: 0,
             )
         }.orEmpty()
+        check(environment.equals("PRD", ignoreCase = true)) { "Genbu 返回的不是 PRD 环境：$environment" }
         check(pods.isNotEmpty()) { "Genbu 未返回生产 Pod" }
         check(pods.all { it.ready && it.phase == "Running" }) { "生产 Pod 未全部处于 Running/Ready" }
+        val restarted = pods.filter { it.restartCount != 0 }
+        check(restarted.isEmpty()) {
+            "生产 Pod restart_count 必须为 0：${restarted.joinToString { "${it.name}=${it.restartCount}" }}"
+        }
         val versions = pods.map(ProductionPodSnapshot::version).filter(String::isNotBlank).distinct()
         check(versions.size == 1) { "生产 Pod 版本不一致：${versions.joinToString()}" }
         return ProductionRuntimeSnapshot(service, environment, versions.single(), pods)

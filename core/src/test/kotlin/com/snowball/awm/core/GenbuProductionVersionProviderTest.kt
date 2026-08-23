@@ -45,5 +45,19 @@ class GenbuProductionVersionProviderTest {
                 """.trimIndent(),
             )
         }
+        assertFailsWith<IllegalStateException> {
+            GenbuProductionSnapshotParser.parse(
+                """{"service":"svc","environment":"PRD","pods":[
+                  {"pod_name":"a","app_version":"1.0.0","restart_count":2,"phase":"Running","ready":true}
+                ]}""",
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            GenbuProductionSnapshotParser.parse(
+                """{"service":"svc","environment":"UAT","pods":[
+                  {"pod_name":"a","app_version":"1.0.0","restart_count":0,"phase":"Running","ready":true}
+                ]}""",
+            )
+        }
     }
 }

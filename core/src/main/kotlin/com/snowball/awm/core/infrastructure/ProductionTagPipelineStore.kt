@@ -20,6 +20,7 @@ class ProductionTagPipelineStore(
     private val json: Json = Json { prettyPrint = true; encodeDefaults = true },
 ) {
     private val lock = ReentrantLock()
+    private val fileLock = paths.locks.resolve("production-tag-pipelines.lock")
 
     fun all(): List<ProductionTagPipeline> = lock.withLock { read().pipelines }
 
@@ -29,11 +30,31 @@ class ProductionTagPipelineStore(
         it.repositoryId == repositoryId && !it.closed
     }
 
-    fun save(pipeline: ProductionTagPipeline): ProductionTagPipeline = lock.withLock {
-        val current = read().pipelines
-        val updated = current.filterNot { it.id == pipeline.id } + pipeline
-        write(ProductionTagPipelineDocument(updated))
-        pipeline
+    fun create(pipeline: ProductionTagPipeline): ProductionTagPipeline = mutate { current ->
+        check(current.none { it.repositoryId == pipeline.repositoryId && !it.closed }) {
+            "该服务已有进行中的生产 Tag 流水线"
+        }
+        check(current.none { it.id == pipeline.id }) { "生产 Tag 流水线 ID 已存在：${pipeline.id}" }
+        val created = pipeline.copy(revision = 1)
+        (current + created) to created
+    }
+
+    fun save(pipeline: ProductionTagPipeline): ProductionTagPipeline = mutate { current ->
+        val persisted = current.firstOrNull { it.id == pipeline.id }
+            ?: error("找不到生产 Tag 流水线：${pipeline.id}")
+        check(persisted.revision == pipeline.revision) {
+            "生产 Tag 流水线已被另一个 AWM 实例更新，请刷新后重试"
+        }
+        val updated = pipeline.copy(revision = pipeline.revision + 1)
+        (current.filterNot { it.id == pipeline.id } + updated) to updated
+    }
+
+    private fun <T> mutate(transform: (List<ProductionTagPipeline>) -> Pair<List<ProductionTagPipeline>, T>): T = lock.withLock {
+        FileLocking.withExclusiveLock(fileLock, "生产 Tag 流水线正在被另一个 AWM 实例更新") {
+            val (pipelines, result) = transform(read().pipelines)
+            write(ProductionTagPipelineDocument(pipelines))
+            result
+        }
     }
 
     private fun read(): ProductionTagPipelineDocument {

@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ProductionFeatureBatchState
+import com.snowball.awm.core.ProductionBaselineChangedException
 import com.snowball.awm.core.ProductionTagExpectation
 import com.snowball.awm.core.ProductionTagPipeline
 import com.snowball.awm.core.ProductionTagService
@@ -30,7 +31,7 @@ class ProductionTagController internal constructor(
 ) {
     var state by mutableStateOf(run {
         val pipelines = service.all()
-        val repositoryId = config().repositories.firstOrNull()?.id
+        val repositoryId = managedRepositories(config()).firstOrNull()?.id
         val pipeline = pipelines.firstOrNull { it.repositoryId == repositoryId && !it.closed }
         ProductionTagUiState(
             pipelines = pipelines,
@@ -77,6 +78,15 @@ class ProductionTagController internal constructor(
     fun removeFeatureInput(index: Int) {
         val updated = state.featureBranches.toMutableList().also { it.removeAt(index) }
         state = state.copy(featureBranches = updated.ifEmpty { listOf("") })
+    }
+
+    fun moveFeatureInput(index: Int, offset: Int) {
+        val target = index + offset
+        if (index !in state.featureBranches.indices || target !in state.featureBranches.indices) return
+        val updated = state.featureBranches.toMutableList()
+        val value = updated.removeAt(index)
+        updated.add(target, value)
+        state = state.copy(featureBranches = updated)
     }
 
     fun createPipeline(): Boolean {
@@ -171,6 +181,7 @@ class ProductionTagController internal constructor(
             applyPipeline(pipeline, expectation)
         },
         onFailure = { error ->
+            if (error is ProductionBaselineChangedException) applyPipeline(error.refreshed, null)
             state = state.copy(
                 inlineError = if (networkFailureLabel && error is ProductionVersionUnavailableException) {
                     "网络异常"
@@ -217,4 +228,11 @@ class ProductionTagController internal constructor(
 
     private inline fun withPipeline(block: (String) -> Boolean): Boolean =
         state.selectedPipelineId?.let(block) ?: false
+
+    private fun managedRepositories(value: AppConfig) = value.groups
+        .flatMap { it.services }
+        .filter { it.enabled }
+        .map { it.repositoryId }
+        .distinct()
+        .mapNotNull { id -> value.repositories.firstOrNull { it.id == id } }
 }

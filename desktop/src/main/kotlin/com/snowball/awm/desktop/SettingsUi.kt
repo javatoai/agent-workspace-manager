@@ -524,6 +524,7 @@ private fun SettingsProductionTagSection(
                 }
                 Text("已检测到（$source）", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
                 SelectionContainer { Text(state.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                Text("最近检测：${state.detectedAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             is GenbuSettingsState.Failed -> Text(state.message, color = MaterialTheme.colorScheme.error)
         }
@@ -534,7 +535,9 @@ private fun SettingsProductionTagSection(
                 Text("重新自动检测")
             }
         }
-        if (controller.genbuSettingsState is GenbuSettingsState.Failed || controller.config.genbuExecutablePath != null) {
+        if (controller.genbuSettingsState is GenbuSettingsState.Failed ||
+            (controller.config.genbuExecutablePath != null && !controller.config.genbuExecutableAutoDetected)
+        ) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text("手动配置", style = MaterialTheme.typography.titleSmall)
             PathField(
