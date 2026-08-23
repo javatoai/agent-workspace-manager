@@ -378,13 +378,10 @@ class ProductionTagService(
         confirmedPipelineRevision: Long,
     ): ProductionTagPipeline = store.withOperationLock(pipelineId) {
         var current = get(pipelineId)
-        requireOpen(current)
-        requireIdle(current)
-        val releaseSha = current.releaseSha ?: error("Release 尚未创建")
-        if (current.revision != confirmedPipelineRevision || releaseSha != confirmedReleaseSha) {
+        val currentReleaseSha = current.releaseSha
+        if (current.revision != confirmedPipelineRevision || currentReleaseSha != confirmedReleaseSha) {
             cancelTagBuild(
                 current.id,
-                repository(config, current.repositoryId),
                 confirmedTag,
                 confirmedReleaseSha,
             ) { latest ->
@@ -392,6 +389,9 @@ class ProductionTagService(
                     "当前 revision=${latest.revision}、Release=${latest.releaseSha ?: "—"}"
             }
         }
+        requireOpen(current)
+        requireIdle(current)
+        val releaseSha = currentReleaseSha
         check(current.featureState == ProductionFeatureBatchState.MERGED) { "Feature 尚未成功合入 Release" }
         val repository = repository(config, current.repositoryId)
         val expectation = ProductionTagVersioning.expectation(
@@ -402,7 +402,6 @@ class ProductionTagService(
         if (expectation !is ProductionTagExpectation.Create || expectation.tag != confirmedTag) {
             cancelTagBuild(
                 current.id,
-                repository,
                 confirmedTag,
                 confirmedReleaseSha,
             ) { "页面预期 Tag 已失效：页面=$confirmedTag；检查结果=${expectation.tag}（${expectation::class.simpleName}）" }
@@ -422,7 +421,7 @@ class ProductionTagService(
                 features = mergedFeatureSelections(current),
             )
         } catch (_: ProductionTagPipelineChangedException) {
-            cancelTagBuild(current.id, repository, confirmedTag, confirmedReleaseSha) { latest ->
+            cancelTagBuild(current.id, confirmedTag, confirmedReleaseSha) { latest ->
                 "流水线在 Tag 操作登记前发生变化：页面 revision=$confirmedPipelineRevision；当前 revision=${latest.revision}"
             }
         }
@@ -508,7 +507,6 @@ class ProductionTagService(
 
     private fun cancelTagBuild(
         pipelineId: String,
-        repository: RepositoryConfig,
         confirmedTag: String,
         confirmedReleaseSha: String,
         reason: (ProductionTagPipeline) -> String,
@@ -523,7 +521,7 @@ class ProductionTagService(
                 startedAt = timestamp,
                 completedAt = timestamp,
                 failureReason = failureReason,
-                remoteUrl = auditRemote(repository),
+                remoteUrl = persistedAuditRemote(current),
             )
             val cancelled = current.copy(buildRecords = current.buildRecords + record)
             cancelled.copy(auditEvents = cancelled.auditEvents + auditEvent(
@@ -535,11 +533,15 @@ class ProductionTagService(
                 completedAt = timestamp,
                 reason = failureReason,
                 features = mergedFeatureSelections(cancelled),
-                repository = repository,
+                repository = null,
             ))
         }
         throw ProductionTagConfirmationChangedException()
     }
+
+    private fun persistedAuditRemote(pipeline: ProductionTagPipeline): String? =
+        pipeline.auditEvents.asReversed().firstNotNullOfOrNull(ProductionAuditEvent::remoteUrl)
+            ?: pipeline.buildRecords.asReversed().firstNotNullOfOrNull(ProductionTagBuildRecord::remoteUrl)
 
     private fun repository(config: AppConfig, id: String): RepositoryConfig {
         val managedRepositoryIds = config.groups
@@ -635,7 +637,7 @@ class ProductionTagService(
         completedAt: String? = null,
         reason: String? = null,
         features: List<ProductionFeatureSelection> = emptyList(),
-        repository: RepositoryConfig,
+        repository: RepositoryConfig?,
     ) = ProductionAuditEvent(
         operationId = operationId,
         action = action,
@@ -649,7 +651,7 @@ class ProductionTagService(
         releaseBranch = pipeline.releaseBranch,
         releaseSha = pipeline.releaseSha,
         features = features,
-        remoteUrl = auditRemote(repository),
+        remoteUrl = repository?.let(::auditRemote) ?: persistedAuditRemote(pipeline),
         sourceBranch = pipeline.activeOperation?.sourceBranch,
         targetRef = when (pipeline.activeOperation?.action) {
             ProductionOperationAction.MERGE_PRODUCTION -> "refs/heads/master"

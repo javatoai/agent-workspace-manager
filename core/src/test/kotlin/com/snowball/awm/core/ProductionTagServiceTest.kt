@@ -406,6 +406,49 @@ class ProductionTagServiceTest {
     }
 
     @Test
+    fun `stale build click after another instance closes the pipeline is audited without a push`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val paths = ApplicationPaths(temporary.resolve("closed-tag-confirmation-home"))
+        val provider = ProductionVersionProvider {
+            ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+        }
+        val git = FakeProductionGitGateway()
+        val first = ProductionTagService(
+            store = ProductionTagPipelineStore(paths),
+            versions = provider,
+            git = git,
+            now = { "now" },
+            id = { "closed-tag-confirmation" },
+        )
+        val pipeline = first.create(config, repository.id)
+        first.createRelease(config, pipeline.id)
+        first.selectFeatures(config, pipeline.id, listOf("feature/a"))
+        first.mergeFeatures(config, pipeline.id)
+        val confirmation = first.tagConfirmation(config, pipeline.id)
+        val second = ProductionTagService(ProductionTagPipelineStore(paths), provider, git, now = { "later" })
+        second.close(pipeline.id)
+
+        assertFailsWith<ProductionTagConfirmationChangedException> {
+            first.buildTag(
+                config,
+                pipeline.id,
+                confirmation.tag,
+                confirmation.releaseSha,
+                confirmation.pipelineRevision,
+            )
+        }
+
+        val cancelled = first.get(pipeline.id)
+        assertTrue(cancelled.closed)
+        assertEquals(0, git.tagPushCalls)
+        assertEquals(ProductionTagBuildState.FAILED, cancelled.buildRecords.single().state)
+        assertTrue(cancelled.buildRecords.single().failureReason.orEmpty().contains("页面确认已失效"))
+        assertEquals(ProductionAuditState.FAILED, cancelled.auditEvents.last().state)
+        assertEquals(ProductionOperationAction.BUILD_TAG.name, cancelled.auditEvents.last().action)
+    }
+
+    @Test
     fun `release permission denial is finalized and shown as no push permission`() {
         val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
         val config = managedConfig(repository)
