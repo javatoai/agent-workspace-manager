@@ -18,6 +18,12 @@ data class ProductionTagConfirmation(
     val tag: String get() = expectation.tag
 }
 
+/** A pipeline and its optional Tag confirmation read from one optimistic snapshot. */
+data class ProductionTagView(
+    val pipeline: ProductionTagPipeline,
+    val confirmation: ProductionTagConfirmation?,
+)
+
 sealed interface ProductionBranchWrite {
     data class Direct(val targetSha: String) : ProductionBranchWrite
     data class AwaitingRequest(val request: ProductionMergeRequest) : ProductionBranchWrite
@@ -376,7 +382,15 @@ class ProductionTagService(
         requireIdle(current)
         val releaseSha = current.releaseSha ?: error("Release 尚未创建")
         if (current.revision != confirmedPipelineRevision || releaseSha != confirmedReleaseSha) {
-            throw ProductionTagConfirmationChangedException()
+            cancelTagBuild(
+                current.id,
+                repository(config, current.repositoryId),
+                confirmedTag,
+                confirmedReleaseSha,
+            ) { latest ->
+                "页面确认已失效：页面 revision=$confirmedPipelineRevision、Release=$confirmedReleaseSha；" +
+                    "当前 revision=${latest.revision}、Release=${latest.releaseSha ?: "—"}"
+            }
         }
         check(current.featureState == ProductionFeatureBatchState.MERGED) { "Feature 尚未成功合入 Release" }
         val repository = repository(config, current.repositoryId)
@@ -386,17 +400,32 @@ class ProductionTagService(
             git.tagsForBase(repository, current.baseVersion),
         )
         if (expectation !is ProductionTagExpectation.Create || expectation.tag != confirmedTag) {
-            throw ProductionTagConfirmationChangedException()
+            cancelTagBuild(
+                current.id,
+                repository,
+                confirmedTag,
+                confirmedReleaseSha,
+            ) { "页面预期 Tag 已失效：页面=$confirmedTag；检查结果=${expectation.tag}（${expectation::class.simpleName}）" }
         }
         val tag = expectation.tag
         val started = now()
-        current = beginOperation(current.copy(buildRecords = current.buildRecords + ProductionTagBuildRecord(
-            tag,
-            releaseSha,
-            ProductionTagBuildState.PREPARING,
-            startedAt = started,
-            remoteUrl = auditRemote(repository),
-        )), repository, ProductionOperationAction.BUILD_TAG, expectedTag = tag, expectedTargetSha = releaseSha)
+        current = try {
+            beginOperation(current.copy(buildRecords = current.buildRecords + ProductionTagBuildRecord(
+                tag,
+                releaseSha,
+                ProductionTagBuildState.PREPARING,
+                startedAt = started,
+                remoteUrl = auditRemote(repository),
+            )), repository, ProductionOperationAction.BUILD_TAG,
+                expectedTag = tag,
+                expectedTargetSha = releaseSha,
+                features = mergedFeatureSelections(current),
+            )
+        } catch (_: ProductionTagPipelineChangedException) {
+            cancelTagBuild(current.id, repository, confirmedTag, confirmedReleaseSha) { latest ->
+                "流水线在 Tag 操作登记前发生变化：页面 revision=$confirmedPipelineRevision；当前 revision=${latest.revision}"
+            }
+        }
         current = save(current.copy(buildRecords = current.buildRecords.dropLast(1) +
             current.buildRecords.last().copy(state = ProductionTagBuildState.PUSHING)))
         val push = try {
@@ -433,16 +462,30 @@ class ProductionTagService(
         )
     }
 
-    fun tagConfirmation(config: AppConfig, pipelineId: String): ProductionTagConfirmation {
-        val current = get(pipelineId)
-        val releaseSha = current.releaseSha ?: error("Release 尚未创建")
-        val expectation = ProductionTagVersioning.expectation(
-            current.baseVersion,
-            releaseSha,
-            git.tagsForBase(repository(config, current.repositoryId), current.baseVersion),
-        )
-        return ProductionTagConfirmation(expectation, releaseSha, current.revision)
+    fun tagView(config: AppConfig, pipelineId: String): ProductionTagView {
+        repeat(3) {
+            val snapshot = get(pipelineId)
+            val confirmation = if (
+                !snapshot.closed && snapshot.releaseSha != null &&
+                snapshot.featureState == ProductionFeatureBatchState.MERGED &&
+                snapshot.activeOperation == null
+            ) {
+                val expectation = ProductionTagVersioning.expectation(
+                    snapshot.baseVersion,
+                    snapshot.releaseSha,
+                    git.tagsForBase(repository(config, snapshot.repositoryId), snapshot.baseVersion),
+                )
+                ProductionTagConfirmation(expectation, snapshot.releaseSha, snapshot.revision)
+            } else null
+            if (get(pipelineId).revision == snapshot.revision) {
+                return ProductionTagView(snapshot, confirmation)
+            }
+        }
+        throw ProductionTagConfirmationChangedException()
     }
+
+    fun tagConfirmation(config: AppConfig, pipelineId: String): ProductionTagConfirmation =
+        tagView(config, pipelineId).confirmation ?: error("当前流水线尚不能构建生产 Tag")
 
     fun expectedTag(config: AppConfig, pipelineId: String): ProductionTagExpectation =
         tagConfirmation(config, pipelineId).expectation
@@ -459,6 +502,44 @@ class ProductionTagService(
 
     private fun auditRemote(repository: RepositoryConfig): String? =
         GitAuditSanitizer.remoteDisplay(repository.originUrl)
+
+    private fun mergedFeatureSelections(pipeline: ProductionTagPipeline): List<ProductionFeatureSelection> =
+        pipeline.mergedFeatures.map { ProductionFeatureSelection(it.branch, it.sourceSha) }
+
+    private fun cancelTagBuild(
+        pipelineId: String,
+        repository: RepositoryConfig,
+        confirmedTag: String,
+        confirmedReleaseSha: String,
+        reason: (ProductionTagPipeline) -> String,
+    ): Nothing {
+        val timestamp = now()
+        store.updateLatest(pipelineId) { current ->
+            val failureReason = reason(current)
+            val record = ProductionTagBuildRecord(
+                expectedTag = confirmedTag.take(160),
+                releaseSha = confirmedReleaseSha.take(160),
+                state = ProductionTagBuildState.FAILED,
+                startedAt = timestamp,
+                completedAt = timestamp,
+                failureReason = failureReason,
+                remoteUrl = auditRemote(repository),
+            )
+            val cancelled = current.copy(buildRecords = current.buildRecords + record)
+            cancelled.copy(auditEvents = cancelled.auditEvents + auditEvent(
+                pipeline = cancelled,
+                operationId = id(),
+                action = ProductionOperationAction.BUILD_TAG.name,
+                state = ProductionAuditState.FAILED,
+                startedAt = timestamp,
+                completedAt = timestamp,
+                reason = failureReason,
+                features = mergedFeatureSelections(cancelled),
+                repository = repository,
+            ))
+        }
+        throw ProductionTagConfirmationChangedException()
+    }
 
     private fun repository(config: AppConfig, id: String): RepositoryConfig {
         val managedRepositoryIds = config.groups
@@ -529,6 +610,7 @@ class ProductionTagService(
                     releaseSha = pipeline.releaseSha,
                     masterSha = pipeline.masterSha,
                     mergeRequestUrl = mergeRequestUrl,
+                    mergeRequestPlatform = pipeline.mergeRequest?.platform,
                 ) else event
             },
         ))

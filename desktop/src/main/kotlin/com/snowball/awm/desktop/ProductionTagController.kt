@@ -10,6 +10,7 @@ import com.snowball.awm.core.ProductionTagExpectation
 import com.snowball.awm.core.ProductionTagConfirmation
 import com.snowball.awm.core.ProductionTagPipeline
 import com.snowball.awm.core.ProductionTagService
+import com.snowball.awm.core.ProductionTagView
 import com.snowball.awm.core.ProductionVersionUnavailableException
 
 data class ProductionTagUiState(
@@ -194,18 +195,19 @@ class ProductionTagController internal constructor(
         block = {
             val pipelines = service.all()
             val pipeline = pipelines.firstOrNull { it.id == state.selectedPipelineId }
-            val expectation = if (pipeline?.releaseSha != null &&
-                pipeline.featureState == ProductionFeatureBatchState.MERGED
-            ) service.tagConfirmation(config(), pipeline.id) else null
-            pipelines to expectation
+            val view = pipeline?.let { service.tagView(config(), it.id) }
+            val coherentPipelines = view?.let { current ->
+                pipelines.filterNot { it.id == current.pipeline.id } + current.pipeline
+            } ?: pipelines
+            coherentPipelines to view
         },
-        onSuccess = { (pipelines, expectation) ->
+        onSuccess = { (pipelines, view) ->
             state = state.copy(
                 pipelines = pipelines,
-                expectedTag = expectation?.tag,
-                expectedTagAlreadyBuilt = expectation?.expectation is ProductionTagExpectation.AlreadyBuilt,
-                confirmedReleaseSha = expectation?.releaseSha,
-                confirmedPipelineRevision = expectation?.pipelineRevision,
+                expectedTag = view?.confirmation?.tag,
+                expectedTagAlreadyBuilt = view?.confirmation?.expectation is ProductionTagExpectation.AlreadyBuilt,
+                confirmedReleaseSha = view?.confirmation?.releaseSha,
+                confirmedPipelineRevision = view?.confirmation?.pipelineRevision,
                 inlineError = null,
             )
         },
@@ -224,15 +226,11 @@ class ProductionTagController internal constructor(
         success,
         block = {
             val pipeline = block()
-            val expectation = if (resolveExpectedTag && pipeline.releaseSha != null &&
-                pipeline.featureState == ProductionFeatureBatchState.MERGED
-            ) {
-                service.tagConfirmation(config(), pipeline.id)
-            } else null
-            pipeline to expectation
+            if (resolveExpectedTag) service.tagView(config(), pipeline.id)
+            else ProductionTagView(pipeline, null)
         },
-        onSuccess = { (pipeline, expectation) ->
-            applyPipeline(pipeline, expectation)
+        onSuccess = { view ->
+            applyPipeline(view.pipeline, view.confirmation)
         },
         onFailure = { error ->
             if (error is ProductionBaselineChangedException) applyPipeline(error.refreshed, null)
@@ -275,15 +273,9 @@ class ProductionTagController internal constructor(
         operations.run(
             "正在计算预期生产 Tag…",
             "预期生产 Tag 已更新",
-            block = { service.tagConfirmation(config(), pipeline.id) },
-            onSuccess = {
-                state = state.copy(
-                    expectedTag = it.tag,
-                    expectedTagAlreadyBuilt = it.expectation is ProductionTagExpectation.AlreadyBuilt,
-                    confirmedReleaseSha = it.releaseSha,
-                    confirmedPipelineRevision = it.pipelineRevision,
-                    inlineError = null,
-                )
+            block = { service.tagView(config(), pipeline.id) },
+            onSuccess = { view ->
+                applyPipeline(view.pipeline, view.confirmation)
             },
             onFailure = { state = state.copy(inlineError = it.message ?: "计算预期 Tag 失败") },
         )

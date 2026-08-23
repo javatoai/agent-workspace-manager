@@ -15,6 +15,9 @@ private data class ProductionTagPipelineDocument(
     val pipelines: List<ProductionTagPipeline> = emptyList(),
 )
 
+class ProductionTagPipelineChangedException :
+    IllegalStateException("生产 Tag 流水线已被另一个 AWM 实例更新，请刷新后重试")
+
 class ProductionTagPipelineStore(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val json: Json = Json { prettyPrint = true; encodeDefaults = true },
@@ -42,11 +45,19 @@ class ProductionTagPipelineStore(
     fun save(pipeline: ProductionTagPipeline): ProductionTagPipeline = mutate { current ->
         val persisted = current.firstOrNull { it.id == pipeline.id }
             ?: error("找不到生产 Tag 流水线：${pipeline.id}")
-        check(persisted.revision == pipeline.revision) {
-            "生产 Tag 流水线已被另一个 AWM 实例更新，请刷新后重试"
-        }
+        if (persisted.revision != pipeline.revision) throw ProductionTagPipelineChangedException()
         val updated = pipeline.copy(revision = pipeline.revision + 1)
         (current.filterNot { it.id == pipeline.id } + updated) to updated
+    }
+
+    /** Applies an append-style transformation to the latest revision under the cross-process file lock. */
+    fun updateLatest(id: String, transform: (ProductionTagPipeline) -> ProductionTagPipeline): ProductionTagPipeline = mutate { current ->
+        val persisted = current.firstOrNull { it.id == id }
+            ?: error("找不到生产 Tag 流水线：$id")
+        val transformed = transform(persisted)
+        check(transformed.id == id) { "生产 Tag 流水线更新不能改变 ID" }
+        val updated = transformed.copy(revision = persisted.revision + 1)
+        (current.filterNot { it.id == id } + updated) to updated
     }
 
     /** Held for the full remote-write/recovery window; the OS releases it after a process crash. */

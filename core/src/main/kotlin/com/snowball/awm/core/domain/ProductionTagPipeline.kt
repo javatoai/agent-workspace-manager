@@ -70,6 +70,7 @@ data class ProductionAuditEvent(
     val features: List<ProductionFeatureSelection> = emptyList(),
     val remoteUrl: String? = null,
     val mergeRequestUrl: String? = null,
+    val mergeRequestPlatform: String? = null,
     val sourceBranch: String? = null,
     val targetRef: String? = null,
     val operator: String = "",

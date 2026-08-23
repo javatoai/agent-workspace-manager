@@ -121,6 +121,8 @@ class ProductionTagServiceTest {
         val refreshed = service.refreshMergeRequest(config, created.id)
 
         assertEquals(ProductionBaselineState.AWAITING_MERGE_REQUEST, awaiting.baselineState)
+        assertEquals("GITLAB", awaiting.auditEvents.last().mergeRequestPlatform)
+        assertEquals("https://gitlab.example/mr", awaiting.auditEvents.last().mergeRequestUrl)
         assertEquals(ProductionBaselineState.ALREADY_CONTAINED, refreshed.baselineState)
         assertEquals("master-with-later-commits", refreshed.masterSha)
     }
@@ -353,7 +355,54 @@ class ProductionTagServiceTest {
         }
 
         assertEquals(0, git.tagPushCalls)
-        assertTrue(service.get(pipeline.id).buildRecords.isEmpty())
+        val cancelled = service.get(pipeline.id)
+        assertEquals(ProductionTagBuildState.FAILED, cancelled.buildRecords.single().state)
+        assertEquals(confirmation.tag, cancelled.buildRecords.single().expectedTag)
+        assertEquals(confirmation.releaseSha, cancelled.buildRecords.single().releaseSha)
+        assertTrue(cancelled.buildRecords.single().failureReason.orEmpty().contains("页面预期 Tag 已失效"))
+        assertEquals(ProductionAuditState.FAILED, cancelled.auditEvents.last().state)
+        assertEquals(ProductionOperationAction.BUILD_TAG.name, cancelled.auditEvents.last().action)
+    }
+
+    @Test
+    fun `tag view retries when another instance updates the release during remote tag lookup`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val paths = ApplicationPaths(temporary.resolve("tag-view-snapshot-home"))
+        val store = ProductionTagPipelineStore(paths)
+        val git = FakeProductionGitGateway()
+        val service = ProductionTagService(
+            store = store,
+            versions = ProductionVersionProvider {
+                ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+            },
+            git = git,
+            now = { "now" },
+            id = { "tag-view-snapshot" },
+        )
+        val pipeline = service.create(config, repository.id)
+        service.createRelease(config, pipeline.id)
+        service.selectFeatures(config, pipeline.id, listOf("feature/a"))
+        service.mergeFeatures(config, pipeline.id)
+        git.beforeTagsForBase = {
+            val latest = store.get(pipeline.id)!!
+            store.save(latest.copy(
+                releaseSha = "release-after-external-feature",
+                mergedFeatures = latest.mergedFeatures + ProductionFeatureMergeRecord(
+                    "feature/b",
+                    "sha-b",
+                    "merge-sha-b",
+                    "later",
+                ),
+            ))
+        }
+
+        val view = service.tagView(config, pipeline.id)
+
+        assertEquals("release-after-external-feature", view.pipeline.releaseSha)
+        assertEquals(view.pipeline.releaseSha, view.confirmation?.releaseSha)
+        assertEquals(view.pipeline.revision, view.confirmation?.pipelineRevision)
+        assertEquals(listOf("feature/a", "feature/b"), view.pipeline.mergedFeatures.map { it.branch })
     }
 
     @Test
@@ -583,6 +632,7 @@ class ProductionTagServiceTest {
         var productionMergeCalls: Int = 0
         var tagPushCalls: Int = 0
         var formalTagValues: List<String> = listOf("3.11.70", "3.11.71.beta-1")
+        var beforeTagsForBase: (() -> Unit)? = null
         private var remoteReleaseSha: String? = unadoptedReleaseSha
         private val remoteTags = mutableListOf<ProductionRemoteTag>()
         private var currentBaselineState: ProductionBaselineState = baselineState
@@ -673,7 +723,10 @@ class ProductionTagServiceTest {
             )
         }
 
-        override fun tagsForBase(repository: RepositoryConfig, baseVersion: String) = remoteTags.toList()
+        override fun tagsForBase(repository: RepositoryConfig, baseVersion: String): List<ProductionRemoteTag> {
+            beforeTagsForBase?.also { beforeTagsForBase = null }?.invoke()
+            return remoteTags.toList()
+        }
 
         override fun recoverFeatureWrite(
             repository: RepositoryConfig,

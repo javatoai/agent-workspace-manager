@@ -84,7 +84,7 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
         repository?.let { controller.loadRemoteBranches(it.id) }
     }
 
-    LaunchedEffect(pipeline?.id, pipeline?.releaseSha, pipeline?.featureState, state.featureBranches) {
+    LaunchedEffect(pipeline?.id, pipeline?.releaseSha, pipeline?.featureState, state.featureBranches, state.expectedTag) {
         if (pipeline?.releaseSha != null && pipeline.featureState == ProductionFeatureBatchState.MERGED &&
             state.featureBranches.all { it.isBlank() } && state.expectedTag == null
         ) {
@@ -422,7 +422,12 @@ private fun FeatureCard(
                 fontWeight = FontWeight.SemiBold,
             )
             pipeline.mergedFeatures.forEach { merge ->
-                Text("✓ ${merge.branch}  ${merge.sourceSha.take(10)}", style = MaterialTheme.typography.bodySmall)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("✓ ${merge.branch}", fontWeight = FontWeight.SemiBold)
+                    KeyValue("Feature SHA", merge.sourceSha)
+                    KeyValue("Merge Commit", merge.mergeCommit)
+                    KeyValue("完成时间", merge.completedAt)
+                }
             }
         }
     }
@@ -456,16 +461,14 @@ private fun BuildRecordsCard(pipeline: ProductionTagPipeline) {
                 Column(Modifier.weight(1f)) {
                     Text("预期 Tag：${record.expectedTag}", fontWeight = FontWeight.SemiBold)
                     Text("实际 Tag：${record.actualTag ?: "—"}")
-                    Text(record.releaseSha, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                    KeyValue("Release SHA", record.releaseSha)
                     record.remoteTagSha?.let {
-                        Text("远端 SHA：$it", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                        KeyValue("远端 Tag SHA", it)
                     }
                     record.failureReason?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                    Text(
-                        listOfNotNull(record.completedAt ?: record.startedAt, record.remoteUrl).joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    KeyValue("开始时间", record.startedAt.ifBlank { "—" })
+                    KeyValue("结束时间", record.completedAt ?: "—")
+                    record.remoteUrl?.let { KeyValue("远端", it) }
                 }
                 StatusPill(
                     when (record.state) {
@@ -489,19 +492,34 @@ private fun AuditRecordsCard(pipeline: ProductionTagPipeline) {
         pipeline.auditEvents.asReversed().forEach { event ->
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("${event.action} · ${event.state}", fontWeight = FontWeight.SemiBold)
-                Text(event.operationId, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
-                Text(
-                    listOfNotNull(event.startedAt, event.completedAt, event.remoteUrl).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (event.features.isNotEmpty()) {
-                    Text(event.features.joinToString { "${it.branch}@${it.sha}" }, style = MaterialTheme.typography.bodySmall)
+                KeyValue("操作 ID", event.operationId)
+                KeyValue("开始时间", event.startedAt)
+                KeyValue("结束时间", event.completedAt ?: "—")
+                event.remoteUrl?.let { KeyValue("远端", it) }
+                KeyValue("生产 Tag", event.productionTag)
+                KeyValue("生产 Tag SHA", event.productionTagSha)
+                KeyValue("master SHA", event.masterSha)
+                KeyValue("Release 分支", event.releaseBranch)
+                KeyValue("Release SHA", event.releaseSha ?: "—")
+                if (event.productionService.isNotBlank() || event.productionEnvironment.isNotBlank()) {
+                    KeyValue("生产服务 / 环境", "${event.productionService} / ${event.productionEnvironment}")
                 }
-                if (event.operator.isNotBlank()) Text("操作人：${event.operator}", style = MaterialTheme.typography.bodySmall)
-                if (event.genbuCommand.isNotBlank()) Text("Genbu：${event.genbuCommand}", style = MaterialTheme.typography.bodySmall)
-                event.sourceBranch?.let { Text("源分支：$it", style = MaterialTheme.typography.bodySmall) }
-                event.targetRef?.let { Text("目标：$it", style = MaterialTheme.typography.bodySmall) }
+                if (event.features.isNotEmpty()) {
+                    event.features.forEach { feature -> KeyValue("Feature", "${feature.branch}@${feature.sha}") }
+                }
+                if (event.productionPods.isNotEmpty()) {
+                    KeyValue(
+                        "生产 Pod",
+                        event.productionPods.joinToString("\n") {
+                            "${it.name} · ${it.version} · ${it.phase} · ready=${it.ready} · restart=${it.restartCount}"
+                        },
+                    )
+                }
+                if (event.operator.isNotBlank()) KeyValue("操作人", event.operator)
+                if (event.genbuCommand.isNotBlank()) KeyValue("Genbu", event.genbuCommand)
+                event.sourceBranch?.let { KeyValue("源分支", it) }
+                event.targetRef?.let { KeyValue("目标", it) }
+                event.mergeRequestPlatform?.let { KeyValue("代码平台", it) }
                 event.mergeRequestUrl?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall) } }
                 event.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
