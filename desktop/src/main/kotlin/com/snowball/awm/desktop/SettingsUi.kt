@@ -152,6 +152,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "groups" to "任务组",
         "agents" to "Agent 说明",
         "tools" to "开发工具",
+        "cli" to "命令行",
         "branches" to "分支",
         "git" to "Git",
         "feishu" to "飞书项目",
@@ -201,6 +202,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
 
     LaunchedEffect(selectedSection) {
         if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
+        if (selectedSection == "cli") controller.refreshCliInstallationStatus()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
     }
@@ -333,6 +335,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     saving = saving("tools"),
                     onSaveDevelopmentTools = ::saveDevelopmentTools,
                 )
+            }
+            if (selectedSection == "cli") item {
+                SettingsCliSection(controller)
             }
             if (selectedSection == "branches") item {
                 SettingsBranchesSection(
@@ -555,6 +560,54 @@ private fun SettingsPathsSection(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsCliSection(controller: DesktopApplication) {
+    val status = controller.cliInstallationStatus
+    SettingsCard("AWM CLI", "将绿色包内置的 Agent CLI 安装为当前用户可用的 awm 命令。") {
+        Text("安装状态", style = MaterialTheme.typography.titleSmall)
+        SelectionContainer {
+            Text(status.message, style = MaterialTheme.typography.bodyMedium)
+        }
+        status.commandPath?.let { commandPath ->
+            SelectionContainer {
+                Text(
+                    "命令入口：$commandPath",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (status.supported) {
+            Text(
+                "安装会复制绿色包中的 CLI 与 Java 运行时至当前用户的 LOCALAPPDATA，并将其命令目录加入用户 PATH；不需要管理员权限。完成后请打开新的终端。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = controller::installCli,
+                    enabled = status.bundledPayloadAvailable && !controller.settingsBusy,
+                ) {
+                    Icon(Icons.Outlined.Terminal, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(if (status.installed) "更新 CLI" else "安装 CLI")
+                }
+                OutlinedButton(onClick = controller::refreshCliInstallationStatus, enabled = !controller.settingsBusy) {
+                    Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("刷新状态")
+                }
+            }
+        } else {
+            Text(
+                "macOS/Linux 的绿色包内提供 bin/awm；该一键安装入口目前只适用于 Windows。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1638,6 +1691,7 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "Agent 说明" -> Icons.AutoMirrored.Outlined.Article
     "任务说明模板" -> Icons.Outlined.Edit
     "开发工具" -> Icons.Outlined.Build
+    "AWM CLI" -> Icons.Outlined.Terminal
     "分支" -> Icons.Outlined.AccountTree
     "Git 环境" -> Icons.Outlined.Terminal
     "分支写保护" -> Icons.Outlined.Lock

@@ -1,6 +1,40 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.Sync
 
 val macPackageVersion = providers.gradleProperty("macPackageVersion").orElse("3.0.1")
+val portableCliVersion = layout.buildDirectory.file("generated/portable-cli/VERSION")
+val portableCliVersionText = version.toString()
+
+val writePortableCliVersion = tasks.register<Copy>("writePortableCliVersion") {
+    from(resources.text.fromString("$portableCliVersionText\n")) {
+        rename(".*", "VERSION")
+    }
+    into(portableCliVersion.map { it.asFile.parentFile })
+}
+
+/**
+ * Adds a self-contained CLI payload to the desktop application's resources.
+ *
+ * The launchers deliberately differ from Gradle's normal `installDist`
+ * launchers: in a green package they first use the jpackage runtime that ships
+ * alongside the desktop application, so users do not need a separately
+ * installed JDK.
+ */
+val preparePortableCli = tasks.register<Sync>("preparePortableCli") {
+    dependsOn(":cli:installDist", writePortableCliVersion)
+    from(project(":cli").layout.buildDirectory.dir("install/awm")) {
+        include("lib/**")
+        into("cli")
+    }
+    from(project(":cli").layout.projectDirectory.dir("src/main/portable")) {
+        into("cli")
+    }
+    from(portableCliVersion) {
+        into("cli")
+    }
+    into(layout.buildDirectory.dir("app-resources/common"))
+}
 
 plugins {
     kotlin("jvm")
@@ -41,6 +75,7 @@ compose.desktop {
         mainClass = "com.snowball.awm.desktop.MainKt"
 
         nativeDistributions {
+            appResourcesRootDir.set(layout.buildDirectory.dir("app-resources"))
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Dmg)
             packageName = "Agent Workspace Manager"
             // macOS jpackage rejects versions whose first component is zero.
@@ -65,4 +100,8 @@ compose.desktop {
             }
         }
     }
+}
+
+tasks.matching { it.name == "prepareAppResources" }.configureEach {
+    dependsOn(preparePortableCli)
 }

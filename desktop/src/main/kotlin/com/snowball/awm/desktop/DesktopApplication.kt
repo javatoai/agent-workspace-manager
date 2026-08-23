@@ -263,6 +263,9 @@ class DesktopApplication(
     )
     var recentErrors by mutableStateOf(errorLogReader.latest())
         private set
+    private val cliInstallationService: CliInstallationService = WindowsCliInstallationService()
+    var cliInstallationStatus by mutableStateOf(cliInstallationService.inspect())
+        private set
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
     private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
     private val settingsOperationRunner = OperationRunner(settingsOperationCoordinator, scope, ioDispatcher)
@@ -402,6 +405,17 @@ class DesktopApplication(
     val meegleOperationCancellable: Boolean get() = meegleOperationCoordinator.cancellable
     val meegleOperationError: String? get() = meegleOperationCoordinator.errorMessage
     fun cancelMeegleOperation(): Boolean = meegleOperationRunner.cancel()
+    fun refreshCliInstallationStatus() {
+        cliInstallationStatus = cliInstallationService.inspect()
+    }
+
+    fun installCli(): Boolean = settingsOperationRunner.run(
+        activeMessage = "正在安装 AWM CLI…",
+        successMessage = "AWM CLI 已安装；请打开新的终端运行 awm。",
+        block = cliInstallationService::install,
+        onFailure = { refreshCliInstallationStatus() },
+        onSuccess = { cliInstallationStatus = it },
+    )
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
     val tagResult: TagOperation? get() = deliveryController.state.result
