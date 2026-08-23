@@ -10,6 +10,7 @@ data class ApplicationPaths(
     val logs: Path = home.resolve("logs")
     val backups: Path = home.resolve("backups")
     val diagnostics: Path = home.resolve("diagnostics")
+    val productionTagPipelines: Path = home.resolve("production-tag-pipelines.json")
     val locks: Path = home.resolve("locks")
     val temp: Path = home.resolve("temp")
     val agents: Path = home.resolve("agents")

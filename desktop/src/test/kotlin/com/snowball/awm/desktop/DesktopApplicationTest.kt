@@ -510,6 +510,31 @@ class DesktopApplicationTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `disabling production Tag build hides its page and returns to tasks`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-production-tag-navigation")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            assertTrue(controller.showsProductionTagNavigation)
+            controller.navigation = NavigationItem.PRODUCTION_TAG
+            controller.updateProductionTagSettings(false, "")
+            advanceUntilIdle()
+
+            assertFalse(controller.showsProductionTagNavigation)
+            assertEquals(NavigationItem.TASKS, controller.navigation)
+            assertFalse(store.load().productionTagBuildEnabled)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     private fun task(name: String, updatedAt: String) = TaskManifest(
         folderName = name,
         taskDirectoryName = name,

@@ -232,6 +232,10 @@ data class AppConfig(
     val meegleExecutablePath: String? = null,
     /** Absolute path to the Git executable; null means auto-detect. */
     val gitExecutablePath: String? = null,
+    /** Shows the production Tag build navigation and workflow. */
+    val productionTagBuildEnabled: Boolean = true,
+    /** Absolute path to the Genbu CLI executable; null means auto-detect. */
+    val genbuExecutablePath: String? = null,
     /** Controls only opening the create-task dialog; it never runs at app startup. */
     val meegleAutoLoadRequirementLinks: Boolean = false,
 ) {

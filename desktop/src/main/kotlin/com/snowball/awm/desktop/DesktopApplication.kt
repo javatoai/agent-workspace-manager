@@ -68,6 +68,12 @@ import com.snowball.awm.core.TaskWorkspaceToolDescriptor
 import com.snowball.awm.core.TaskWorkspaceToolRegistry
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.TagNavigationPolicy
+import com.snowball.awm.core.ProductionTagNavigationPolicy
+import com.snowball.awm.core.ConfiguredGenbuExecutable
+import com.snowball.awm.core.GenbuProductionVersionProvider
+import com.snowball.awm.core.GitProductionTagGateway
+import com.snowball.awm.core.ProductionTagPipelineStore
+import com.snowball.awm.core.ProductionTagService
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.WorkspaceToolLaunchService
 import com.snowball.awm.core.WorkspaceGitHealth
@@ -104,6 +110,7 @@ enum class NavigationItem(val title: String, val subtitle: String) {
     ARCHIVED("已归档", "Archived"),
     SERVICES("服务仓库", "Services"),
     TAG("Tag 构建", "Tag Builds"),
+    PRODUCTION_TAG("生产 Tag 构建", "Production Tags"),
     SETTINGS("设置", "Settings"),
 }
 
@@ -155,6 +162,8 @@ class DesktopApplication(
     private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
     private val gitExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val gitExecutable: ConfiguredGitExecutable = ConfiguredGitExecutable(gitExecutablePath::get),
+    private val genbuExecutablePath: AtomicReference<String?> = AtomicReference(null),
+    private val genbuExecutable: ConfiguredGenbuExecutable = ConfiguredGenbuExecutable(genbuExecutablePath::get),
     private val gitClient: GitClient = GitClient(executable = gitExecutable),
     private val bootstrapService: BootstrapService = BootstrapService(git = gitClient),
     private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, git = gitClient, meegleExecutable = meegleExecutable),
@@ -219,6 +228,11 @@ class DesktopApplication(
     private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(meegleExecutable = meegleExecutable),
     private val meegleCliService: MeegleCliService = ProcessMeegleCliService(meegleExecutable = meegleExecutable),
     private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(gitExecutable = gitExecutable),
+    private val productionTagService: ProductionTagService = ProductionTagService(
+        store = ProductionTagPipelineStore(paths),
+        versions = GenbuProductionVersionProvider(genbuExecutable),
+        git = GitProductionTagGateway(paths, gitClient, repositoryLock),
+    ),
     private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
         listOf(CodexWorkspaceToolLauncher(), CursorWorkspaceToolLauncher()),
     ),
@@ -251,6 +265,7 @@ class DesktopApplication(
     private val initialConfig = initial.getOrDefault(AppConfig()).also {
         meegleExecutablePath.set(it.meegleExecutablePath)
         gitExecutablePath.set(it.gitExecutablePath)
+        genbuExecutablePath.set(it.genbuExecutablePath)
     }
     private val initialTasks = scanTasks(initialConfig)
     private var taskScanWarning: String? = initialTasks.warning
@@ -327,6 +342,7 @@ class DesktopApplication(
             meegleCliService = meegleCliService,
             meegleExecutable = meegleExecutable,
             gitExecutable = gitExecutable,
+            genbuExecutable = genbuExecutable,
             localGitInspector = localGitInspector,
             scope = scope,
             ioDispatcher = ioDispatcher,
@@ -366,12 +382,20 @@ class DesktopApplication(
             refreshGitStatus = ::refreshCurrentTaskGitStatus,
         )
     }
+    val productionTagController by lazy {
+        ProductionTagController(
+            config = { config },
+            service = productionTagService,
+            operations = operationRunner,
+        )
+    }
 
     var config: AppConfig
         get() = sessionStore.config
         private set(value) {
             meegleExecutablePath.set(value.meegleExecutablePath)
             gitExecutablePath.set(value.gitExecutablePath)
+            genbuExecutablePath.set(value.genbuExecutablePath)
             sessionStore.config = value
         }
     var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
@@ -421,6 +445,7 @@ class DesktopApplication(
 
     val needsTaskRoot: Boolean get() = config.taskRoot.isNullOrBlank()
     val showsTagNavigation: Boolean get() = TagNavigationPolicy.isVisible(config)
+    val showsProductionTagNavigation: Boolean get() = ProductionTagNavigationPolicy.isVisible(config)
     val globalAgentsPath: String get() = paths.globalAgents.toAbsolutePath().normalize().toString()
     fun groupAgentsPath(groupId: String): String = paths.groupAgents(groupId).toAbsolutePath().normalize().toString()
 
@@ -481,6 +506,13 @@ class DesktopApplication(
 
     fun gitCommandResolution(): Pair<String, GitCommandSource> = settingsController.gitCommandResolution()
 
+    val genbuSettingsState: GenbuSettingsState get() = settingsController.state.genbu
+
+    fun updateProductionTagSettings(
+        enabled: Boolean,
+        rawGenbuPath: String,
+        onFailure: (Throwable) -> Unit = {},
+    ): Boolean = settingsController.updateProductionTagSettings(enabled, rawGenbuPath, onFailure)
 
     fun refreshCurrentTaskGitStatus() = taskController.refreshGitStatus()
 
@@ -547,6 +579,7 @@ class DesktopApplication(
     val localGitSettingsState: LocalGitSettingsState get() = settingsController.state.localGit
     fun settingsSaveState(key: String): SettingsSaveState = settingsController.saveState(key)
     fun refreshLocalGit(force: Boolean = false) = settingsController.refreshLocalGit(force)
+    fun refreshGenbu(force: Boolean = false) = settingsController.refreshGenbu(force)
     fun loadMeegleProjects(force: Boolean = false) = settingsController.loadMeegleProjects(force)
     fun cancelMeegleProjectLoad() = settingsController.cancelMeegleProjectLoad()
     fun refreshMeegleStatus(force: Boolean = false) = settingsController.refreshMeegleStatus(force)
@@ -861,6 +894,9 @@ class DesktopApplication(
         config = updated
         configurationLoadError = null
         if (navigation == NavigationItem.TAG && !TagNavigationPolicy.isVisible(updated)) {
+            navigation = NavigationItem.TASKS
+        }
+        if (navigation == NavigationItem.PRODUCTION_TAG && !ProductionTagNavigationPolicy.isVisible(updated)) {
             navigation = NavigationItem.TASKS
         }
         repositories = updated.repositories.map(RepositoryConfig::toInfo)

@@ -98,6 +98,15 @@ class ConfigurationInteractionPolicyTest {
     }
 
     @Test
+    fun `production tag navigation is enabled by default and follows the global setting`() {
+        val config = AppConfig()
+
+        assertTrue(config.productionTagBuildEnabled)
+        assertTrue(ProductionTagNavigationPolicy.isVisible(config))
+        assertFalse(ProductionTagNavigationPolicy.isVisible(config.copy(productionTagBuildEnabled = false)))
+    }
+
+    @Test
     fun `module display name falls back by module count`() {
         assertEquals("Orders", ModuleDisplayNaming.resolve("", "Orders", "origin/master", 1))
         assertEquals("Orders", ModuleDisplayNaming.resolve("default", "Orders", "origin/master", 1))

@@ -82,6 +82,7 @@ import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ApplicationEventClipboard
 import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.GitCommandSource
+import com.snowball.awm.core.GenbuCommandSource
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DevelopmentToolConfig
 import com.snowball.awm.core.DevelopmentToolType
@@ -120,6 +121,12 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var blockedGitWriteBranches by remember(controller.config.blockedGitWriteBranches) {
         mutableStateOf(controller.config.blockedGitWriteBranches)
     }
+    var productionTagEnabled by remember(controller.config.productionTagBuildEnabled) {
+        mutableStateOf(controller.config.productionTagBuildEnabled)
+    }
+    var genbuPath by remember(controller.config.genbuExecutablePath) {
+        mutableStateOf(controller.config.genbuExecutablePath.orEmpty())
+    }
     val meegleProjects = remember(controller.config.meegleProjects) {
         mutableStateMapOf<Int, MeegleProjectConfig>().apply {
             controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) }
@@ -151,6 +158,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "tools" to "开发工具",
         "branches" to "分支",
         "git" to "Git",
+        "production-tag" to "生产 Tag 构建",
         "feishu" to "飞书项目",
         "logs" to "日志",
     )
@@ -200,6 +208,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
+        if (selectedSection == "production-tag") controller.refreshGenbu()
     }
     DisposableEffect(selectedSection) {
         onDispose { if (selectedSection == "feishu") controller.cancelMeegleProjectLoad() }
@@ -349,6 +358,22 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
                 )
             }
+            if (selectedSection == "production-tag") item {
+                SettingsProductionTagSection(
+                    controller = controller,
+                    enabled = productionTagEnabled,
+                    onEnabledChange = { enabled ->
+                        val previous = productionTagEnabled
+                        productionTagEnabled = enabled
+                        controller.updateProductionTagSettings(enabled, genbuPath) {
+                            productionTagEnabled = previous
+                        }
+                    },
+                    genbuPath = genbuPath,
+                    onGenbuPathChange = { genbuPath = it },
+                    saving = saving("production-tag"),
+                )
+            }
             if (selectedSection == "feishu") item {
                 SettingsFeishuSection(
                     controller = controller,
@@ -457,6 +482,77 @@ private fun SettingsBasicSection(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsProductionTagSection(
+    controller: DesktopApplication,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    genbuPath: String,
+    onGenbuPathChange: (String) -> Unit,
+    saving: Boolean,
+) {
+    SettingsCard("生产 Tag 构建", "控制左侧生产发版入口，并配置生产版本查询命令。") {
+        AutoSaveStatus(controller, "production-tag")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("启用生产 Tag 构建", style = MaterialTheme.typography.titleSmall)
+                Text("默认打开；关闭后隐藏左侧“生产 Tag 构建”栏目。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChange,
+                enabled = !controller.settingsBusy && !saving,
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text("Genbu 自动检测", style = MaterialTheme.typography.titleSmall)
+        when (val state = controller.genbuSettingsState) {
+            GenbuSettingsState.Idle -> Text("尚未检测", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            GenbuSettingsState.Loading -> {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("正在自动检测 Genbu 路径…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            is GenbuSettingsState.Loaded -> {
+                val source = when (state.source) {
+                    GenbuCommandSource.CONFIGURED -> "手动配置"
+                    GenbuCommandSource.PROBED -> "自动检测"
+                    GenbuCommandSource.PATH_FALLBACK -> "PATH"
+                }
+                Text("已检测到（$source）", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
+                SelectionContainer { Text(state.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+            }
+            is GenbuSettingsState.Failed -> Text(state.message, color = MaterialTheme.colorScheme.error)
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { controller.refreshGenbu(force = true) }, enabled = !saving) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("重新自动检测")
+            }
+        }
+        if (controller.genbuSettingsState is GenbuSettingsState.Failed || controller.config.genbuExecutablePath != null) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("手动配置", style = MaterialTheme.typography.titleSmall)
+            PathField(
+                "Genbu 可执行文件",
+                genbuPath,
+                onGenbuPathChange,
+                !controller.pathPickerBusy && !saving,
+            ) {
+                controller.chooseApplication(genbuPath) { onGenbuPathChange(it) }
+            }
+            Button(
+                onClick = {
+                    controller.updateProductionTagSettings(enabled, genbuPath) {
+                        onGenbuPathChange(controller.config.genbuExecutablePath.orEmpty())
+                    }
+                },
+                enabled = genbuPath.isNotBlank() && !saving,
+            ) { Text("保存 Genbu 路径") }
         }
     }
 }
