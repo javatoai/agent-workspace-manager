@@ -3,11 +3,13 @@ package com.snowball.awm.core
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ProductionTagServiceTest {
@@ -446,6 +448,67 @@ class ProductionTagServiceTest {
         assertTrue(cancelled.buildRecords.single().failureReason.orEmpty().contains("页面确认已失效"))
         assertEquals(ProductionAuditState.FAILED, cancelled.auditEvents.last().state)
         assertEquals(ProductionOperationAction.BUILD_TAG.name, cancelled.auditEvents.last().action)
+    }
+
+    @Test
+    fun `concurrent build clicks queue and the stale click is audited after one push`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val paths = ApplicationPaths(temporary.resolve("concurrent-tag-build-home"))
+        val provider = ProductionVersionProvider {
+            ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+        }
+        val firstPushEntered = CountDownLatch(1)
+        val releaseFirstPush = CountDownLatch(1)
+        val secondClickEntered = CountDownLatch(1)
+        val git = FakeProductionGitGateway(onTagPush = {
+            firstPushEntered.countDown()
+            check(releaseFirstPush.await(10, TimeUnit.SECONDS)) { "test did not release the first Tag push" }
+        })
+        val first = ProductionTagService(
+            ProductionTagPipelineStore(paths),
+            provider,
+            git,
+            now = { "now" },
+            id = { "concurrent-tag-build" },
+        )
+        val pipeline = first.create(config, repository.id)
+        first.createRelease(config, pipeline.id)
+        first.selectFeatures(config, pipeline.id, listOf("feature/a"))
+        first.mergeFeatures(config, pipeline.id)
+        val confirmation = first.tagConfirmation(config, pipeline.id)
+        val second = ProductionTagService(ProductionTagPipelineStore(paths), provider, git, now = { "later" })
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val firstBuild = executor.submit<ProductionTagPipeline> {
+                first.buildTag(config, pipeline.id, confirmation.tag, confirmation.releaseSha, confirmation.pipelineRevision)
+            }
+            assertTrue(firstPushEntered.await(5, TimeUnit.SECONDS))
+            val secondBuild = executor.submit<ProductionTagPipeline> {
+                secondClickEntered.countDown()
+                second.buildTag(config, pipeline.id, confirmation.tag, confirmation.releaseSha, confirmation.pipelineRevision)
+            }
+            assertTrue(secondClickEntered.await(5, TimeUnit.SECONDS))
+            Thread.sleep(100)
+            assertFalse(secondBuild.isDone)
+
+            releaseFirstPush.countDown()
+            assertEquals(ProductionTagBuildState.PUSHED, firstBuild.get(5, TimeUnit.SECONDS).buildRecords.last().state)
+            val failure = assertFailsWith<ExecutionException> { secondBuild.get(5, TimeUnit.SECONDS) }
+            assertTrue(failure.cause is ProductionTagConfirmationChangedException)
+
+            val completed = first.get(pipeline.id)
+            assertEquals(1, git.tagPushCalls)
+            assertEquals(
+                listOf(ProductionTagBuildState.PUSHED, ProductionTagBuildState.FAILED),
+                completed.buildRecords.map { it.state },
+            )
+            assertEquals(ProductionAuditState.FAILED, completed.auditEvents.last().state)
+            assertEquals(ProductionOperationAction.BUILD_TAG.name, completed.auditEvents.last().action)
+        } finally {
+            releaseFirstPush.countDown()
+            executor.shutdownNow()
+        }
     }
 
     @Test

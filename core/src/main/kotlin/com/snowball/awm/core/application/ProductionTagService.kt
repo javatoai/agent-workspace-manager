@@ -376,7 +376,7 @@ class ProductionTagService(
         confirmedTag: String,
         confirmedReleaseSha: String,
         confirmedPipelineRevision: Long,
-    ): ProductionTagPipeline = store.withOperationLock(pipelineId) {
+    ): ProductionTagPipeline = store.withQueuedBuildLock(pipelineId) {
         var current = get(pipelineId)
         val currentReleaseSha = current.releaseSha
         if (current.revision != confirmedPipelineRevision || currentReleaseSha != confirmedReleaseSha) {

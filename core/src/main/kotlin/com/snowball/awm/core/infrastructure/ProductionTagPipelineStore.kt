@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.time.Duration
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.io.path.createDirectories
@@ -64,6 +65,18 @@ class ProductionTagPipelineStore(
     fun <T> withOperationLock(pipelineId: String, block: () -> T): T = FileLocking.withExclusiveLock(
         paths.locks.resolve("production-tag-operation-${FileLocking.stableTextHash(pipelineId)}.lock"),
         "该生产 Tag 操作仍在另一个 AWM 实例执行，请稍后重试",
+        block,
+    )
+
+    /** Build clicks queue so every accepted click can be reconciled and audited after the active writer finishes. */
+    fun <T> withQueuedBuildLock(
+        pipelineId: String,
+        timeout: Duration = Duration.ofMinutes(30),
+        block: () -> T,
+    ): T = FileLocking.withExclusiveLockWaiting(
+        paths.locks.resolve("production-tag-operation-${FileLocking.stableTextHash(pipelineId)}.lock"),
+        timeout,
+        "等待另一个生产 Tag 操作完成超时，请刷新流水线后重试",
         block,
     )
 
