@@ -1,0 +1,20 @@
+{
+  "name": "agent-workspace-manager",
+  "interface": {
+    "displayName": "Agent Workspace Manager"
+  },
+  "plugins": [
+    {
+      "name": "awm-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/awm-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
