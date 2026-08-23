@@ -64,7 +64,11 @@ class ProductionTagController internal constructor(
             expectedTagAlreadyBuilt = false,
             inlineError = null,
         )
-        refreshExpectedTagIfReady()
+        if (!pipeline.closed) {
+            runPipeline("正在刷新进行中流水线…", "进行中流水线已刷新", resolveExpectedTag = true) {
+                service.resume(config(), pipeline.id)
+            }
+        }
     }
 
     fun addFeatureInput() {
@@ -103,6 +107,12 @@ class ProductionTagController internal constructor(
         runPipeline("正在刷新生产基线…", "生产基线已刷新") { service.refresh(config(), id) }
     }
 
+    fun resumePipeline(): Boolean = withPipeline { id ->
+        runPipeline("正在对账未完成的生产操作…", "生产流水线对账完成", resolveExpectedTag = true) {
+            service.resume(config(), id)
+        }
+    }
+
     fun mergeProduction(): Boolean = withPipeline { id ->
         runPipeline("正在合并生产 Tag 到 master…", "生产基线处理完成") { service.mergeProduction(config(), id) }
     }
@@ -111,11 +121,18 @@ class ProductionTagController internal constructor(
         runPipeline("正在创建 Release 分支…", "Release 分支已创建") { service.createRelease(config(), id) }
     }
 
-    /** One explicit action resolves the exact remote SHAs, checks conflicts and merges when safe. */
+    fun resolveFeatures(): Boolean = withPipeline { id ->
+        runPipeline("正在读取 Feature SHA…", "Feature SHA 已固定") {
+            service.selectFeatures(config(), id, state.featureBranches)
+        }
+    }
+
+    /** One explicit write action revalidates fixed SHAs, checks conflicts and merges when safe. */
     fun detectAndMergeFeatures(): Boolean = withPipeline { id ->
-        val branches = state.featureBranches
         runPipeline("正在检测并合并 Feature…", "Feature 检测与合并已完成", resolveExpectedTag = true) {
-            service.selectFeatures(config(), id, branches)
+            val selected = service.get(id).selectedFeatures.map { it.branch }
+            val requested = state.featureBranches.map(String::trim).filter(String::isNotBlank)
+            check(selected == requested) { "Feature 清单或顺序已变化，请先读取并确认最新 SHA" }
             service.mergeFeatures(config(), id)
         }
     }
@@ -128,6 +145,7 @@ class ProductionTagController internal constructor(
 
     fun buildTag(): Boolean = withPipeline { id ->
         runPipeline("正在构建并推送生产 Tag…", "生产 Tag 操作完成", resolveExpectedTag = true) {
+            check(state.featureBranches.all { it.isBlank() }) { "仍有待确认或待合并的 Feature，请先完成检测并合并" }
             service.buildTag(config(), id)
         }
     }
@@ -182,6 +200,9 @@ class ProductionTagController internal constructor(
         },
         onFailure = { error ->
             if (error is ProductionBaselineChangedException) applyPipeline(error.refreshed, null)
+            else state.selectedPipelineId?.let { selected ->
+                runCatching { service.get(selected) }.getOrNull()?.let { applyPipeline(it, null) }
+            }
             state = state.copy(
                 inlineError = if (networkFailureLabel && error is ProductionVersionUnavailableException) {
                     "网络异常"
@@ -201,7 +222,9 @@ class ProductionTagController internal constructor(
             pipelines = pipelines.sortedByDescending { it.updatedAt },
             selectedRepositoryId = pipeline.repositoryId,
             selectedPipelineId = pipeline.id,
-            featureBranches = pipeline.selectedFeatures.map { it.branch }.ifEmpty { state.featureBranches },
+            featureBranches = pipeline.selectedFeatures.map { it.branch }.ifEmpty {
+                if (pipeline.featureState == ProductionFeatureBatchState.MERGED) listOf("") else state.featureBranches
+            },
             expectedTag = expectation?.tag,
             expectedTagAlreadyBuilt = expectation is ProductionTagExpectation.AlreadyBuilt,
             inlineError = null,

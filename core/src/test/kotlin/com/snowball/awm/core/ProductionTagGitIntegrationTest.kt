@@ -38,7 +38,7 @@ class ProductionTagGitIntegrationTest {
         val gateway = GitProductionTagGateway(paths = paths)
 
         val baseline = gateway.inspectBaseline(repository, "1.0.0")
-        val releaseSha = gateway.createRelease(repository, "release/1.0.1", baseline.masterSha)
+        val releaseSha = gateway.createRelease(repository, pipelineForRelease(repository, baseline, "1.0.1"))
         val features = gateway.resolveFeatures(repository, listOf("feature/a"))
         val pipeline = ProductionTagPipeline(
             "pipeline",
@@ -51,15 +51,26 @@ class ProductionTagGitIntegrationTest {
             "1.0.1",
             "release/1.0.1",
             releaseSha,
+            activeOperation = ProductionOperationLease(
+                id = "feature-write",
+                action = ProductionOperationAction.MERGE_FEATURES,
+                startedAt = "now",
+                expectedTargetSha = releaseSha,
+                features = features,
+                sourceBranch = "awm/production-tag/merge_features/feature-write",
+            ),
         )
         val merged = gateway.mergeFeatures(repository, pipeline, features)
 
         assertEquals(ProductionBaselineState.ALREADY_CONTAINED, baseline.state)
         assertTrue("1.0.0" in gateway.formalTags(repository))
-        assertTrue(merged is ProductionFeatureWrite.Direct)
-        merged as ProductionFeatureWrite.Direct
-        assertEquals(merged.releaseSha, gateway.mergedTargetSha(repository, "release/1.0.1", features.single().sha))
-        assertEquals(features.single().sha, merged.merges.single().sourceSha)
+        val direct = assertIs<ProductionFeatureWrite.Direct>(merged)
+        assertEquals(direct.releaseSha, gateway.mergedTargetSha(repository, "release/1.0.1", features.single().sha))
+        assertEquals(features.single().sha, direct.merges.single().sourceSha)
+        val recovered = gateway.recoverFeatureWrite(repository, "release/1.0.1", null, releaseSha, features)
+        val recoveredDirect = assertIs<ProductionFeatureWrite.Direct>(recovered)
+        assertEquals(direct.releaseSha, recoveredDirect.releaseSha)
+        assertEquals(direct.merges.single().mergeCommit, recoveredDirect.merges.single().mergeCommit)
     }
 
     @Test
@@ -88,7 +99,7 @@ class ProductionTagGitIntegrationTest {
         )
         val gateway = GitProductionTagGateway(paths = ApplicationPaths(temporary.resolve("conflict-awm-home")))
         val baseline = gateway.inspectBaseline(repository, "1.0.0")
-        val releaseSha = gateway.createRelease(repository, "release/1.0.1", baseline.masterSha)
+        val releaseSha = gateway.createRelease(repository, pipelineForRelease(repository, baseline, "1.0.1"))
         val features = gateway.resolveFeatures(repository, listOf("feature/a", "feature/b"))
         val pipeline = ProductionTagPipeline(
             "pipeline-conflict",
@@ -121,7 +132,7 @@ class ProductionTagGitIntegrationTest {
         val repository = repository(repositoryPath, remote, "stale-release")
         val gateway = GitProductionTagGateway(paths = ApplicationPaths(temporary.resolve("stale-release-home")))
         val baseline = gateway.inspectBaseline(repository, "1.0.0")
-        val releaseSha = gateway.createRelease(repository, "release/1.0.1", baseline.masterSha)
+        val releaseSha = gateway.createRelease(repository, pipelineForRelease(repository, baseline, "1.0.1"))
         Files.writeString(seed.resolve("late.txt"), "late\n")
         GitTestSupport.run(seed, "add", "late.txt")
         GitTestSupport.run(seed, "commit", "-m", "late release change")
@@ -181,7 +192,7 @@ class ProductionTagGitIntegrationTest {
         val repository = repository(repositoryPath, remote, "lightweight")
         val gateway = GitProductionTagGateway(paths = ApplicationPaths(temporary.resolve("lightweight-home")))
         val baseline = gateway.inspectBaseline(repository, "1.0.0")
-        val releaseSha = gateway.createRelease(repository, "release/1.0.1", baseline.masterSha)
+        val releaseSha = gateway.createRelease(repository, pipelineForRelease(repository, baseline, "1.0.1"))
         GitTestSupport.run(repositoryPath, "tag", "-a", "1.0.1", releaseSha, "-m", "stale annotated local tag")
 
         val result = gateway.pushTag(repository, "release/1.0.1", "1.0.1", releaseSha)
@@ -200,5 +211,21 @@ class ProductionTagGitIntegrationTest {
         remote.toString(),
         "master",
         "master",
+    )
+
+    private fun pipelineForRelease(
+        repository: RepositoryConfig,
+        baseline: ProductionBaselineEvidence,
+        baseVersion: String,
+    ) = ProductionTagPipeline(
+        id = "release-${repository.id}",
+        repositoryId = repository.id,
+        serviceName = repository.name,
+        productionTag = baseline.productionTag,
+        productionTagSha = baseline.productionTagSha,
+        masterSha = baseline.masterSha,
+        baselineState = baseline.state,
+        baseVersion = baseVersion,
+        releaseBranch = "release/$baseVersion",
     )
 }

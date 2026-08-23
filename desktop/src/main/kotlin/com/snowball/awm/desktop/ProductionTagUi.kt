@@ -1,6 +1,7 @@
 package com.snowball.awm.desktop
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DragHandle
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Refresh
@@ -47,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,6 +75,10 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
     var historyMenu by remember { mutableStateOf(false) }
     var featureMenuIndex by remember { mutableStateOf<Int?>(null) }
 
+    LaunchedEffect(Unit) {
+        controller.refreshGenbu()
+    }
+
     LaunchedEffect(repository?.id) {
         featureMenuIndex = null
         repository?.let { controller.loadRemoteBranches(it.id) }
@@ -96,6 +103,15 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    when (val genbu = controller.genbuSettingsState) {
+                        GenbuSettingsState.Idle -> InlineMessage("Genbu 尚未检测，正在准备自动检测。", warning = true)
+                        GenbuSettingsState.Loading -> InlineMessage("正在自动检测 Genbu…")
+                        is GenbuSettingsState.Loaded -> InlineMessage("Genbu 已发现可用：${genbu.command}")
+                        is GenbuSettingsState.Failed -> {
+                            InlineMessage("Genbu 不可用：${genbu.message}", error = true)
+                            OutlinedButton(onClick = controller::openProductionTagSettings) { Text("前往生产 Tag 设置") }
+                        }
+                    }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.weight(1f)) {
                             OutlinedButton(onClick = { serviceMenu = true }, modifier = Modifier.fillMaxWidth()) {
@@ -119,21 +135,23 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
                         val history = state.pipelines.filter { it.repositoryId == repository?.id }
                         Box {
                             OutlinedButton(onClick = { historyMenu = true }, enabled = history.isNotEmpty()) {
-                                Text("历史记录")
+                                Text("进行中 / 历史")
                                 Icon(Icons.Outlined.KeyboardArrowDown, null)
                             }
                             DropdownMenu(historyMenu, onDismissRequest = { historyMenu = false }) {
                                 history.forEach { item ->
+                                    val lastTag = item.buildRecords.lastOrNull()?.expectedTag ?: "尚未打 Tag"
                                     DropdownMenuItem(
                                         text = {
                                             Column {
                                                 Text(item.releaseBranch)
                                                 Text(
-                                                    if (item.closed) "已关闭 · ${item.updatedAt}" else "进行中 · ${item.updatedAt}",
+                                                    "${if (item.closed) "已关闭" else "进行中"} · $lastTag · ${item.updatedAt}",
                                                     style = MaterialTheme.typography.labelSmall,
                                                 )
                                             }
                                         },
+                                        trailingIcon = { Text(if (item.closed) "查看" else "继续") },
                                         onClick = { historyMenu = false; feature.selectPipeline(item.id) },
                                     )
                                 }
@@ -157,6 +175,16 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
         }
 
         if (pipeline != null) {
+            pipeline.activeOperation?.let { operation ->
+                item {
+                    ProductionCard("未完成操作", "AWM 已保留跨进程操作租约，继续前会只读核对远端结果。") {
+                        KeyValue("操作", operation.action.name)
+                        KeyValue("操作 ID", operation.id)
+                        KeyValue("开始时间", operation.startedAt)
+                        Button(onClick = feature::resumePipeline, enabled = !controller.busy) { Text("继续并对账") }
+                    }
+                }
+            }
             item { BaselineCard(controller, pipeline) }
             if (!pipeline.closed && pipeline.releaseSha != null) {
                 item {
@@ -168,13 +196,15 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
                     )
                 }
             }
-            if (!pipeline.closed && pipeline.featureState == ProductionFeatureBatchState.MERGED) {
-                item { BuildTagCard(controller, state.expectedTag, state.expectedTagAlreadyBuilt) }
+            val hasPendingFeatureDraft = state.featureBranches.any { it.isNotBlank() }
+            if (!pipeline.closed && pipeline.featureState == ProductionFeatureBatchState.MERGED && !hasPendingFeatureDraft) {
+                item { BuildTagCard(controller, state.expectedTag, state.expectedTagAlreadyBuilt, pipeline.activeOperation == null) }
             }
             item { BuildRecordsCard(pipeline) }
+            item { AuditRecordsCard(pipeline) }
             if (!pipeline.closed) {
                 item {
-                    OutlinedButton(onClick = feature::closePipeline, enabled = !controller.busy) {
+                    OutlinedButton(onClick = feature::closePipeline, enabled = !controller.busy && pipeline.activeOperation == null) {
                         Text("关闭当前流水线")
                     }
                 }
@@ -186,10 +216,18 @@ internal fun ProductionTagScreen(controller: DesktopApplication) {
 @Composable
 private fun BaselineCard(controller: DesktopApplication, pipeline: ProductionTagPipeline) {
     val feature = controller.productionTagController
+    val operationIdle = pipeline.activeOperation == null
     ProductionCard("1. 生产基线", "生产环境固定与远端 master 比较。") {
         KeyValue("当前生产 Tag", pipeline.productionTag)
+        KeyValue("生产服务 / 环境", "${pipeline.productionService.ifBlank { pipeline.serviceName }} / ${pipeline.productionEnvironment.ifBlank { "PRD" }}")
         KeyValue("生产 Tag SHA", pipeline.productionTagSha)
         KeyValue("master SHA", pipeline.masterSha)
+        KeyValue("查询时间 / 来源", "${pipeline.baselineCheckedAt.ifBlank { pipeline.updatedAt }} / ${pipeline.baselineSource}")
+        if (pipeline.genbuCommand.isNotBlank()) KeyValue("Genbu 路径", pipeline.genbuCommand)
+        if (pipeline.operator.isNotBlank()) KeyValue("Git 操作人", pipeline.operator)
+        if (pipeline.productionPods.isNotEmpty()) {
+            KeyValue("生产 Pod", pipeline.productionPods.joinToString { "${it.name}:${it.version}/ready=${it.ready}/restart=${it.restartCount}" })
+        }
         when (pipeline.baselineState) {
             ProductionBaselineState.ALREADY_CONTAINED -> InlineMessage("生产 Tag 已包含在 master 中，无需合并。")
             ProductionBaselineState.MERGE_REQUIRED -> InlineMessage("生产 Tag 与 master 有差异，需要合并。", warning = true)
@@ -201,22 +239,25 @@ private fun BaselineCard(controller: DesktopApplication, pipeline: ProductionTag
         pipeline.mergeRequest?.takeIf { it.targetBranch == "master" }?.let { request ->
             MergeRequestActions(controller, request.url)
         }
+        pipeline.unmanagedReleaseSha?.let { sha ->
+            InlineMessage("存在未接管的 Release：${pipeline.releaseBranch}@$sha。AWM 不会复用或覆盖该分支。", error = true)
+        }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (pipeline.mergeRequest == null && pipeline.releaseSha == null) {
-                OutlinedButton(onClick = feature::refreshBaseline, enabled = !controller.busy) {
+                OutlinedButton(onClick = feature::refreshBaseline, enabled = !controller.busy && operationIdle) {
                     Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("刷新生产基线")
                 }
             }
             if (pipeline.baselineState == ProductionBaselineState.MERGE_REQUIRED) {
-                Button(onClick = feature::mergeProduction, enabled = !controller.busy) { Text("合并生产 Tag 到 master") }
+                Button(onClick = feature::mergeProduction, enabled = !controller.busy && operationIdle) { Text("合并生产 Tag 到 master") }
             }
             if (pipeline.baselineState == ProductionBaselineState.AWAITING_MERGE_REQUEST) {
-                Button(onClick = feature::refreshMergeRequest, enabled = !controller.busy) { Text("刷新合并状态") }
+                Button(onClick = feature::refreshMergeRequest, enabled = !controller.busy && operationIdle) { Text("刷新合并状态") }
             }
             if (pipeline.baselineState == ProductionBaselineState.ALREADY_CONTAINED && pipeline.releaseSha == null) {
-                Button(onClick = feature::createRelease, enabled = !controller.busy) {
+                Button(onClick = feature::createRelease, enabled = !controller.busy && operationIdle && pipeline.unmanagedReleaseSha == null) {
                     Text("创建 ${pipeline.releaseBranch}")
                 }
             }
@@ -238,16 +279,18 @@ private fun FeatureCard(
 ) {
     val feature = controller.productionTagController
     val state = feature.state
+    val operationIdle = pipeline.activeOperation == null
     val branches = when (val remote = controller.remoteBranchState(pipeline.repositoryId, "origin")) {
         is RemoteBranchesState.Loaded -> remote.branches
         is RemoteBranchesState.Loading -> remote.staleBranches
         is RemoteBranchesState.Failed -> remote.staleBranches
         RemoteBranchesState.Idle -> emptyList()
     }.map { it.removePrefix("origin/") }
-        .filterNot { it == "master" || it == pipeline.releaseBranch }
+        .filter { it.startsWith("feature/") }
         .distinct()
-    ProductionCard("2. Feature 合并", "一个按钮完成远端 SHA 固定、冲突检测与无冲突合并。") {
+    ProductionCard("2. Feature 合并", "先固定并确认远端 SHA；再用一个按钮完成冲突检测与无冲突合并。") {
         state.featureBranches.forEachIndexed { index, value ->
+            var dragDistance by remember(index, value) { mutableStateOf(0f) }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     OutlinedTextField(
@@ -256,14 +299,14 @@ private fun FeatureCard(
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Feature 分支 ${index + 1}") },
                         singleLine = true,
-                        enabled = !controller.busy && pipeline.mergeRequest == null,
+                        enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle,
                         trailingIcon = {
                             IconButton(
                                 onClick = {
                                     controller.loadRemoteBranches(pipeline.repositoryId, force = true)
                                     onExpandedIndexChange(index)
                                 },
-                                enabled = pipeline.mergeRequest == null,
+                                enabled = pipeline.mergeRequest == null && operationIdle,
                             ) { Icon(Icons.Outlined.KeyboardArrowDown, "选择远端分支") }
                         },
                     )
@@ -286,37 +329,73 @@ private fun FeatureCard(
                                 onClick = {
                                     feature.updateFeatureInput(index, branch)
                                     onExpandedIndexChange(null)
+                                    feature.resolveFeatures()
                                 },
                             )
                         }
                     }
                 }
-                IconButton(onClick = { feature.removeFeatureInput(index) }, enabled = !controller.busy && pipeline.mergeRequest == null) {
+                Icon(
+                    Icons.Outlined.DragHandle,
+                    "拖动排序",
+                    Modifier.size(40.dp).padding(8.dp).pointerInput(
+                        index,
+                        state.featureBranches.size,
+                        controller.busy,
+                        pipeline.mergeRequest,
+                    ) {
+                        val threshold = 32.dp.toPx()
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { dragDistance = 0f },
+                            onDragCancel = { dragDistance = 0f },
+                            onDragEnd = {
+                                if (!controller.busy && pipeline.mergeRequest == null && operationIdle) when {
+                                    dragDistance <= -threshold -> feature.moveFeatureInput(index, -1)
+                                    dragDistance >= threshold -> feature.moveFeatureInput(index, 1)
+                                }
+                                dragDistance = 0f
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragDistance += amount.y
+                            },
+                        )
+                    },
+                )
+                IconButton(onClick = { feature.removeFeatureInput(index) }, enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle) {
                     Icon(Icons.Outlined.Delete, "移除")
                 }
                 IconButton(
                     onClick = { feature.moveFeatureInput(index, -1) },
-                    enabled = !controller.busy && pipeline.mergeRequest == null && index > 0,
+                    enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle && index > 0,
                 ) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
                 IconButton(
                     onClick = { feature.moveFeatureInput(index, 1) },
-                    enabled = !controller.busy && pipeline.mergeRequest == null && index < state.featureBranches.lastIndex,
+                    enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle && index < state.featureBranches.lastIndex,
                 ) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
             }
             pipeline.selectedFeatures.getOrNull(index)?.takeIf { it.branch == value && it.sha.isNotBlank() }?.let { selected ->
                 Text("已固定 SHA：${selected.sha}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             }
         }
+        val requestedBranches = state.featureBranches.map(String::trim).filter(String::isNotBlank)
+        val resolved = requestedBranches.isNotEmpty() &&
+            pipeline.selectedFeatures.map { it.branch } == requestedBranches &&
+            pipeline.selectedFeatures.all { it.sha.isNotBlank() }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = feature::addFeatureInput, enabled = !controller.busy && pipeline.mergeRequest == null) {
+            OutlinedButton(onClick = feature::addFeatureInput, enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle) {
                 Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("添加 Feature")
             }
+            OutlinedButton(
+                onClick = feature::resolveFeatures,
+                enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle && requestedBranches.isNotEmpty(),
+            ) { Text("读取并固定 Feature SHA") }
             Button(
                 onClick = feature::detectAndMergeFeatures,
-                enabled = !controller.busy && pipeline.mergeRequest == null && state.featureBranches.any { it.isNotBlank() },
-            ) { Text("检测并合并") }
+                enabled = !controller.busy && pipeline.mergeRequest == null && operationIdle && resolved,
+            ) { Text("检测并合并 ${requestedBranches.size} 个 Feature") }
         }
         when (pipeline.featureState) {
             ProductionFeatureBatchState.CONFLICT -> {
@@ -352,6 +431,7 @@ private fun BuildTagCard(
     controller: DesktopApplication,
     expectedTag: String?,
     alreadyBuilt: Boolean,
+    operationIdle: Boolean,
 ) {
     ProductionCard("3. 构建生产 Tag", "只创建正式 Git Tag 并推送远端，不构建测试包或执行部署。") {
         KeyValue("预期 Tag", expectedTag ?: "正在计算…")
@@ -360,7 +440,7 @@ private fun BuildTagCard(
         }
         Button(
             onClick = controller.productionTagController::buildTag,
-            enabled = !controller.busy && expectedTag != null && !alreadyBuilt,
+            enabled = !controller.busy && operationIdle && expectedTag != null && !alreadyBuilt,
         ) { Text("构建并推送生产 Tag ${expectedTag.orEmpty()}") }
     }
 }
@@ -372,9 +452,18 @@ private fun BuildRecordsCard(pipeline: ProductionTagPipeline) {
         pipeline.buildRecords.asReversed().forEach { record ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(record.expectedTag, fontWeight = FontWeight.SemiBold)
+                    Text("预期 Tag：${record.expectedTag}", fontWeight = FontWeight.SemiBold)
+                    Text("实际 Tag：${record.actualTag ?: "—"}")
                     Text(record.releaseSha, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                    record.remoteTagSha?.let {
+                        Text("远端 SHA：$it", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                    }
                     record.failureReason?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    Text(
+                        listOfNotNull(record.completedAt ?: record.startedAt, record.remoteUrl).joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 StatusPill(
                     when (record.state) {
@@ -387,6 +476,34 @@ private fun BuildRecordsCard(pipeline: ProductionTagPipeline) {
                     },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun AuditRecordsCard(pipeline: ProductionTagPipeline) {
+    if (pipeline.auditEvents.isEmpty()) return
+    ProductionCard("生产操作审计", "按操作 ID 保留基线检查、合并、Release 与 Tag 的状态和远端证据。") {
+        pipeline.auditEvents.asReversed().forEach { event ->
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("${event.action} · ${event.state}", fontWeight = FontWeight.SemiBold)
+                Text(event.operationId, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
+                Text(
+                    listOfNotNull(event.startedAt, event.completedAt, event.remoteUrl).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (event.features.isNotEmpty()) {
+                    Text(event.features.joinToString { "${it.branch}@${it.sha}" }, style = MaterialTheme.typography.bodySmall)
+                }
+                if (event.operator.isNotBlank()) Text("操作人：${event.operator}", style = MaterialTheme.typography.bodySmall)
+                if (event.genbuCommand.isNotBlank()) Text("Genbu：${event.genbuCommand}", style = MaterialTheme.typography.bodySmall)
+                event.sourceBranch?.let { Text("源分支：$it", style = MaterialTheme.typography.bodySmall) }
+                event.targetRef?.let { Text("目标：$it", style = MaterialTheme.typography.bodySmall) }
+                event.mergeRequestUrl?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall) } }
+                event.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }

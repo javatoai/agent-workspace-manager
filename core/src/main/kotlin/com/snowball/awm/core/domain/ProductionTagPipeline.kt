@@ -32,6 +32,54 @@ enum class ProductionTagBuildState {
 }
 
 @Serializable
+enum class ProductionOperationAction {
+    MERGE_PRODUCTION,
+    CREATE_RELEASE,
+    MERGE_FEATURES,
+    BUILD_TAG,
+}
+
+@Serializable
+enum class ProductionAuditState { RUNNING, SUCCEEDED, FAILED, CONFLICT, AWAITING_MERGE_REQUEST, RECOVERED }
+
+@Serializable
+data class ProductionOperationLease(
+    val id: String,
+    val action: ProductionOperationAction,
+    val startedAt: String,
+    val expectedTag: String? = null,
+    val expectedTargetSha: String? = null,
+    val features: List<ProductionFeatureSelection> = emptyList(),
+    /** Stable remote source branch used when a protected target requires an MR. */
+    val sourceBranch: String? = null,
+)
+
+@Serializable
+data class ProductionAuditEvent(
+    val operationId: String,
+    val action: String,
+    val state: ProductionAuditState,
+    val startedAt: String,
+    val completedAt: String? = null,
+    val reason: String? = null,
+    val productionTag: String,
+    val productionTagSha: String,
+    val masterSha: String,
+    val releaseBranch: String,
+    val releaseSha: String? = null,
+    val features: List<ProductionFeatureSelection> = emptyList(),
+    val remoteUrl: String? = null,
+    val mergeRequestUrl: String? = null,
+    val sourceBranch: String? = null,
+    val targetRef: String? = null,
+    val operator: String = "",
+    val genbuCommand: String = "",
+    val productionService: String = "",
+    val productionEnvironment: String = "",
+    val productionPods: List<ProductionPodSnapshot> = emptyList(),
+)
+
+@Serializable
 data class ProductionFeatureSelection(
     val branch: String,
     val sha: String = "",
@@ -70,6 +118,8 @@ data class ProductionTagBuildRecord(
     val startedAt: String = "",
     val completedAt: String? = null,
     val failureReason: String? = null,
+    val remoteUrl: String? = null,
+    val actualTag: String? = null,
 )
 
 @Serializable
@@ -95,4 +145,14 @@ data class ProductionTagPipeline(
     val updatedAt: String = "",
     /** Optimistic concurrency token for cross-process pipeline updates. */
     val revision: Long = 0,
+    val productionService: String = "",
+    val productionEnvironment: String = "",
+    val productionPods: List<ProductionPodSnapshot> = emptyList(),
+    val baselineCheckedAt: String = "",
+    val baselineSource: String = "Genbu + origin",
+    val unmanagedReleaseSha: String? = null,
+    val activeOperation: ProductionOperationLease? = null,
+    val auditEvents: List<ProductionAuditEvent> = emptyList(),
+    val genbuCommand: String = "",
+    val operator: String = "",
 )

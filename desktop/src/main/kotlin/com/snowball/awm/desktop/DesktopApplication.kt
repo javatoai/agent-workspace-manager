@@ -514,6 +514,11 @@ class DesktopApplication(
         onFailure: (Throwable) -> Unit = {},
     ): Boolean = settingsController.updateProductionTagSettings(enabled, rawGenbuPath, onFailure)
 
+    fun updateProductionTagEnabled(
+        enabled: Boolean,
+        onFailure: (Throwable) -> Unit = {},
+    ): Boolean = settingsController.updateProductionTagEnabled(enabled, onFailure)
+
     fun refreshCurrentTaskGitStatus() = taskController.refreshGitStatus()
 
     fun addableServices(task: TaskManifest): List<GroupServiceConfig> {
@@ -580,6 +585,10 @@ class DesktopApplication(
     fun settingsSaveState(key: String): SettingsSaveState = settingsController.saveState(key)
     fun refreshLocalGit(force: Boolean = false) = settingsController.refreshLocalGit(force)
     fun refreshGenbu(force: Boolean = false) = settingsController.refreshGenbu(force)
+    fun openProductionTagSettings() {
+        WindowPreferences.saveSettingsSection("production-tag")
+        navigation = NavigationItem.SETTINGS
+    }
     fun loadMeegleProjects(force: Boolean = false) = settingsController.loadMeegleProjects(force)
     fun cancelMeegleProjectLoad() = settingsController.cancelMeegleProjectLoad()
     fun refreshMeegleStatus(force: Boolean = false) = settingsController.refreshMeegleStatus(force)

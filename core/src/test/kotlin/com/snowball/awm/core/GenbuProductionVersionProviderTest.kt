@@ -1,8 +1,11 @@
 package com.snowball.awm.core
 
+import java.nio.file.Path
+import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 
 class GenbuProductionVersionProviderTest {
     @Test
@@ -38,6 +41,21 @@ class GenbuProductionVersionProviderTest {
         }
         assertFailsWith<IllegalStateException> {
             GenbuProductionSnapshotParser.parse(
+                """{"service":"svc","environment":"PRD","pods":[
+                  {"pod_name":"a","app_version":"","restart_count":0,"phase":"Running","ready":true},
+                  {"pod_name":"b","app_version":"1.0.0","restart_count":0,"phase":"Running","ready":true}
+                ]}""",
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            GenbuProductionSnapshotParser.parse(
+                """{"service":"svc","environment":"PRD","pods":[
+                  {"pod_name":"a","app_version":"1.0.0","phase":"Running","ready":true}
+                ]}""",
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            GenbuProductionSnapshotParser.parse(
                 """
                 {"service":"svc","environment":"PRD","pods":[
                   {"pod_name":"a","app_version":"1.0.0","restart_count":0,"phase":"Running","ready":false}
@@ -59,5 +77,31 @@ class GenbuProductionVersionProviderTest {
                 ]}""",
             )
         }
+    }
+
+    @Test
+    fun `provider distinguishes command failure from an unhealthy successful snapshot`() {
+        fun runner(result: CommandResult) = object : CommandRunner {
+            override fun run(
+                command: List<String>,
+                workingDirectory: Path?,
+                timeout: Duration,
+                environment: Map<String, String>,
+            ) = result
+        }
+        val executable = GenbuExecutable { "genbu" }
+        assertFailsWith<ProductionVersionUnavailableException> {
+            GenbuProductionVersionProvider(executable, runner(CommandResult(1, "", "offline"))).current("service")
+        }
+        val unhealthy = assertFailsWith<IllegalStateException> {
+            GenbuProductionVersionProvider(executable, runner(CommandResult(
+                0,
+                """{"service":"svc","environment":"PRD","pods":[
+                  {"pod_name":"a","app_version":"1.0.0","restart_count":1,"phase":"Running","ready":true}
+                ]}""",
+                "",
+            ))).current("service")
+        }
+        assertFalse(unhealthy is ProductionVersionUnavailableException)
     }
 }

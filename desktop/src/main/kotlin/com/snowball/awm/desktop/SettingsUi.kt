@@ -365,7 +365,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onEnabledChange = { enabled ->
                         val previous = productionTagEnabled
                         productionTagEnabled = enabled
-                        controller.updateProductionTagSettings(enabled, genbuPath) {
+                        controller.updateProductionTagEnabled(enabled) {
                             productionTagEnabled = previous
                         }
                     },

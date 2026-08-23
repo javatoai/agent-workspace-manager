@@ -49,6 +49,13 @@ class ProductionTagPipelineStore(
         (current.filterNot { it.id == pipeline.id } + updated) to updated
     }
 
+    /** Held for the full remote-write/recovery window; the OS releases it after a process crash. */
+    fun <T> withOperationLock(pipelineId: String, block: () -> T): T = FileLocking.withExclusiveLock(
+        paths.locks.resolve("production-tag-operation-${FileLocking.stableTextHash(pipelineId)}.lock"),
+        "该生产 Tag 操作仍在另一个 AWM 实例执行，请稍后重试",
+        block,
+    )
+
     private fun <T> mutate(transform: (List<ProductionTagPipeline>) -> Pair<List<ProductionTagPipeline>, T>): T = lock.withLock {
         FileLocking.withExclusiveLock(fileLock, "生产 Tag 流水线正在被另一个 AWM 实例更新") {
             val (pipelines, result) = transform(read().pipelines)

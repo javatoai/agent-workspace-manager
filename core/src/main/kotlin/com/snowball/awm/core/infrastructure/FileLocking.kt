@@ -27,8 +27,11 @@ internal object FileLocking {
     }
 
     fun stablePathHash(path: Path, length: Int = 16): String =
+        stableTextHash(path.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT), length)
+
+    fun stableTextHash(value: String, length: Int = 16): String =
         MessageDigest.getInstance("SHA-256")
-            .digest(path.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
             .take(length / 2)
             .joinToString("") { "%02x".format(Locale.ROOT, it) }
 }

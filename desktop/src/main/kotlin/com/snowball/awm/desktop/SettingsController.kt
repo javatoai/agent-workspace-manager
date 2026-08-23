@@ -202,12 +202,25 @@ class SettingsController internal constructor(
         settingsOperations,
         onCompleted = { refreshGenbu(force = true) },
     ) { config ->
+        val normalized = normalizeGenbuExecutablePath(rawGenbuPath)
         config.copy(
             productionTagBuildEnabled = enabled,
-            genbuExecutablePath = normalizeGenbuExecutablePath(rawGenbuPath),
-            genbuExecutableAutoDetected = false,
+            genbuExecutablePath = normalized,
+            genbuExecutableAutoDetected = config.genbuExecutableAutoDetected &&
+                normalized == config.genbuExecutablePath,
         )
     }
+
+    fun updateProductionTagEnabled(
+        enabled: Boolean,
+        onFailure: (Throwable) -> Unit = {},
+    ): Boolean = mutate(
+        "正在保存生产 Tag 开关…",
+        "生产 Tag 开关已保存",
+        onFailure,
+        "production-tag",
+        settingsOperations,
+    ) { config -> config.copy(productionTagBuildEnabled = enabled) }
 
     fun refreshGenbu(force: Boolean = false) {
         if (!force && genbu is GenbuSettingsState.Loading) return
