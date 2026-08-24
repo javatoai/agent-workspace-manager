@@ -3,6 +3,7 @@ package com.snowball.awm.core
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -65,6 +66,25 @@ class AgentFileMonitorTest {
             assertFailsWith<AgentDocumentConflictException> { monitor.save(file, "local") }
             assertEquals("external", Files.readString(file))
             assertIs<AgentFileChange.Conflict>(changes.single())
+        }
+    }
+
+    @Test
+    fun `tracking a deleted file does not recreate its parent directory`() {
+        val root = Files.createTempDirectory("agent-monitor-delete-")
+        val taskDirectory = root.resolve("task")
+        val file = taskDirectory.resolve("AGENTS.md")
+        Files.createDirectories(taskDirectory)
+        Files.writeString(file, "task")
+
+        AgentFileMonitor({}, startWatchThread = false).use { monitor ->
+            monitor.track(file)
+            Files.delete(file)
+            Files.delete(taskDirectory)
+
+            monitor.track(file)
+
+            assertFalse(Files.exists(taskDirectory))
         }
     }
 }

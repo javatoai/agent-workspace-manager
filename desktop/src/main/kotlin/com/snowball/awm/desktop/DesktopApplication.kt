@@ -501,7 +501,10 @@ class DesktopApplication(
             agentMonitor.track(paths.globalAgents)
         }.onFailure(::showError)
         config.groups.forEach { group ->
-            runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
+            runCatching {
+                agentDocuments.ensureGroupFile(group.id)
+                agentMonitor.track(paths.groupAgents(group.id))
+            }.onFailure(::showError)
         }
         refreshCurrentTaskGitStatus()
     }
@@ -866,7 +869,10 @@ class DesktopApplication(
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
         if (requirementConfigurationChanged) requirementController.onConfigurationChanged()
         updated.groups.forEach { group ->
-            runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
+            runCatching {
+                agentDocuments.ensureGroupFile(group.id)
+                agentMonitor.track(paths.groupAgents(group.id))
+            }.onFailure(::showError)
         }
         refreshConfigFileSnapshot()
     }
