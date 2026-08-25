@@ -658,6 +658,12 @@ class DesktopApplication(
 
     fun branchInfo(task: TaskManifest): String = TaskBranchInfoFormatter.format(task)
 
+    fun branchInfo(task: TaskManifest, includeRequirementLink: Boolean): String =
+        TaskBranchInfoFormatter.formatBranchInfo(task, includeRequirementLink)
+
+    fun branchServices(task: TaskManifest, includeRequirementLink: Boolean): String =
+        TaskBranchInfoFormatter.formatServices(task, includeRequirementLink)
+
     fun openWorkData(task: TaskManifest, type: com.snowball.awm.core.DevelopmentToolType = config.defaultDevelopmentTool) =
         desktopActions.openWorkData(taskDirectory(task), type)
 

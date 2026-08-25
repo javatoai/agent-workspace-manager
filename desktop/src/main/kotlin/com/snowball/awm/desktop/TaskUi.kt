@@ -352,8 +352,24 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
         controller.deliveryController.buildBatch(task, selected) { showBatchTag = false }
     }
-    if (showBranchInfo) BranchInfoDialog(controller.branchInfo(task), onDismiss = { showBranchInfo = false }) {
-        controller.copyText(controller.branchInfo(task), "分支信息已复制")
+    if (showBranchInfo) {
+        BranchInfoDialog(
+            content = controller.branchInfo(task),
+            hasRequirementLink = task.requirementLink.isNotBlank(),
+            onDismiss = { showBranchInfo = false },
+            onCopyServicesWithoutRequirementLink = {
+                controller.copyText(controller.branchServices(task, includeRequirementLink = false), "服务已复制（不含需求链接）")
+            },
+            onCopyServicesWithRequirementLink = {
+                controller.copyText(controller.branchServices(task, includeRequirementLink = true), "服务已复制（含需求链接）")
+            },
+            onCopyBranchInfoWithoutRequirementLink = {
+                controller.copyText(controller.branchInfo(task, includeRequirementLink = false), "分支信息已复制（不含需求链接）")
+            },
+            onCopyBranchInfoWithRequirementLink = {
+                controller.copyText(controller.branchInfo(task, includeRequirementLink = true), "分支信息已复制（含需求链接）")
+            },
+        )
     }
     batchGitMode?.let { mode ->
         BatchGitDialog(
