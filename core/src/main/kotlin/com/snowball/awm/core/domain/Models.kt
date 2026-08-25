@@ -7,8 +7,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.9.1"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.9.1"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.10.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.10.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -208,7 +208,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.9.x is intentionally strict and does not migrate earlier schemas. */
+/** Version 0.10.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -232,10 +232,13 @@ data class AppConfig(
     val meegleExecutablePath: String? = null,
     /** Absolute path to the Git executable; null means auto-detect. */
     val gitExecutablePath: String? = null,
-    /** Controls only opening the create-task dialog; it never runs at app startup. */
-    val meegleAutoLoadRequirementLinks: Boolean = false,
+    /** Absolute root for requirement research materials; null/blank disables the integration. */
+    val requirementMaterialsRoot: String? = null,
+    /** One safe child directory segment under each requirement directory; null/blank disables the integration. */
+    val requirementMaterialsSubdirectory: String? = null,
 ) {
     init {
+        requirementMaterialsSubdirectory?.let(::validateRequirementMaterialsSubdirectory)
         require(groups.isNotEmpty()) { "至少需要一个组" }
         require(groups.map { it.id }.distinct().size == groups.size) { "组 ID 不能重复" }
         require(repositories.map { it.id }.distinct().size == repositories.size) { "仓库 ID 不能重复" }
@@ -277,6 +280,39 @@ data class AppConfig(
     fun groupService(groupId: String, serviceId: String): GroupServiceConfig =
         group(groupId).services.firstOrNull { it.id == serviceId }
             ?: throw IllegalArgumentException("组中找不到服务：$serviceId")
+
+    /** True only when both user-provided material directory settings are non-blank. */
+    val requirementMaterialsConfigured: Boolean
+        get() = !requirementMaterialsRoot.isNullOrBlank() && !requirementMaterialsSubdirectory.isNullOrBlank()
+}
+
+private val WINDOWS_RESERVED_DIRECTORY_NAMES = buildSet {
+    addAll(listOf("CON", "PRN", "AUX", "NUL"))
+    addAll((1..9).map { "COM$it" })
+    addAll((1..9).map { "LPT$it" })
+}
+
+/**
+ * Validates one user-configured Windows directory segment.  Empty input is
+ * accepted because clearing this setting deliberately disables the integration.
+ * The returned value is trimmed so callers can persist the canonical segment.
+ */
+fun validateRequirementMaterialsSubdirectory(value: String): String {
+    val normalized = value.trim()
+    if (normalized.isEmpty()) return normalized
+    require(normalized != "." && normalized != "..") { "需求资料子目录不能是 . 或 .." }
+    require(normalized.none { it == '/' || it == '\\' }) { "需求资料子目录只能是单层目录名" }
+    require(normalized.none { it.code < 0x20 || it in "<>:\"|?*" }) {
+        "需求资料子目录包含 Windows 不允许的字符"
+    }
+    require(!normalized.endsWith('.') && !normalized.endsWith(' ')) {
+        "需求资料子目录不能以点或空格结尾"
+    }
+    val reservedBase = normalized.substringBefore('.').uppercase()
+    require(reservedBase !in WINDOWS_RESERVED_DIRECTORY_NAMES) {
+        "需求资料子目录不能使用 Windows 保留名称"
+    }
+    return normalized
 }
 
 @Serializable
@@ -322,6 +358,24 @@ enum class WorkspaceHealth {
     READY_WITH_WARNINGS,
     FAILED,
 }
+
+/** Persisted availability of the requirement materials directory for one task. */
+@Serializable
+enum class RequirementMaterialsStatus {
+    /** The task was intentionally created without a requirement reference. */
+    NOT_REQUESTED,
+    /** The independent materials directory is ready for use. */
+    READY,
+    /** Resolution or creation failed; the task may retry later without changing Git state. */
+    FAILED,
+}
+
+@Serializable
+data class RequirementMaterialsDirectory(
+    val status: RequirementMaterialsStatus = RequirementMaterialsStatus.NOT_REQUESTED,
+    val writeRoot: String? = null,
+    val failureReason: String? = null,
+)
 
 @Serializable
 enum class TaskModuleSource {
@@ -370,6 +424,10 @@ data class TaskManifest(
     val taskDirectoryName: String,
     val featureBranch: String,
     val requirementLink: String = "",
+    /** Parsed numeric requirement ID when the user supplied a number or a Feishu detail link. */
+    val requirementId: String? = null,
+    /** Independent directory for requirement notes, SQL and scripts; never contains AWM Git worktrees. */
+    val requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
     val createdAt: String,
     val updatedAt: String,
     val lifecycleStatus: TaskLifecycleStatus = TaskLifecycleStatus.ACTIVE,

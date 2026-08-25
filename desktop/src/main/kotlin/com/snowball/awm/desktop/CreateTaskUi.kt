@@ -182,7 +182,7 @@ internal fun CreateTaskDialog(
                                 draft.requirementLink,
                                 { updateDraft(draft.changeRequirement(it, group.defaultBranchPrefix)) },
                                 Modifier.weight(1f),
-                                label = { Text("飞书需求链接（可选）") },
+                                label = { Text("需求编号或飞书需求链接（可选）") },
                                 supportingText = {
                                     when {
                                         draft.requirementTitle != null -> Text(draft.requirementTitle!!)
@@ -208,7 +208,7 @@ internal fun CreateTaskDialog(
                                         requirementSearch,
                                         { requirementSearch = it },
                                         Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                                        label = { Text("搜索标题或链接") },
+                                        label = { Text("搜索需求标题或链接") },
                                         singleLine = true,
                                     )
                                     val matchingLinks = controller.requirementController.candidates.filter {
@@ -267,7 +267,7 @@ internal fun CreateTaskDialog(
                             label = { Text("任务分支") },
                             placeholder = { Text("例如：feature/PAY-1024") },
                             supportingText = if (unresolvedBranch) {
-                                { Text("需求链接未解析出编号，请补充链接或手工修改分支") }
+                                { Text("需求编号或链接未解析出编号，请补充输入或手工修改分支") }
                             } else null,
                             colors = branchPickerFieldColors(),
                             singleLine = true,

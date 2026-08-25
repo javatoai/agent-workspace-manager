@@ -53,6 +53,7 @@ import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RepositoryRemoteCatalog
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.RequirementMetadata
+import com.snowball.awm.core.RequirementMaterialsService
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
 import com.snowball.awm.core.GitTagDeliveryAdapter
@@ -186,6 +187,7 @@ class DesktopApplication(
         manifests = manifests,
         provisioning = provisioning,
         agentDocuments = agentDocuments,
+        requirementMaterials = RequirementMaterialsService(meegleExecutable = meegleExecutable),
         lifecycle = GitWorkspaceLifecycle(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
         operationLock = operationLock,
         branchValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
@@ -519,6 +521,10 @@ class DesktopApplication(
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
+    fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateRequirementMaterialsRoot(value, onFailure)
+    fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateRequirementMaterialsSubdirectory(value, onFailure)
     fun updateDevelopmentTools(
         tools: List<com.snowball.awm.core.DevelopmentToolConfig>,
         defaultTool: com.snowball.awm.core.DevelopmentToolType,
@@ -631,6 +637,9 @@ class DesktopApplication(
 
     fun deleteTask(task: TaskManifest, forceDiscard: Boolean, onCompleted: () -> Unit = {}) =
         taskController.delete(task, forceDiscard, onCompleted)
+
+    fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}) =
+        taskController.retryRequirementMaterials(task, onCompleted)
 
     fun buildTag(task: TaskManifest, workspace: ServiceWorkspace) = deliveryController.build(task, workspace)
     fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>, onCompleted: () -> Unit = {}) =
@@ -832,7 +841,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.9.x 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.10.x 任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(

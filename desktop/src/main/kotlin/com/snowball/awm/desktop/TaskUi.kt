@@ -62,6 +62,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.AgentTaskTemplate
+import com.snowball.awm.core.RequirementMaterialsStatus
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.WorkspaceGitBatchMode
@@ -74,6 +75,20 @@ import com.snowball.awm.core.WorkspaceRepairConfirmation
 import com.snowball.awm.core.WorkspaceRepairPreview
 import com.snowball.awm.core.WorkspaceToolLaunchStatus
 import com.snowball.awm.core.health
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+
+internal enum class RequirementMaterialsActionGroup {
+    TASK_DIRECTORY,
+    WORK_DATA,
+}
+
+internal fun requirementMaterialsActionGroupFor(directory: String?): RequirementMaterialsActionGroup? =
+    directory
+        ?.takeIf(String::isNotBlank)
+        ?.takeIf { path -> runCatching { Files.isDirectory(Path.of(path), LinkOption.NOFOLLOW_LINKS) }.getOrDefault(false) }
+        ?.let { RequirementMaterialsActionGroup.WORK_DATA }
 
 @Composable
 internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
@@ -102,6 +117,11 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     val tagWorkspaces = task.services.filter { controller.canBuildTag(task, it) }
     val physicalWorkspaces = controller.physicalWorkspaces(task)
     val requirementState = controller.requirementController.stateFor(task)
+    val requirementMaterialsDirectory = task.requirementMaterials
+        .takeIf { it.status == RequirementMaterialsStatus.READY }
+        ?.writeRoot
+        ?.takeIf(String::isNotBlank)
+    val requirementMaterialsActionGroup = requirementMaterialsActionGroupFor(requirementMaterialsDirectory)
     val failedTools = task.workspaceToolLaunches.filter { it.status != WorkspaceToolLaunchStatus.OPENED }
     val failedServiceIds = task.services.filter { it.health == WorkspaceHealth.FAILED }
         .map(ServiceWorkspace::groupServiceId).filter(String::isNotBlank).distinct()
@@ -168,6 +188,12 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                                     DropdownMenuItem(text = { Text(type.displayName) }, onClick = { workDataToolMenu = false; controller.openWorkData(task, type) })
                                 }
                             }
+                        }
+                    }
+                    if (requirementMaterialsActionGroup == RequirementMaterialsActionGroup.WORK_DATA) {
+                        requirementMaterialsDirectory?.let { path ->
+                            ActionIconButton("打开资料目录", { controller.openDirectory(path) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.FolderOpen, "打开资料目录", Modifier.size(18.dp)) }
+                            ActionIconButton("复制资料目录路径", { controller.copyText(path, "资料目录路径已复制") }, Modifier.size(34.dp)) { Icon(Icons.Outlined.ContentCopy, "复制资料目录路径", Modifier.size(18.dp)) }
                         }
                     }
                     if (temporaryDevelopmentToolSelectionEnabled(controller.config)) {

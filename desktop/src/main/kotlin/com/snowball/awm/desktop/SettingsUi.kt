@@ -98,6 +98,12 @@ import java.nio.file.Path
 @Composable
 internal fun SettingsScreen(controller: DesktopApplication) {
     var taskRoot by remember(controller.config.taskRoot) { mutableStateOf(controller.config.taskRoot.orEmpty()) }
+    var requirementMaterialsRoot by remember(controller.config.requirementMaterialsRoot) {
+        mutableStateOf(controller.config.requirementMaterialsRoot.orEmpty())
+    }
+    var requirementMaterialsSubdirectory by remember(controller.config.requirementMaterialsSubdirectory) {
+        mutableStateOf(controller.config.requirementMaterialsSubdirectory.orEmpty())
+    }
     val developmentToolPaths = remember(controller.config.developmentTools) {
         mutableStateMapOf<DevelopmentToolType, String>().apply {
             DevelopmentToolType.entries.forEach { type ->
@@ -280,6 +286,10 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     controller = controller,
                     taskRoot = taskRoot,
                     onTaskRootChange = { taskRoot = it },
+                    requirementMaterialsRoot = requirementMaterialsRoot,
+                    onRequirementMaterialsRootChange = { requirementMaterialsRoot = it },
+                    requirementMaterialsSubdirectory = requirementMaterialsSubdirectory,
+                    onRequirementMaterialsSubdirectoryChange = { requirementMaterialsSubdirectory = it },
                     saving = saving("paths"),
                     backupMenuExpanded = backupMenuExpanded,
                     onBackupMenuExpandedChange = { backupMenuExpanded = it },
@@ -466,12 +476,18 @@ private fun SettingsPathsSection(
     controller: DesktopApplication,
     taskRoot: String,
     onTaskRootChange: (String) -> Unit,
+    requirementMaterialsRoot: String,
+    onRequirementMaterialsRootChange: (String) -> Unit,
+    requirementMaterialsSubdirectory: String,
+    onRequirementMaterialsSubdirectoryChange: (String) -> Unit,
     saving: Boolean,
     backupMenuExpanded: Boolean,
     onBackupMenuExpandedChange: (Boolean) -> Unit,
     onRestoreBackup: (ConfigStore.Backup) -> Unit,
     onImportPreview: (ConfigStore.ImportPreview) -> Unit,
 ) {
+    val materialsSaving = controller.settingsSaveState("requirement-materials-root") == SettingsSaveState.SAVING ||
+        controller.settingsSaveState("requirement-materials-subdirectory") == SettingsSaveState.SAVING
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsCard("任务路径设置", "选择 AWM 扫描和创建任务的根目录。") {
             AutoSaveStatus(controller, "paths")
@@ -492,6 +508,51 @@ private fun SettingsPathsSection(
                 }
             }
             TaskManifestIssues(controller)
+        }
+        SettingsCard("需求资料目录设置", "需求编号已填写且以下两项均不为空时，AWM 会创建或复用需求研发资料目录。") {
+            AutoSaveStatus(controller, "requirement-materials-root")
+            AutoSaveStatus(controller, "requirement-materials-subdirectory")
+            PathField(
+                "资料保存根路径",
+                requirementMaterialsRoot,
+                onRequirementMaterialsRootChange,
+                !controller.pathPickerBusy && !controller.busy && !materialsSaving,
+                Modifier.onFocusChanged { focus ->
+                    if (!focus.isFocused && requirementMaterialsRoot != controller.config.requirementMaterialsRoot.orEmpty()) {
+                        controller.updateRequirementMaterialsRoot(requirementMaterialsRoot) {
+                            onRequirementMaterialsRootChange(controller.config.requirementMaterialsRoot.orEmpty())
+                        }
+                    }
+                },
+            ) {
+                controller.chooseDirectory(requirementMaterialsRoot.ifBlank { null }) { selected ->
+                    onRequirementMaterialsRootChange(selected)
+                    controller.updateRequirementMaterialsRoot(selected) {
+                        onRequirementMaterialsRootChange(controller.config.requirementMaterialsRoot.orEmpty())
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = requirementMaterialsSubdirectory,
+                onValueChange = onRequirementMaterialsSubdirectoryChange,
+                modifier = Modifier.fillMaxWidth().onFocusChanged { focus ->
+                    if (!focus.isFocused && requirementMaterialsSubdirectory != controller.config.requirementMaterialsSubdirectory.orEmpty()) {
+                        controller.updateRequirementMaterialsSubdirectory(requirementMaterialsSubdirectory) {
+                            onRequirementMaterialsSubdirectoryChange(controller.config.requirementMaterialsSubdirectory.orEmpty())
+                        }
+                    }
+                },
+                label = { Text("需求目录下的子目录名") },
+                placeholder = { Text("例如：研发") },
+                supportingText = { Text("可留空；非空时只能填写一个安全的 Windows 目录名，保存时会自动去除首尾空格。") },
+                singleLine = true,
+                enabled = !controller.busy && !materialsSaving,
+            )
+            Text(
+                if (controller.config.requirementMaterialsConfigured) "需求资料目录功能已配置" else "根路径和子目录名均填写后才会启用需求资料目录功能",
+                color = if (controller.config.requirementMaterialsConfigured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         SettingsCard("系统主配置文件", "只读预览 AWM 的全局配置文件，并管理配置备份。") {
             ConfigFilePreview(controller)
@@ -1601,6 +1662,7 @@ private fun SettingsCard(title: String, subtitle: String, content: @Composable C
 private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "基础设置" -> Icons.Outlined.Palette
     "任务路径设置" -> Icons.Outlined.Folder
+    "需求资料目录设置" -> Icons.Outlined.Folder
     "系统主配置文件" -> Icons.Outlined.Description
     "任务组" -> Icons.Outlined.Group
     "Agent 说明" -> Icons.AutoMirrored.Outlined.Article
@@ -1614,6 +1676,14 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     else -> Icons.Outlined.Description
 }
 
+internal data class PathFieldModifierTargets(
+    val row: Modifier,
+    val textField: Modifier,
+)
+
+internal fun pathFieldModifierTargets(modifier: Modifier): PathFieldModifierTargets =
+    PathFieldModifierTargets(row = Modifier, textField = modifier)
+
 @Composable
 private fun PathField(
     label: String,
@@ -1623,8 +1693,9 @@ private fun PathField(
     modifier: Modifier = Modifier,
     onChoose: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(value, onValueChange, modifier.weight(1f), label = { Text(label) }, singleLine = true, enabled = chooseEnabled)
+    val modifierTargets = pathFieldModifierTargets(modifier)
+    Row(modifierTargets.row, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(value, onValueChange, modifierTargets.textField.weight(1f), label = { Text(label) }, singleLine = true, enabled = chooseEnabled)
         OutlinedButton(onClick = onChoose, enabled = chooseEnabled) { Icon(Icons.Outlined.Folder, null); Text("选择") }
     }
 }

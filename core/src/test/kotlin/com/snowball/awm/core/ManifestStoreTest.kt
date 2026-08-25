@@ -85,14 +85,28 @@ class ManifestStoreTest {
         Files.createDirectories(taskDirectory)
         Files.writeString(
             taskDirectory.resolve(ManifestStore.FILE_NAME),
-            """{"schemaVersion":"0.9.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
+            """{"schemaVersion":"0.10.7","folderName":"compatible","taskDirectoryName":"compatible","featureBranch":"feature/compatible","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","lifecycleStatus":"ACTIVE","services":[]}""",
         )
 
         val store = ManifestStore()
         val manifest = store.load(taskDirectory)
-        assertEquals("0.9.7", manifest.schemaVersion)
+        assertEquals("0.10.7", manifest.schemaVersion)
         store.save(taskDirectory, manifest)
         assertEquals(CURRENT_TASK_MANIFEST_SCHEMA_VERSION, store.load(taskDirectory).schemaVersion)
+    }
+
+    @Test
+    fun `0 9 manifest is rejected byte for byte without migration`() {
+        val taskDirectory = temporary.resolve("legacy-0-9")
+        Files.createDirectories(taskDirectory)
+        val legacy = """{"schemaVersion":"0.9.11","folderName":"legacy","taskDirectoryName":"legacy","featureBranch":"feature/legacy","createdAt":"2026-08-09 00:00:00","updatedAt":"2026-08-09 00:00:00","services":[]}"""
+        val target = taskDirectory.resolve(ManifestStore.FILE_NAME)
+        Files.writeString(target, legacy)
+
+        val store = ManifestStore()
+        assertThrows(IllegalArgumentException::class.java) { store.load(taskDirectory) }
+        assertEquals(legacy, Files.readString(target))
+        assertEquals(listOf(taskDirectory), store.scan(temporary).unsupportedDirectories)
     }
 
     @Test

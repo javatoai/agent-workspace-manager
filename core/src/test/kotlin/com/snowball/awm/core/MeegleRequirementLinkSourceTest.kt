@@ -2,10 +2,12 @@ package com.snowball.awm.core
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import kotlinx.coroutines.runBlocking
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicInteger
 
 class MeegleRequirementLinkSourceTest {
-    @Test fun `maps deduplicated bug links from active sprint`() {
+    @Test fun `maps deduplicated bug links from active sprint`() = runBlocking {
         val runner = object : CommandRunner {
             override fun run(command: List<String>, workingDirectory: java.nio.file.Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
                 if (command.contains("version")) return CommandResult(0, "1", "")
@@ -25,7 +27,7 @@ class MeegleRequirementLinkSourceTest {
     }
 
     @Test
-    fun `passes the configured project key when reading custom-space titles`() {
+    fun `passes the configured project key when reading custom-space titles`() = runBlocking {
         var observedProjectKey: String? = null
         val provider = object : ProjectScopedRequirementMetadataProvider {
             override fun fetch(requirementLink: String): RequirementMetadata? = null
@@ -48,7 +50,50 @@ class MeegleRequirementLinkSourceTest {
         assertEquals("自定义标题", result.candidates.single().title)
     }
 
+    @Test
+    fun `loads Meegle calls with at most four concurrent requests`() = runBlocking {
+        val tracker = ConcurrentCallTracker()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: java.nio.file.Path?, timeout: Duration, environment: Map<String, String>): CommandResult = tracker.track {
+                val mql = command[command.indexOf("--mql") + 1]
+                val projectNumber = command[command.indexOf("--project-key") + 1].substringAfterLast('-')
+                val response = when {
+                    mql.contains(".`Sprint`") -> typedIdResponse("1")
+                    mql.contains(".`Bug`") -> typedIdResponse(projectNumber)
+                    else -> "{}"
+                }
+                CommandResult(0, response, "")
+            }
+        }
+        val source = MeegleRequirementLinkSource(
+            runner = runner,
+            metadata = RequirementMetadataProvider { link -> tracker.track { RequirementMetadata(link, null) } },
+            isWindows = false,
+        )
+
+        val result = source.load((1..5).map { MeegleProjectConfig("project-$it", "space-$it") })
+
+        assertEquals(5, result.candidates.size)
+        assertEquals(4, tracker.maximum.get())
+    }
+
     private fun typedIdResponse(id: String) = """
         {"data":{"1":[{"moql_field_list":[{"key":"work_item_id","name":"Item Id","value":{"long_value":$id}}]}]}}
     """.trimIndent()
+
+    private class ConcurrentCallTracker {
+        private val active = AtomicInteger()
+        val maximum = AtomicInteger()
+
+        fun <T> track(action: () -> T): T {
+            val concurrent = active.incrementAndGet()
+            maximum.updateAndGet { maxOf(it, concurrent) }
+            try {
+                Thread.sleep(100)
+                return action()
+            } finally {
+                active.decrementAndGet()
+            }
+        }
+    }
 }

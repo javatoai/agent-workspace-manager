@@ -239,6 +239,14 @@ class TaskController internal constructor(
             tasks.delete(session.config, taskDirectory(task), discardChanges)
         }, onSuccess = { reloadTasks(); onCompleted() })
 
+    fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}): Boolean =
+        operations.run("正在重试需求资料目录…", "需求资料目录已更新", cancellable = true, block = {
+            tasks.retryRequirementMaterials(session.config, taskDirectory(task))
+        }, onSuccess = { updated ->
+            reloadTasks(updated.folderName)
+            onCompleted()
+        })
+
     fun addServices(
         task: TaskManifest,
         serviceIds: List<String>,
@@ -578,7 +586,7 @@ class TaskController internal constructor(
             return LoadedTaskSnapshot(emptyList(), "任务目录扫描失败：${error.message ?: error::class.simpleName}")
         }
         val messages = buildList {
-            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.9.x 任务目录")
+            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.10.x 任务目录")
             if (scan.failures.isNotEmpty()) {
                 add("${scan.failures.size} 个任务清单读取失败：" + scan.failures.entries.joinToString { (path, reason) -> "${path.fileName}：$reason" })
             }

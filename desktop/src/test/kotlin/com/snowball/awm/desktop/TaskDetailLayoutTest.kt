@@ -2,8 +2,24 @@ package com.snowball.awm.desktop
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import java.nio.file.Files
 
 class TaskDetailLayoutTest {
+    @Test
+    fun `ready materials actions belong to the work data group`() {
+        val directory = Files.createTempDirectory("awm-materials-actions-").toFile()
+        try {
+            assertEquals(RequirementMaterialsActionGroup.WORK_DATA, requirementMaterialsActionGroupFor(directory.absolutePath))
+            Files.delete(directory.toPath())
+            assertNull(requirementMaterialsActionGroupFor(directory.absolutePath))
+        } finally {
+            directory.deleteRecursively()
+        }
+        assertNull(requirementMaterialsActionGroupFor(null))
+        assertNull(requirementMaterialsActionGroupFor("   "))
+    }
+
     @Test
     fun `workspace summary and actions always remain in one horizontal card row`() {
         assertEquals(WorkspaceCardLayout.SIDE_BY_SIDE, workspaceCardLayout(720f))

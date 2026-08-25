@@ -77,6 +77,92 @@ class TaskApplicationServiceTest {
     }
 
     @Test
+    fun `materials directory failure does not block creation and retry persists a reused directory`() {
+        val taskRoot = Files.createTempDirectory("task-materials-")
+        val materialsRoot = Files.createTempDirectory("requirement-materials-")
+        val existingRequirement = materialsRoot.resolve("Sprint A").resolve("7035269559-existing")
+        Files.createDirectories(existingRequirement)
+        val provisioner = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val documents = RecordingAgentDocuments()
+        val manifests = ManifestStore()
+        val application = TaskApplicationService(
+            manifests = manifests,
+            provisioning = WorkspaceProvisioningService(listOf(provisioner)),
+            agentDocuments = documents,
+            requirementMaterials = RequirementMaterialsService(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val unconfigured = taskConfig(taskRoot)
+
+        val created = application.create(
+            unconfigured,
+            CreateGroupedTaskRequest(
+                folderName = "支付优化",
+                featureBranch = "feature/7035269559",
+                groupId = "alpha",
+                serviceIds = listOf("standard"),
+                requirementLink = "7035269559",
+            ),
+        )
+
+        assertEquals("7035269559", created.requirementId)
+        assertEquals(RequirementMaterialsStatus.FAILED, created.requirementMaterials.status)
+        assertTrue(created.requirementMaterials.failureReason.orEmpty().contains("资料根路径"))
+        assertTrue(Files.exists(taskRoot.resolve("支付优化").resolve(ManifestStore.FILE_NAME)))
+
+        val retried = application.retryRequirementMaterials(
+            unconfigured.copy(
+                requirementMaterialsRoot = materialsRoot.toString(),
+                requirementMaterialsSubdirectory = "研发资料",
+            ),
+            taskRoot.resolve("支付优化"),
+        )
+
+        assertEquals(RequirementMaterialsStatus.READY, retried.requirementMaterials.status)
+        assertEquals(existingRequirement.resolve("研发资料").toString(), retried.requirementMaterials.writeRoot)
+        assertTrue(Files.isDirectory(existingRequirement.resolve("研发资料")))
+        assertEquals(retried.requirementMaterials, manifests.load(taskRoot.resolve("支付优化")).requirementMaterials)
+        assertEquals(retried.requirementMaterials, documents.lastManifest?.requirementMaterials)
+    }
+
+    @Test
+    fun `deleting a git task does not delete its independent materials directory`() {
+        val taskRoot = Files.createTempDirectory("task-delete-materials-")
+        val taskDirectory = Files.createDirectories(taskRoot.resolve("task"))
+        val materialsWriteRoot = Files.createDirectories(taskRoot.resolveSibling("requirement-materials").resolve("Sprint").resolve("123-task").resolve("研发"))
+        val preserved = Files.writeString(materialsWriteRoot.resolve("notes.md"), "keep")
+        val manifests = ManifestStore()
+        manifests.save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "task",
+                taskDirectoryName = "task",
+                featureBranch = "feature/task",
+                requirementLink = "123",
+                requirementId = "123",
+                requirementMaterials = RequirementMaterialsDirectory(
+                    status = RequirementMaterialsStatus.READY,
+                    writeRoot = materialsWriteRoot.toString(),
+                ),
+                createdAt = "2026-08-08 00:00:00",
+                updatedAt = "2026-08-08 00:00:00",
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
+                services = emptyList(),
+            ),
+        )
+        val application = TaskApplicationService(
+            manifests = manifests,
+            lifecycle = DeletingTaskDirectoryLifecycle(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        application.delete(AppConfig(taskRoot = taskRoot.toString()), taskDirectory)
+
+        assertTrue(!Files.exists(taskDirectory))
+        assertEquals("keep", Files.readString(preserved))
+    }
+
+    @Test
     fun `task selection supports mixed dynamic modules and an empty clone target`() {
         val root = Files.createTempDirectory("task-mixed-selection-")
         val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
@@ -842,6 +928,22 @@ private class RecordingLifecycle : WorkspaceLifecycle {
     ) = WorkspaceMutationTarget(Path.of(workspace.repositoryPath), Path.of(workspace.worktreePath))
 }
 
+private class DeletingTaskDirectoryLifecycle : WorkspaceLifecycle {
+    override fun inspectDeleteRisks(config: AppConfig, taskDirectory: Path, manifest: TaskManifest) = emptyList<DeleteRisk>()
+    override fun requireArchiveSafe(config: AppConfig, taskDirectory: Path, manifest: TaskManifest, force: Boolean) = Unit
+    override fun removeAll(config: AppConfig, taskDirectory: Path, manifest: TaskManifest, force: Boolean): WorkspaceRemovalResult {
+        Files.walk(taskDirectory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        return WorkspaceRemovalResult()
+    }
+    override fun restoreAll(config: AppConfig, taskDirectory: Path, manifest: TaskManifest) = manifest.services
+    override fun validateForMutation(
+        config: AppConfig,
+        taskDirectory: Path,
+        manifest: TaskManifest,
+        workspace: ServiceWorkspace,
+    ) = WorkspaceMutationTarget(Path.of(workspace.repositoryPath), Path.of(workspace.worktreePath))
+}
+
 private fun taskConfig(taskRoot: Path): AppConfig {
     val repositories = listOf(
         RepositoryConfig("repo-a", "Repo A", "C:/repo-a", "C:/repo-a/.git", "https://example.test/a.git"),
@@ -910,6 +1012,7 @@ private class RecordingAgentDocuments(
     private val failOnFirstWrite: Boolean = false,
 ) : AgentDocuments {
     var lastNotes: String? = null
+    var lastManifest: TaskManifest? = null
     private var writes = 0
     override fun readGlobal(): String = ""
     override fun saveGlobal(content: String) = Unit
@@ -924,6 +1027,7 @@ private class RecordingAgentDocuments(
         writes++
         if (failOnFirstWrite && writes == 1) error("agents disk full")
         lastNotes = taskNotes
+        lastManifest = manifest
         return taskDirectory.resolve("AGENTS.md")
     }
 }
