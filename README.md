@@ -4,7 +4,7 @@ Agent Workspace Manager（AWM）是一个桌面工具，用来把“一项需求
 
 它适合需要同时修改多个服务、希望使用 Git Worktree 隔离任务、并且会配合 Codex、Cursor 等 Agent 工具开发的人或团队。创建任务后，AWM 会按你选择的服务建立独立工作区、生成任务说明、展示 Git 改动与推送状态，并在需要时构建 Tag。
 
-当前版本：**0.9.10**
+当前版本：**0.10.2**
 
 ## 适合什么场景
 
@@ -57,7 +57,30 @@ macOS 构建 DMG：
 ./scripts/build-macos.sh
 ```
 
-0.9.x 只提供桌面应用，不再包含命令行模块或命令行发布包。
+## AWM CLI 与 Codex 插件
+
+桌面绿色包内置了只面向 Agent 工作流的 `awm` CLI。它只支持 `awm agent` 下的 JSON 协议命令，不提供任意 Shell 或 Git 操作入口。
+
+### 安装 CLI
+
+Windows 绿色包启动后，打开 **设置 → AWM CLI → 安装 CLI**。应用会把 CLI 与专用 Java 运行时复制到当前用户的 `LOCALAPPDATA`，并将命令目录加入用户 `PATH`；无需管理员权限或系统 JDK。安装后重开终端；如果终端由 Codex、IDE 或 Windows Terminal 打开，请重启对应应用，再运行：
+
+```powershell
+awm --help
+```
+
+macOS/Linux 绿色包同样内置 `resources/cli/bin/awm` 与相邻的 `resources/cli-runtime`。将 `resources/cli/bin` 加入当前用户的 `PATH` 后即可使用；启动脚本会优先使用随包运行时。
+
+### 安装 Codex 插件
+
+先确认 `awm --help` 在 Codex 新开的终端中可用，再运行以下两条命令安装与当前发布版本绑定的插件：
+
+```powershell
+codex plugin marketplace add https://github.com/javatoai/agent-workspace-manager.git --ref v0.10.2
+codex plugin add awm-codex@agent-workspace-manager
+```
+
+用 `codex plugin list` 确认 `awm-codex@agent-workspace-manager` 为 `installed, enabled`，然后新开一个 Codex 任务并显式输入 `$awm`。插件会让主 Agent 负责澄清和展示计划，并只把受限 JSON CLI 调用委派给 `awm-executor` 子代理；不会自行调用 CLI，也不会代替人工确认创建任务。
 
 ## 数据位置
 

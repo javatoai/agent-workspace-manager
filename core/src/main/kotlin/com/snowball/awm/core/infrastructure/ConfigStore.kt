@@ -224,6 +224,30 @@ class ConfigStore(
     }
 }
 
+/**
+ * Agent planning only reads configuration. It accepts forward-compatible
+ * fields so a separately updated desktop app cannot make the packaged CLI
+ * unusable, but deliberately has no write path that could discard those
+ * fields.
+ */
+class AgentCompatibleConfigurationRepository(
+    paths: ApplicationPaths = ApplicationPaths.systemDefault(),
+) : ConfigurationRepository {
+    private val delegate = ConfigStore(
+        paths = paths,
+        json = Json {
+            prettyPrint = true
+            encodeDefaults = true
+            ignoreUnknownKeys = true
+        },
+    )
+
+    override fun load(): AppConfig = delegate.load()
+
+    override fun save(config: AppConfig): Nothing =
+        throw UnsupportedOperationException("Agent CLI 不会写入 AWM 配置")
+}
+
 internal fun rejectRemovedSourceRepositoryStrategy(content: String, message: String) {
     if (Regex("\\\"strategy\\\"\\s*:\\s*\\\"SOURCE_REPOSITORY\\\"").containsMatchIn(content)) {
         throw IllegalStateException(message)

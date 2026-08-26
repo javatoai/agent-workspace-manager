@@ -113,7 +113,7 @@ class TaskApplicationAgentTaskOperations(
  * only after it receives the exact nonce emitted by that plan.
  */
 class AgentOperationService(
-    private val configurations: ConfigurationRepository = ConfigStore(),
+    private val configurations: ConfigurationRepository = AgentCompatibleConfigurationRepository(),
     private val documentation: RequirementDocumentationService = RequirementDocumentationService(),
     private val tasks: AgentTaskOperations = TaskApplicationAgentTaskOperations(),
     private val store: AgentOperationStore = AgentOperationStore(),

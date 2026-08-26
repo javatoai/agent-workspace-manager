@@ -1,6 +1,6 @@
 {
   "name": "awm-codex",
-  "version": "0.9.10",
+  "version": "0.10.2",
   "description": "Explicit AWM task planning and guarded Agent CLI execution for Codex.",
   "author": {
     "name": "Snowball Technology"

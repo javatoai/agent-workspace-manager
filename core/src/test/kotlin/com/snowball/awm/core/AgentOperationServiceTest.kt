@@ -7,10 +7,38 @@ import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class AgentOperationServiceTest {
+    @Test
+    fun `inspect reads compatible configuration with forward fields without allowing writes`() {
+        val root = Files.createTempDirectory("agent-compatible-config-")
+        try {
+            val paths = ApplicationPaths(root.resolve("awm-home"))
+            Files.createDirectories(paths.home)
+            val original = """
+                {"schemaVersion":"$CURRENT_APP_CONFIG_SCHEMA_VERSION","taskRoot":"D:/tasks","requirementDocumentationRoot":"D:/docs","productionTagBuildEnabled":true}
+            """.trimIndent()
+            Files.writeString(paths.config, original)
+            val configurations = AgentCompatibleConfigurationRepository(paths)
+            val service = AgentOperationService(configurations = configurations)
+
+            val inspection = service.inspect()
+
+            assertTrue(inspection.canPlan)
+            assertEquals("D:/tasks", inspection.taskRoot)
+            assertEquals("D:/docs", inspection.requirementDocumentationRoot)
+            assertFailsWith<UnsupportedOperationException> { configurations.save(AppConfig()) }
+            assertEquals(original, Files.readString(paths.config))
+        } finally {
+            Files.walk(root).use { entries ->
+                entries.sorted(java.util.Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
     @Test
     fun `apply rechecks a fingerprint and passes the Agent-only context into task creation`() {
         val root = Files.createTempDirectory("agent-operation-")
