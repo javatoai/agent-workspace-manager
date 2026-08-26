@@ -104,6 +104,11 @@ private data class EffectiveServiceConfiguration(
     val moduleSources: Map<String, TaskModuleSource>,
 )
 
+private data class ResolvedRequirementMaterials(
+    val requirementId: String?,
+    val directory: RequirementMaterialsDirectory,
+)
+
 data class StartupSnapshot(
     val config: AppConfig,
     val tasks: List<TaskManifest>,
@@ -134,6 +139,7 @@ class TaskApplicationService(
     private val manifests: TaskManifestRepository = ManifestStore(),
     private val provisioning: WorkspaceProvisioningService = WorkspaceProvisioningService(),
     private val agentDocuments: AgentDocuments = AgentDocumentService(),
+    private val requirementMaterials: RequirementMaterialsService = RequirementMaterialsService(),
     private val lifecycle: WorkspaceLifecycle = GitWorkspaceLifecycle(),
     private val operationLock: TaskOperationLock = FileTaskOperationLock(),
     private val branchValidator: BranchReferenceValidator = GitBranchReferenceValidator(),
@@ -250,6 +256,7 @@ class TaskApplicationService(
         val repositories = config.repositories.associateBy(RepositoryConfig::id)
         requireUniqueWorkspacePaths(taskDirectory, emptyList(), services)
         val taskDirectoryName = folderName
+        val materials = resolveRequirementMaterials(config, request.requirementLink, folderName)
         taskRoot.toAbsolutePath().normalize().let { normalizedRoot ->
             Files.createDirectories(normalizedRoot)
             require(taskDirectory.toAbsolutePath().normalize().parent == normalizedRoot) { "任务目录必须是任务根目录的直接子目录" }
@@ -283,6 +290,8 @@ class TaskApplicationService(
                 taskDirectoryName = taskDirectoryName,
                 featureBranch = featureBranch,
                 requirementLink = request.requirementLink.trim(),
+                requirementId = materials.requirementId,
+                requirementMaterials = materials.directory,
                 createdAt = now,
                 updatedAt = now,
                 lifecycleStatus = TaskLifecycleStatus.ACTIVE,
@@ -341,6 +350,56 @@ class TaskApplicationService(
                 }
             }
             throw error
+        }
+    }
+
+    /** Re-attempts only the independent requirement materials directory; Git workspaces are never touched. */
+    fun retryRequirementMaterials(config: AppConfig, taskDirectory: Path): TaskManifest = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        require(manifest.requirementLink.isNotBlank()) { "任务未填写需求编号或飞书需求链接" }
+        val materials = resolveRequirementMaterials(config, manifest.requirementLink, manifest.folderName)
+        val updated = manifest.copy(
+            requirementId = materials.requirementId,
+            requirementMaterials = materials.directory,
+            updatedAt = AwmTime.format(Instant.now(clock)),
+        )
+        manifests.save(taskDirectory, updated)
+        agentDocuments.writeTaskDocument(taskDirectory, updated, config.repositories.map(RepositoryConfig::toInfo))
+        updated
+    }
+
+    private fun resolveRequirementMaterials(
+        config: AppConfig,
+        requirementInput: String,
+        folderName: String,
+    ): ResolvedRequirementMaterials {
+        val normalizedInput = requirementInput.trim()
+        if (normalizedInput.isEmpty()) {
+            return ResolvedRequirementMaterials(null, RequirementMaterialsDirectory())
+        }
+        return when (
+            val result = requirementMaterials.ensure(
+                requirementInput = normalizedInput,
+                folderName = folderName,
+                materialsRoot = config.requirementMaterialsRoot,
+                subdirectoryName = config.requirementMaterialsSubdirectory,
+                projects = config.meegleProjects,
+            )
+        ) {
+            is RequirementMaterialsResult.Ready -> ResolvedRequirementMaterials(
+                requirementId = result.requirementId,
+                directory = RequirementMaterialsDirectory(
+                    status = RequirementMaterialsStatus.READY,
+                    writeRoot = result.writeRoot.toString(),
+                ),
+            )
+            is RequirementMaterialsResult.Failed -> ResolvedRequirementMaterials(
+                requirementId = result.requirementId,
+                directory = RequirementMaterialsDirectory(
+                    status = RequirementMaterialsStatus.FAILED,
+                    failureReason = result.reason,
+                ),
+            )
         }
     }
 

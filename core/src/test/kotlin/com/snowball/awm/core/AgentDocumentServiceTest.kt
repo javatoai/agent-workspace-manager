@@ -98,12 +98,21 @@ class AgentDocumentServiceTest {
         )
         val rendered = AgentsMdWriter.render(
             temporary.resolve("tasks").resolve("table"),
-            manifest().copy(services = listOf(workspace)),
+            manifest().copy(
+                services = listOf(workspace),
+                requirementMaterials = RequirementMaterialsDirectory(
+                    status = RequirementMaterialsStatus.READY,
+                    writeRoot = "D:/requirements/Sprint/OBT-123/研发资料",
+                ),
+            ),
             emptyList(),
             "人工说明",
         )
 
         assertTrue("需求链接" in rendered)
+        assertTrue("需求资料目录" in rendered)
+        assertTrue("D:/requirements/Sprint/OBT-123/研发资料" in rendered)
+        assertTrue("需求辅助 Markdown、SQL 和脚本" in rendered)
         assertTrue("origin/master" in rendered)
         assertTrue("STANDARD_WORKTREE" in rendered)
         assertTrue("C:/tasks/table/orders" in rendered)

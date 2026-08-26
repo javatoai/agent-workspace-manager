@@ -59,6 +59,28 @@ object AgentsMdWriter {
                 appendLine("- 服务仓库自身的 README、ADR、API 文档等仍应留在相应 Worktree；不要把代码仓库文档迁移到过程文档目录。")
                 appendLine()
             }
+            appendLine("## 需求资料目录")
+            appendLine()
+            when (manifest.requirementMaterials.status) {
+                RequirementMaterialsStatus.NOT_REQUESTED -> appendLine(
+                    if (manifest.requirementLink.isBlank()) {
+                        "（未关联需求，未创建资料目录）"
+                    } else {
+                        "（已关联需求，资料目录将在创建任务时创建或复用）"
+                    },
+                )
+                RequirementMaterialsStatus.READY -> {
+                    appendLine("`${manifest.requirementMaterials.writeRoot}`")
+                    appendLine()
+                    appendLine("需求辅助 Markdown、SQL 和脚本写入此目录；产品源代码仍写入本任务 Worktree。")
+                }
+                RequirementMaterialsStatus.FAILED -> {
+                    appendLine("（暂不可用）")
+                    manifest.requirementMaterials.failureReason?.let { appendLine("原因：$it") }
+                    appendLine("可在 Agent Workspace Manager 的任务详情中重试。")
+                }
+            }
+            appendLine()
             appendLine("## 本任务可改动的 Worktree")
             appendLine()
             appendLine("| 服务名 | 创建基线 | 策略 | Worktree 路径 |")

@@ -29,6 +29,7 @@ import com.snowball.awm.core.GitRepositoryRemoteCatalog
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.WorkspaceStrategy
+import com.snowball.awm.core.validateRequirementMaterialsSubdirectory
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -205,6 +206,33 @@ class SettingsController internal constructor(
         onSuccess = { applyConfig(it); setSaveState("paths", SettingsSaveState.SAVED) },
         onFailure = { setSaveState("paths", SettingsSaveState.FAILED); onFailure(it) },
     ).also { started -> setSaveState("paths", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
+
+    /** Saves and normalizes the optional requirement-materials root independently. */
+    fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(
+        "正在保存需求资料根目录…",
+        "需求资料根目录已保存",
+        block = {
+            val normalized = value.trim().takeIf(String::isNotEmpty)?.let {
+                val path = Path.of(it).toAbsolutePath().normalize()
+                Files.createDirectories(path)
+                path.toString()
+            }
+            configStore.update { it.copy(requirementMaterialsRoot = normalized) }
+        },
+        onSuccess = { applyConfig(it); setSaveState("requirement-materials-root", SettingsSaveState.SAVED) },
+        onFailure = { setSaveState("requirement-materials-root", SettingsSaveState.FAILED); onFailure(it) },
+    ).also { started -> setSaveState("requirement-materials-root", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
+
+    /** Saves the optional single-segment child directory independently. */
+    fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存需求资料子目录…",
+        "需求资料子目录已保存",
+        onFailure,
+        "requirement-materials-subdirectory",
+        settingsOperations,
+    ) { config ->
+        config.copy(requirementMaterialsSubdirectory = validateRequirementMaterialsSubdirectory(value))
+    }
 
     fun updateDevelopmentTools(
         tools: List<DevelopmentToolConfig>,

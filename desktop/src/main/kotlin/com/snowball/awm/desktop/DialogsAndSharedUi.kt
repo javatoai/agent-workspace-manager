@@ -90,26 +90,88 @@ internal fun BatchTagDialog(
 }
 
 @Composable
-internal fun BranchInfoDialog(content: String, onDismiss: () -> Unit, onCopy: () -> Unit) {
+internal fun BranchInfoDialog(
+    content: String,
+    hasRequirementLink: Boolean,
+    onDismiss: () -> Unit,
+    onCopyServicesWithoutRequirementLink: () -> Unit,
+    onCopyServicesWithRequirementLink: () -> Unit,
+    onCopyBranchInfoWithoutRequirementLink: () -> Unit,
+    onCopyBranchInfoWithRequirementLink: () -> Unit,
+) {
     AlertDialog(
-        modifier = Modifier.widthIn(min = 1040.dp, max = 1280.dp),
+        modifier = Modifier.widthIn(min = 780.dp, max = 1_040.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         onDismissRequest = onDismiss,
         title = { Text("分支信息") },
         text = {
-            Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(11.dp)) {
-                SelectionContainer {
-                    Text(
-                        content.ifBlank { "暂无分支信息" },
-                        Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(13.dp).verticalScroll(rememberScrollState()),
-                        fontFamily = FontFamily.Monospace,
-                    )
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(11.dp)) {
+                    SelectionContainer {
+                        Text(
+                            content.ifBlank { "暂无分支信息" },
+                            Modifier.fillMaxWidth().heightIn(max = 420.dp).padding(13.dp).verticalScroll(rememberScrollState()),
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+                Surface(
+                    Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(11.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("复制内容", style = MaterialTheme.typography.titleSmall)
+                        BranchInfoCopyOptionRow(
+                            label = "服务",
+                            description = "仅服务名称",
+                            hasRequirementLink = hasRequirementLink,
+                            onCopyWithoutRequirementLink = onCopyServicesWithoutRequirementLink,
+                            onCopyWithRequirementLink = onCopyServicesWithRequirementLink,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        BranchInfoCopyOptionRow(
+                            label = "分支信息",
+                            description = "服务名和分支",
+                            hasRequirementLink = hasRequirementLink,
+                            onCopyWithoutRequirementLink = onCopyBranchInfoWithoutRequirementLink,
+                            onCopyWithRequirementLink = onCopyBranchInfoWithRequirementLink,
+                        )
+                    }
                 }
             }
         },
-        confirmButton = { Button(onClick = onCopy) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("复制") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
     )
+}
+
+@Composable
+private fun BranchInfoCopyOptionRow(
+    label: String,
+    description: String,
+    hasRequirementLink: Boolean,
+    onCopyWithoutRequirementLink: () -> Unit,
+    onCopyWithRequirementLink: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.width(118.dp)) {
+            Text(label, fontWeight = FontWeight.SemiBold)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(10.dp))
+        OutlinedButton(onClick = onCopyWithoutRequirementLink) {
+            Icon(Icons.Outlined.ContentCopy, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("不含链接")
+        }
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = onCopyWithRequirementLink, enabled = hasRequirementLink) {
+            Icon(Icons.Outlined.ContentCopy, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("含链接")
+        }
+    }
 }
 
 @Composable

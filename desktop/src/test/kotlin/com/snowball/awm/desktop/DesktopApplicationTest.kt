@@ -217,6 +217,36 @@ class DesktopApplicationTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `requirement materials settings save independently and normalize values`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-requirement-materials-save")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val materials = root.resolve("materials")
+        val controller = DesktopApplication(paths = paths, configStore = ConfigStore(paths), ioDispatcher = dispatcher)
+        try {
+            controller.updateRequirementMaterialsRoot(" ${materials} ")
+            assertEquals(SettingsSaveState.SAVING, controller.settingsSaveState("requirement-materials-root"))
+            advanceUntilIdle()
+
+            controller.updateRequirementMaterialsSubdirectory(" 研发 ")
+            assertEquals(SettingsSaveState.SAVING, controller.settingsSaveState("requirement-materials-subdirectory"))
+            advanceUntilIdle()
+
+            assertEquals(materials.toAbsolutePath().normalize().toString(), controller.config.requirementMaterialsRoot)
+            assertEquals("研发", controller.config.requirementMaterialsSubdirectory)
+            assertTrue(Files.isDirectory(materials))
+            assertTrue(controller.config.requirementMaterialsConfigured)
+            assertEquals(SettingsSaveState.SAVED, controller.settingsSaveState("requirement-materials-root"))
+            assertEquals(SettingsSaveState.SAVED, controller.settingsSaveState("requirement-materials-subdirectory"))
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun `invalid disk configuration remains visible and is never overwritten`() {
         val root = Files.createTempDirectory("awm-invalid-config")
@@ -350,6 +380,8 @@ class DesktopApplicationTest {
 
             assertContains(preview, "REQ-123 raw requirement")
             assertContains(preview, root.resolve("tasks").resolve("支付 订单优化").toString())
+            assertContains(preview, "已关联需求，资料目录将在创建任务时创建或复用")
+            assertFalse(preview.contains("未关联需求，未创建资料目录"))
         } finally {
             controller.close()
         }

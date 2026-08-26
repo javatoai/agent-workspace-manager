@@ -19,7 +19,7 @@ data class RequirementDraftState(
             branch = if (branchEdited) branch else resolved ?: branchPrefix,
             metadataLoading = FeishuWorkItemLink.parse(value) != null,
             metadataHint = if (BranchPrefixResolver.containsUnresolvedPlaceholder(branchPrefix) && resolved == null) {
-                "未从需求链接中解析到编号"
+                "未从需求编号或链接中解析到编号"
             } else null,
         )
     }
@@ -28,7 +28,7 @@ data class RequirementDraftState(
         branch = if (branchEdited) branch else BranchPrefixResolver.resolve(branchPrefix, requirementLink) ?: branchPrefix,
         metadataHint = if (!branchEdited && BranchPrefixResolver.containsUnresolvedPlaceholder(branchPrefix) &&
             BranchPrefixResolver.resolve(branchPrefix, requirementLink) == null
-        ) "未从需求链接中解析到编号" else null,
+        ) "未从需求编号或链接中解析到编号" else null,
     )
 
     fun editName(value: String): RequirementDraftState = copy(taskName = value, nameEdited = true)

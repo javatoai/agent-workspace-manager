@@ -4,7 +4,7 @@ package com.snowball.awm.core
 abstract class RequirementLinkSource {
     abstract val sourceId: String
     abstract fun isInstalled(): Boolean
-    abstract fun load(projects: List<MeegleProjectConfig>): RequirementLinkLoadResult
+    abstract suspend fun load(projects: List<MeegleProjectConfig>): RequirementLinkLoadResult
 }
 
 data class RequirementLinkCandidate(val title: String, val url: String, val sourceId: String)

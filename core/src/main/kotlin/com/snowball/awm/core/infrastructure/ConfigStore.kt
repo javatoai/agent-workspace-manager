@@ -168,6 +168,12 @@ class ConfigStore(
         val current = load()
         val changes = buildList {
             if (current.taskRoot != imported.taskRoot) add("任务路径：${current.taskRoot.orEmpty()} → ${imported.taskRoot.orEmpty()}")
+            if (current.requirementMaterialsRoot != imported.requirementMaterialsRoot) {
+                add("需求资料根路径：${current.requirementMaterialsRoot.orEmpty()} → ${imported.requirementMaterialsRoot.orEmpty()}")
+            }
+            if (current.requirementMaterialsSubdirectory != imported.requirementMaterialsSubdirectory) {
+                add("需求资料子目录：${current.requirementMaterialsSubdirectory.orEmpty()} → ${imported.requirementMaterialsSubdirectory.orEmpty()}")
+            }
             if (current.groups.size != imported.groups.size) add("任务组：${current.groups.size} → ${imported.groups.size}")
             if (current.repositories.size != imported.repositories.size) add("仓库：${current.repositories.size} → ${imported.repositories.size}")
             if (current.developmentTools != imported.developmentTools) add("开发工具配置将更新")

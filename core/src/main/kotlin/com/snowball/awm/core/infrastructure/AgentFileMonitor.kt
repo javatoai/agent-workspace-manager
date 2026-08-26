@@ -80,8 +80,11 @@ class AgentFileMonitor(
     @Synchronized
     fun track(path: Path): AgentEditorSnapshot {
         val normalized = path.toAbsolutePath().normalize()
-        normalized.parent.createDirectories()
-        registerDirectory(normalized.parent)
+        // Tracking is a read/observe operation. In particular, a task can be
+        // deleted while its detail view is still receiving a file-change event;
+        // recreating the parent here would leave an empty task directory behind.
+        // Writers create their parent explicitly in writeAtomically().
+        normalized.parent?.takeIf(Files::isDirectory)?.let(::registerDirectory)
         val disk = readOrEmpty(normalized)
         val state = tracked.getOrPut(normalized) { State(disk, dirty = false, diskHash = hash(disk)) }
         return state.snapshot(normalized)

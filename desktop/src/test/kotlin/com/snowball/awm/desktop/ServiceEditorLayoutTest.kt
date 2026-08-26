@@ -3,7 +3,11 @@ package com.snowball.awm.desktop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 
 class ServiceEditorLayoutTest {
     @Test
@@ -28,5 +32,15 @@ class ServiceEditorLayoutTest {
         val layout = tagConfigurationFieldLayout()
 
         assertEquals(layout.messageWeight, layout.targetWeight)
+    }
+
+    @Test
+    fun `path field puts the supplied modifier on the text field`() {
+        val supplied = Modifier.padding(1.dp)
+
+        val targets = pathFieldModifierTargets(supplied)
+
+        assertSame(Modifier, targets.row)
+        assertSame(supplied, targets.textField)
     }
 }

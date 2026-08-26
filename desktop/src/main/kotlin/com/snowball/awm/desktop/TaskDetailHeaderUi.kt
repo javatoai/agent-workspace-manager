@@ -48,6 +48,7 @@ import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.health
 import com.snowball.awm.core.isHttpUrl
 import com.snowball.awm.core.RequirementReference
+import com.snowball.awm.core.RequirementMaterialsStatus
 
 internal data class ParticipantSummary(
     val label: String,
@@ -109,7 +110,7 @@ internal fun TaskDetailHeader(
         controller::gitHealth,
         controller.config.hiddenTaskDetailBranches,
     )
-    val requirementNumber = RequirementReference.number(task.requirementLink)
+    val requirementNumber = task.requirementId ?: RequirementReference.number(task.requirementLink)
     Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f), shape = RoundedCornerShape(16.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp),
@@ -140,10 +141,10 @@ internal fun TaskDetailHeader(
                             onClick = if (isHttpUrl(task.requirementLink)) ({ controller.openUrl(task.requirementLink) }) else null,
                         )
                         ActionIconButton(
-                            label = "复制需求链接",
-                            onClick = { controller.copyText(task.requirementLink, "需求链接已复制") },
+                            label = "复制需求编号或链接",
+                            onClick = { controller.copyText(task.requirementLink, "需求编号或链接已复制") },
                             modifier = Modifier.size(30.dp),
-                        ) { Icon(Icons.Outlined.ContentCopy, "复制需求链接", Modifier.size(15.dp)) }
+                        ) { Icon(Icons.Outlined.ContentCopy, "复制需求编号或链接", Modifier.size(15.dp)) }
                         requirementNumber?.let { number ->
                             ActionIconButton(
                                 label = "复制需求编号 $number",
@@ -153,6 +154,7 @@ internal fun TaskDetailHeader(
                         }
                     }
                 }
+                RequirementMaterialsDirectoryRow(controller, task)
                 if (branchSummary.isNotEmpty()) FlowRow(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -173,6 +175,33 @@ internal fun TaskDetailHeader(
                 }
             }
             TaskLifecycleActions(controller, task, onArchive, onDelete)
+        }
+    }
+}
+
+@Composable
+private fun RequirementMaterialsDirectoryRow(controller: DesktopApplication, task: TaskManifest) {
+    when (task.requirementMaterials.status) {
+        RequirementMaterialsStatus.NOT_REQUESTED -> Unit
+        RequirementMaterialsStatus.READY -> Unit
+        RequirementMaterialsStatus.FAILED -> {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "需求资料目录未就绪：${task.requirementMaterials.failureReason ?: "未知原因"}",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(onClick = { controller.retryRequirementMaterials(task) }, enabled = !controller.busy) {
+                    Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("重试资料目录")
+                }
+            }
         }
     }
 }

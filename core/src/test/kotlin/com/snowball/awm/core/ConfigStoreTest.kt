@@ -215,16 +215,26 @@ class ConfigStoreTest {
     @Test
     fun `configuration can be exported and imported after validation`() {
         val sourceStore = ConfigStore(ApplicationPaths(temporary.resolve("source")))
-        sourceStore.save(AppConfig(taskRoot = "D:/tasks"))
+        sourceStore.save(
+            AppConfig(
+                taskRoot = "D:/tasks",
+                requirementMaterialsRoot = "D:/requirement-materials",
+                requirementMaterialsSubdirectory = "研发",
+            ),
+        )
         val exported = sourceStore.exportTo(temporary.resolve("shared/config.json"))
         val targetStore = ConfigStore(ApplicationPaths(temporary.resolve("target")))
 
         val preview = targetStore.previewImport(exported)
         assertTrue(preview.changes.any { it.startsWith("任务路径") })
+        assertTrue(preview.changes.any { it.startsWith("需求资料根路径") })
+        assertTrue(preview.changes.any { it.startsWith("需求资料子目录") })
 
         val imported = targetStore.importFrom(exported)
 
         assertEquals("D:/tasks", imported.taskRoot)
+        assertEquals("D:/requirement-materials", imported.requirementMaterialsRoot)
+        assertEquals("研发", imported.requirementMaterialsSubdirectory)
         assertTrue(targetStore.exists())
     }
 
@@ -248,15 +258,44 @@ class ConfigStoreTest {
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.9.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"0.11.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.9.9", compatible.schemaVersion)
+        assertEquals("0.11.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)
+    }
+
+    @Test
+    fun `requirement materials settings round trip and blank settings stay disabled`() {
+        val paths = ApplicationPaths(temporary.resolve("requirement-materials"))
+        val store = ConfigStore(paths)
+        val configured = AppConfig(
+            requirementMaterialsRoot = "D:/research-materials",
+            requirementMaterialsSubdirectory = " 研发 ",
+        )
+
+        store.save(configured)
+
+        assertEquals("D:/research-materials", store.load().requirementMaterialsRoot)
+        assertEquals(" 研发 ", store.load().requirementMaterialsSubdirectory)
+        assertTrue(store.load().requirementMaterialsConfigured)
+        assertFalse(AppConfig(requirementMaterialsRoot = "D:/research-materials").requirementMaterialsConfigured)
+        assertFalse(AppConfig(requirementMaterialsSubdirectory = "研发").requirementMaterialsConfigured)
+    }
+
+    @Test
+    fun `requirement materials subdirectory rejects unsafe Windows names`() {
+        listOf(".", "..", "a/b", "a\\b", "bad:name", "name.", " name . ", "CON", "com1.txt").forEach { value ->
+            assertFailsWith<IllegalArgumentException> {
+                AppConfig(requirementMaterialsSubdirectory = value)
+            }
+        }
+        assertEquals("研发", validateRequirementMaterialsSubdirectory(" 研发 "))
+        assertEquals("", validateRequirementMaterialsSubdirectory("   "))
     }
 
     @Test
@@ -268,6 +307,17 @@ class ConfigStoreTest {
 
         assertThrows(UnsupportedConfigVersionException::class.java) { ConfigStore(paths).load() }
         assertEquals(incompatible, Files.readString(paths.config))
+    }
+
+    @Test
+    fun `0 9 config is rejected without migration`() {
+        val paths = ApplicationPaths(temporary.resolve("legacy-0-9"))
+        Files.createDirectories(paths.home)
+        val legacy = """{"schemaVersion":"0.9.11","groups":[{"id":"default","name":"默认组","services":[]}]}"""
+        Files.writeString(paths.config, legacy)
+
+        assertThrows(UnsupportedConfigVersionException::class.java) { ConfigStore(paths).load() }
+        assertEquals(legacy, Files.readString(paths.config))
     }
 
     @Test

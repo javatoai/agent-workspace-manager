@@ -53,6 +53,7 @@ import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RepositoryRemoteCatalog
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.RequirementMetadata
+import com.snowball.awm.core.RequirementMaterialsService
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
 import com.snowball.awm.core.GitTagDeliveryAdapter
@@ -186,6 +187,7 @@ class DesktopApplication(
         manifests = manifests,
         provisioning = provisioning,
         agentDocuments = agentDocuments,
+        requirementMaterials = RequirementMaterialsService(meegleExecutable = meegleExecutable),
         lifecycle = GitWorkspaceLifecycle(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
         operationLock = operationLock,
         branchValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
@@ -523,7 +525,10 @@ class DesktopApplication(
             agentMonitor.track(paths.globalAgents)
         }.onFailure(::showError)
         config.groups.forEach { group ->
-            runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
+            runCatching {
+                agentDocuments.ensureGroupFile(group.id)
+                agentMonitor.track(paths.groupAgents(group.id))
+            }.onFailure(::showError)
         }
         refreshCurrentTaskGitStatus()
     }
@@ -540,6 +545,10 @@ class DesktopApplication(
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
     fun updateRequirementDocumentationRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateRequirementDocumentationRoot(value, onFailure)
+    fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateRequirementMaterialsRoot(value, onFailure)
+    fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateRequirementMaterialsSubdirectory(value, onFailure)
     fun updateDevelopmentTools(
         tools: List<com.snowball.awm.core.DevelopmentToolConfig>,
         defaultTool: com.snowball.awm.core.DevelopmentToolType,
@@ -653,6 +662,9 @@ class DesktopApplication(
     fun deleteTask(task: TaskManifest, forceDiscard: Boolean, onCompleted: () -> Unit = {}) =
         taskController.delete(task, forceDiscard, onCompleted)
 
+    fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}) =
+        taskController.retryRequirementMaterials(task, onCompleted)
+
     fun buildTag(task: TaskManifest, workspace: ServiceWorkspace) = deliveryController.build(task, workspace)
     fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>, onCompleted: () -> Unit = {}) =
         deliveryController.buildBatch(task, workspaces, onCompleted)
@@ -669,6 +681,12 @@ class DesktopApplication(
     fun retryFailedServices(task: TaskManifest, serviceIds: List<String>? = null) = taskController.retry(task, serviceIds)
 
     fun branchInfo(task: TaskManifest): String = TaskBranchInfoFormatter.format(task)
+
+    fun branchInfo(task: TaskManifest, includeRequirementLink: Boolean): String =
+        TaskBranchInfoFormatter.formatBranchInfo(task, includeRequirementLink)
+
+    fun branchServices(task: TaskManifest, includeRequirementLink: Boolean): String =
+        TaskBranchInfoFormatter.formatServices(task, includeRequirementLink)
 
     fun openWorkData(task: TaskManifest, type: com.snowball.awm.core.DevelopmentToolType = config.defaultDevelopmentTool) =
         desktopActions.openWorkData(taskDirectory(task), type)
@@ -853,7 +871,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.9.x 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.11.x 任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(
@@ -890,7 +908,10 @@ class DesktopApplication(
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
         if (requirementConfigurationChanged) requirementController.onConfigurationChanged()
         updated.groups.forEach { group ->
-            runCatching { agentMonitor.track(paths.groupAgents(group.id)) }.onFailure(::showError)
+            runCatching {
+                agentDocuments.ensureGroupFile(group.id)
+                agentMonitor.track(paths.groupAgents(group.id))
+            }.onFailure(::showError)
         }
         refreshConfigFileSnapshot()
     }
