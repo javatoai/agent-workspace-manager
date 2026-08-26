@@ -591,7 +591,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = controller::installCli,
-                    enabled = status.bundledPayloadAvailable && !controller.settingsBusy,
+                    enabled = status.bundledPayloadAvailable && (status.installed || !status.uninstallAvailable) && !controller.settingsBusy,
                 ) {
                     Icon(Icons.Outlined.Terminal, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(5.dp))
@@ -604,7 +604,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
                 }
                 OutlinedButton(
                     onClick = { confirmUninstall = true },
-                    enabled = status.installed && !controller.settingsBusy,
+                    enabled = status.uninstallAvailable && !controller.settingsBusy,
                 ) {
                     Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(5.dp))

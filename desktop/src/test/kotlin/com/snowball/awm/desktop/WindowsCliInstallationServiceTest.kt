@@ -37,6 +37,8 @@ class WindowsCliInstallationServiceTest {
             assertTrue(Files.isRegularFile(versionDirectory.resolve("cli/bin/awm.cmd")))
             assertTrue(Files.isRegularFile(versionDirectory.resolve("cli/lib/awm.jar")))
             assertTrue(Files.isRegularFile(versionDirectory.resolve("runtime/bin/java.exe")))
+            assertTrue(Files.isRegularFile(localApplicationData.resolve("AgentWorkspaceManager/cli/.awm-cli-managed")))
+            assertContains(Files.readString(commandDirectory.resolve("awm.cmd")), "AWM-CLI-MANAGED: v1")
             assertContains(Files.readString(commandDirectory.resolve("awm.cmd")), "..\\cli\\0.9.10\\cli\\bin\\awm.cmd")
             assertEquals("C:\\Tools;${commandDirectory.toAbsolutePath().normalize()}", pathStore.value)
             assertEquals(1, environmentNotifications)
@@ -65,6 +67,7 @@ class WindowsCliInstallationServiceTest {
             assertTrue(status.supported)
             assertFalse(status.bundledPayloadAvailable)
             assertFalse(status.installed)
+            assertFalse(status.uninstallAvailable)
             assertFailsWith<IllegalArgumentException> { service.install() }
         } finally {
             deleteTree(root)
@@ -86,6 +89,7 @@ class WindowsCliInstallationServiceTest {
             )
 
             assertFailsWith<IllegalArgumentException> { service.install() }
+            assertFalse(service.inspect().bundledPayloadAvailable)
             assertFalse(Files.exists(localApplicationData))
         } finally {
             deleteTree(root)
@@ -148,6 +152,82 @@ class WindowsCliInstallationServiceTest {
             assertTrue(Files.isRegularFile(commandDirectory.resolve("keep.txt")))
             assertEquals("C:\\Tools;C:\\Other", pathStore.value)
             assertEquals(2, environmentNotifications)
+        } finally {
+            deleteTree(root)
+        }
+    }
+
+    @Test
+    fun `incomplete managed payload remains uninstallable for recovery`() {
+        val root = Files.createTempDirectory("awm-cli-partial-uninstall")
+        try {
+            val localApplicationData = root.resolve("local-app-data")
+            val service = WindowsCliInstallationService(
+                source = { bundledSource(root.resolve("bundle"), version = "0.9.10") },
+                localApplicationData = { localApplicationData },
+                userPath = InMemoryUserPathStore(),
+                isWindows = { true },
+            )
+            service.install()
+            Files.delete(localApplicationData.resolve("AgentWorkspaceManager/cli/0.9.10/runtime/bin/java.exe"))
+
+            val incomplete = service.inspect()
+
+            assertFalse(incomplete.installed)
+            assertTrue(incomplete.uninstallAvailable)
+            assertTrue(service.uninstall().bundledPayloadAvailable)
+            assertFalse(Files.exists(localApplicationData.resolve("AgentWorkspaceManager/cli")))
+        } finally {
+            deleteTree(root)
+        }
+    }
+
+    @Test
+    fun `custom command entry is never overwritten or removed`() {
+        val root = Files.createTempDirectory("awm-cli-custom-command")
+        try {
+            val localApplicationData = root.resolve("local-app-data")
+            val command = localApplicationData.resolve("AgentWorkspaceManager/bin/awm.cmd")
+            Files.createDirectories(command.parent)
+            Files.writeString(command, "@echo custom command\r\n")
+            val pathStore = InMemoryUserPathStore("C:\\Tools")
+            val service = WindowsCliInstallationService(
+                source = { bundledSource(root.resolve("bundle"), version = "0.9.10") },
+                localApplicationData = { localApplicationData },
+                userPath = pathStore,
+                isWindows = { true },
+            )
+
+            assertFailsWith<IllegalArgumentException> { service.install() }
+            assertEquals("@echo custom command\r\n", Files.readString(command))
+            assertFalse(Files.exists(localApplicationData.resolve("AgentWorkspaceManager/cli")))
+            service.uninstall()
+            assertTrue(Files.isRegularFile(command))
+            assertEquals("C:\\Tools", pathStore.value)
+        } finally {
+            deleteTree(root)
+        }
+    }
+
+    @Test
+    fun `quoted trailing slash path entry is reused and removed`() {
+        val root = Files.createTempDirectory("awm-cli-normalized-path")
+        try {
+            val localApplicationData = root.resolve("local-app-data")
+            val commandDirectory = localApplicationData.resolve("AgentWorkspaceManager/bin").toAbsolutePath().normalize()
+            val quotedExistingEntry = "\"${commandDirectory.toString().replace('/', '\\')}\\\""
+            val pathStore = InMemoryUserPathStore("$quotedExistingEntry;C:\\Tools")
+            val service = WindowsCliInstallationService(
+                source = { bundledSource(root.resolve("bundle"), version = "0.9.10") },
+                localApplicationData = { localApplicationData },
+                userPath = pathStore,
+                isWindows = { true },
+            )
+
+            service.install()
+            assertEquals("$quotedExistingEntry;C:\\Tools", pathStore.value)
+            service.uninstall()
+            assertEquals("C:\\Tools", pathStore.value)
         } finally {
             deleteTree(root)
         }

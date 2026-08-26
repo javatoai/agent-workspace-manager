@@ -15,6 +15,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.Comparator
+import java.util.Locale
 
 /** One portable CLI payload bundled with the desktop green package. */
 internal data class PortableCliSource(
@@ -27,6 +28,7 @@ data class CliInstallationStatus(
     val supported: Boolean,
     val bundledPayloadAvailable: Boolean,
     val installed: Boolean,
+    val uninstallAvailable: Boolean = false,
     val commandPath: Path? = null,
     val version: String? = null,
     val message: String,
@@ -61,14 +63,18 @@ internal class WindowsCliInstallationService(
         }
         val command = commandDirectory().resolve(COMMAND_FILE)
         val installedVersion = readInstalledVersion()
-        val installed = Files.isRegularFile(command) && installedVersion != null &&
+        val managedCommand = isManagedStableCommand(command, installedVersion)
+        val managedPayload = hasManagedPayload(managedCommand, installedVersion)
+        val installed = managedCommand && installedVersion != null &&
             validInstallation(cliVersionsDirectory().resolve(installedVersion))
-        val bundled = source()
+        val uninstallAvailable = managedCommand || managedPayload
+        val bundled = bundledSource()
         return when {
             installed && bundled != null -> CliInstallationStatus(
                 supported = true,
                 bundledPayloadAvailable = true,
                 installed = true,
+                uninstallAvailable = true,
                 commandPath = command,
                 version = installedVersion,
                 message = "已安装 AWM CLI $installedVersion；新开的终端可直接运行 awm。",
@@ -77,9 +83,19 @@ internal class WindowsCliInstallationService(
                 supported = true,
                 bundledPayloadAvailable = false,
                 installed = true,
+                uninstallAvailable = true,
                 commandPath = command,
                 version = installedVersion,
                 message = "已安装 AWM CLI $installedVersion；当前运行的不是可更新的绿色包。",
+            )
+            uninstallAvailable -> CliInstallationStatus(
+                supported = true,
+                bundledPayloadAvailable = bundled != null,
+                installed = false,
+                uninstallAvailable = true,
+                commandPath = command,
+                version = installedVersion,
+                message = "检测到未完成的 AWM CLI 安装或卸载；请点击“卸载 CLI”完成清理后再安装。",
             )
             bundled != null -> CliInstallationStatus(
                 supported = true,
@@ -101,8 +117,11 @@ internal class WindowsCliInstallationService(
 
     override fun install(): CliInstallationStatus {
         require(isWindows()) { "一键 CLI 安装仅支持 Windows 绿色包" }
-        val bundled = requireNotNull(source()) { "未找到绿色包内置的 CLI 或运行时；开发模式不会复制本机 JDK。" }
+        val bundled = requireNotNull(bundledSource()) {
+            "未找到完整的绿色包 CLI 或运行时；开发模式不会复制本机 JDK。"
+        }
         validateSource(bundled)
+        validateStableCommandTarget()
 
         val versionDirectory = cliVersionsDirectory().resolve(bundled.version)
         if (Files.exists(versionDirectory)) {
@@ -121,6 +140,7 @@ internal class WindowsCliInstallationService(
             }
         }
 
+        writePayloadMarker()
         Files.createDirectories(commandDirectory())
         writeStableCommand(bundled.version)
         addCommandDirectoryToUserPath()
@@ -131,13 +151,30 @@ internal class WindowsCliInstallationService(
     override fun uninstall(): CliInstallationStatus {
         require(isWindows()) { "一键 CLI 卸载仅支持 Windows" }
 
-        removeCommandDirectoryFromUserPath()
-        environmentChanged()
-        Files.deleteIfExists(commandDirectory().resolve(COMMAND_FILE))
-        Files.deleteIfExists(commandDirectory().resolve(VERSION_FILE))
-        deleteTree(cliVersionsDirectory())
+        val command = commandDirectory().resolve(COMMAND_FILE)
+        val installedVersion = readInstalledVersion()
+        val managedCommand = isManagedStableCommand(command, installedVersion)
+        val managedPayload = hasManagedPayload(managedCommand, installedVersion)
+        if (!managedCommand && !managedPayload) return inspect()
+
+        // Delete the payload first. If a running CLI holds a file lock, the
+        // command and PATH stay available and the user can retry cleanup.
+        if (managedPayload) deleteManagedPayload()
+        if (managedCommand) {
+            Files.deleteIfExists(command)
+            Files.deleteIfExists(commandDirectory().resolve(VERSION_FILE))
+            if (removeCommandDirectoryFromUserPath()) environmentChanged()
+        }
         return inspect()
     }
+
+    private fun bundledSource(): PortableCliSource? = source()?.takeIf(::isCompleteSource)
+
+    private fun isCompleteSource(source: PortableCliSource): Boolean =
+        source.version.matches(VERSION_PATTERN) &&
+            Files.isRegularFile(source.cliHome.resolve("bin").resolve(PACKAGED_COMMAND_FILE)) &&
+            hasCliLibraries(source.cliHome) &&
+            Files.isRegularFile(source.runtimeHome.resolve("bin").resolve("java.exe"))
 
     private fun validateSource(source: PortableCliSource) {
         require(source.version.matches(VERSION_PATTERN)) { "CLI 版本号不合法：${source.version}" }
@@ -161,32 +198,97 @@ internal class WindowsCliInstallationService(
         return Files.list(libraries).use { entries -> entries.anyMatch(Files::isRegularFile) }
     }
 
+    private fun validateStableCommandTarget() {
+        val command = commandDirectory().resolve(COMMAND_FILE)
+        if (!Files.exists(command)) return
+        require(isManagedStableCommand(command, readInstalledVersion())) {
+            "CLI 命令入口已被其他文件占用：$command；为避免覆盖，请先手工检查或移走它"
+        }
+    }
+
+    private fun hasManagedPayload(managedCommand: Boolean, installedVersion: String?): Boolean =
+        hasPayloadMarker() ||
+            (managedCommand && installedVersion != null && validInstallation(cliVersionsDirectory().resolve(installedVersion)))
+
+    private fun hasPayloadMarker(): Boolean = runCatching {
+        Files.readString(cliVersionsDirectory().resolve(PAYLOAD_MARKER_FILE), StandardCharsets.UTF_8).trim() ==
+            PAYLOAD_MARKER_CONTENT.trim()
+    }.getOrDefault(false)
+
+    private fun writePayloadMarker() {
+        writeAtomically(cliVersionsDirectory().resolve(PAYLOAD_MARKER_FILE), PAYLOAD_MARKER_CONTENT)
+    }
+
+    private fun deleteManagedPayload() {
+        val root = cliVersionsDirectory()
+        val marker = root.resolve(PAYLOAD_MARKER_FILE)
+        if (!Files.exists(root)) return
+
+        // Keep the ownership marker until every payload file is removed. If a
+        // running awm process holds a file lock, the next inspect still offers
+        // a retry instead of hiding an incomplete uninstall.
+        Files.walk(root).use { paths ->
+            paths.sorted(Comparator.reverseOrder())
+                .filter { entry -> entry != root && entry != marker }
+                .forEach { Files.deleteIfExists(it) }
+        }
+        Files.deleteIfExists(marker)
+        Files.deleteIfExists(root)
+    }
+
+    private fun isManagedStableCommand(command: Path, installedVersion: String?): Boolean = runCatching {
+        if (!Files.isRegularFile(command)) return@runCatching false
+        val content = normalizeCommandContent(Files.readString(command, StandardCharsets.UTF_8))
+        content.lineSequence().any { it.trim() == "rem $STABLE_COMMAND_MARKER" } ||
+            (installedVersion != null && content == normalizeCommandContent(legacyStableCommandContent(installedVersion)))
+    }.getOrDefault(false)
+
     private fun writeStableCommand(version: String) {
         val command = commandDirectory().resolve(COMMAND_FILE)
-        val content = """
-            @echo off
-            setlocal
-            call "%~dp0..\cli\$version\cli\bin\$PACKAGED_COMMAND_FILE" %*
-            set "AWM_EXIT_CODE=%ERRORLEVEL%"
-            endlocal & exit /b %AWM_EXIT_CODE%
-        """.trimIndent() + "\r\n"
-        writeAtomically(command, content)
+        writeAtomically(command, stableCommandContent(version))
         writeAtomically(commandDirectory().resolve(VERSION_FILE), "$version\r\n")
     }
 
+    private fun stableCommandContent(version: String): String = commandContent(version, "rem $STABLE_COMMAND_MARKER")
+
+    private fun legacyStableCommandContent(version: String): String = commandContent(version, "")
+
+    private fun commandContent(version: String, marker: String): String = buildString {
+        appendLine("@echo off")
+        if (marker.isNotBlank()) appendLine(marker)
+        appendLine("setlocal")
+        appendLine("call \"%~dp0..\\cli\\$version\\cli\\bin\\$PACKAGED_COMMAND_FILE\" %*")
+        appendLine("set \"AWM_EXIT_CODE=%ERRORLEVEL%\"")
+        appendLine("endlocal & exit /b %AWM_EXIT_CODE%")
+    }.replace("\n", "\r\n")
+
+    private fun normalizeCommandContent(content: String): String = content.replace("\r\n", "\n").trim()
+
     private fun addCommandDirectoryToUserPath() {
         val directory = commandDirectory().toAbsolutePath().normalize().toString()
-        val current = userPath.read()
-        val entries = current.split(';').map(String::trim).filter(String::isNotEmpty)
-        if (entries.any { it.equals(directory, ignoreCase = true) }) return
+        val entries = pathEntries(userPath.read())
+        val directoryKey = pathComparisonKey(directory)
+        if (entries.any { pathComparisonKey(it) == directoryKey }) return
         userPath.write((entries + directory).joinToString(";"))
     }
 
-    private fun removeCommandDirectoryFromUserPath() {
+    private fun removeCommandDirectoryFromUserPath(): Boolean {
         val directory = commandDirectory().toAbsolutePath().normalize().toString()
-        val entries = userPath.read().split(';').map(String::trim).filter(String::isNotEmpty)
-        val retained = entries.filterNot { it.equals(directory, ignoreCase = true) }
-        if (retained.size != entries.size) userPath.write(retained.joinToString(";"))
+        val directoryKey = pathComparisonKey(directory)
+        val entries = pathEntries(userPath.read())
+        val retained = entries.filterNot { pathComparisonKey(it) == directoryKey }
+        if (retained.size == entries.size) return false
+        userPath.write(retained.joinToString(";"))
+        return true
+    }
+
+    private fun pathEntries(value: String): List<String> = value.split(';').filter { it.isNotBlank() }
+
+    private fun pathComparisonKey(value: String): String {
+        val localData = System.getenv("LOCALAPPDATA")
+        val expanded = if (localData.isNullOrBlank()) value else
+            value.replace(LOCAL_APPLICATION_DATA_VARIABLE, localData, ignoreCase = true)
+        return expanded.trim().removeSurrounding("\"").trim().replace('/', '\\').trimEnd('\\').lowercase(Locale.ROOT)
     }
 
     private fun readInstalledVersion(): String? = runCatching {
@@ -242,6 +344,10 @@ internal class WindowsCliInstallationService(
         private const val COMMAND_FILE = "awm.cmd"
         private const val PACKAGED_COMMAND_FILE = "awm.cmd"
         private const val VERSION_FILE = "awm.version"
+        private const val PAYLOAD_MARKER_FILE = ".awm-cli-managed"
+        private const val PAYLOAD_MARKER_CONTENT = "owner=AgentWorkspaceManager\nformat=1\n"
+        private const val STABLE_COMMAND_MARKER = "AWM-CLI-MANAGED: v1"
+        private const val LOCAL_APPLICATION_DATA_VARIABLE = "%LOCALAPPDATA%"
         private val VERSION_PATTERN = Regex("[0-9A-Za-z][0-9A-Za-z.+-]{0,127}")
 
         private fun packagedSource(): PortableCliSource? {
