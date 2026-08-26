@@ -82,6 +82,7 @@ import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ApplicationEventClipboard
 import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.GitCommandSource
+import com.snowball.awm.core.GenbuCommandSource
 import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DevelopmentToolConfig
 import com.snowball.awm.core.DevelopmentToolType
@@ -92,6 +93,7 @@ import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.gitProbeCommandDisplay
 import com.snowball.awm.core.meegleProbeCommandDisplay
+import com.snowball.awm.core.genbuProbeCommandDisplay
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -157,6 +159,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "tools" to "开发工具",
         "branches" to "分支",
         "git" to "Git",
+        "genbu" to "Genbu",
         "feishu" to "飞书项目",
         "logs" to "日志",
     )
@@ -206,6 +209,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
+        if (selectedSection == "genbu") controller.refreshGenbuCommandResolution()
     }
     DisposableEffect(selectedSection) {
         onDispose { if (selectedSection == "feishu") controller.cancelMeegleProjectLoad() }
@@ -359,6 +363,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
                 )
             }
+            if (selectedSection == "genbu") item { SettingsGenbuSection(controller) }
             if (selectedSection == "feishu") item {
                 SettingsFeishuSection(
                     controller = controller,
@@ -468,6 +473,62 @@ private fun SettingsBasicSection(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsGenbuSection(controller: DesktopApplication) {
+    val (command, source) = controller.genbuCommandResolution()
+    val sourceLabel = when (source) {
+        GenbuCommandSource.PROBED -> "自动识别"
+        GenbuCommandSource.CONFIGURED_FALLBACK -> "已配置兜底"
+        GenbuCommandSource.PATH_FALLBACK -> "PATH 回退"
+    }
+    val probeCommand = genbuProbeCommandDisplay(System.getProperty("os.name"))
+    SettingsCard("Genbu CLI", "自动识别本机 Genbu 命令；若未识别到，可填写可执行文件绝对路径作为兜底。") {
+        Text("当前路径：$command", style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
+        Text("来源：$sourceLabel", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("探测命令：$probeCommand", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = controller::refreshGenbuCommandResolution) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重新识别")
+            }
+            OutlinedButton(onClick = { controller.copyText(command, "Genbu 命令路径已复制") }) {
+                Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("复制路径")
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        GenbuExecutablePathEditor(controller)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text("服务级开关默认关闭。请在“服务仓库 → 编辑服务 → 基本信息”中开启“启用 Genbu 探测”；旧服务会默认使用展示名称作为 Genbu 服务名。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun GenbuExecutablePathEditor(controller: DesktopApplication) {
+    var pathInput by remember(controller.config.genbuExecutablePath) {
+        mutableStateOf(controller.config.genbuExecutablePath.orEmpty())
+    }
+    val saving = controller.settingsSaveState("genbu") == SettingsSaveState.SAVING
+    val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            pathInput,
+            { pathInput = it },
+            Modifier.fillMaxWidth().onFocusChanged { focus ->
+                if (!focus.isFocused && pathInput.trim() != controller.config.genbuExecutablePath.orEmpty()) {
+                    controller.updateGenbuExecutablePath(pathInput) {
+                        pathInput = controller.config.genbuExecutablePath.orEmpty()
+                    }
+                }
+            },
+            label = { Text("Genbu 命令路径（自动探测失败时使用）") },
+            placeholder = { Text(if (isWindows) "例如 D:\\cli-list\\genbu.exe" else "例如 /usr/local/bin/genbu") },
+            supportingText = { Text("留空则只使用自动探测和 PATH 回退；已探测到命令时，此路径不会覆盖自动结果。") },
+            singleLine = true,
+            readOnly = controller.busy || saving,
+        )
+        AutoSaveStatus(controller, "genbu")
     }
 }
 

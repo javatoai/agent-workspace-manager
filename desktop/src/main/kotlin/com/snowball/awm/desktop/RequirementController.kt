@@ -113,6 +113,24 @@ class RequirementController internal constructor(
     fun stateFor(task: TaskManifest): RequirementUiState =
         states[task.taskDirectoryName] ?: RequirementUiState.NotLoaded
 
+    fun loadedMetadataFor(task: TaskManifest): RequirementMetadata? =
+        (stateFor(task) as? RequirementUiState.Loaded)?.metadata
+
+    /** Resolves metadata for an action without changing the task-detail loading state. */
+    fun fetchMetadata(task: TaskManifest, onResult: (RequirementMetadata?) -> Unit) {
+        val parsed = FeishuWorkItemLink.parse(task.requirementLink)
+        if (parsed == null) {
+            onResult(null)
+            return
+        }
+        val projectKey = projectKey(parsed, session.config)
+        scope.launch {
+            val result = coordinator.fetch(task.requirementLink, projectKey)
+            if (result is RequirementFetchResult.Failure) recordMetadataFailure(projectKey)
+            onResult((result as? RequirementFetchResult.Success)?.metadata)
+        }
+    }
+
     fun refreshAll(force: Boolean = false) {
         reconcileTasks()
         session.tasks.forEach { refresh(it, force) }

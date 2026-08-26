@@ -160,7 +160,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                     ActionIconButton("在任务目录打开终端", { controller.terminal(controller.taskPath(task)) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp)) }
                     ActionIconButton("打开任务目录", { controller.openDirectory(controller.taskPath(task)) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.FolderOpen, "打开任务目录", Modifier.size(18.dp)) }
                 }
-                if (tagWorkspaces.size > 1) {
+                if (tagWorkspaces.isNotEmpty()) {
                     IconActionGroup {
                         ActionIconButton("批量 Tag", { showBatchTag = true }, Modifier.size(34.dp), enabled = !controller.busy, loading = tagOperationLoading) { Icon(Icons.Outlined.Sell, "批量 Tag", Modifier.size(18.dp)) }
                     }
@@ -350,7 +350,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
         )
     }
     if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
-        controller.deliveryController.buildBatch(task, selected) { showBatchTag = false }
+        if (controller.buildTags(task, selected)) showBatchTag = false
     }
     if (showBranchInfo) {
         BranchInfoDialog(

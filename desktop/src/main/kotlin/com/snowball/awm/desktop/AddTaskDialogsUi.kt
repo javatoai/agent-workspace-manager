@@ -142,9 +142,11 @@ internal fun AddTaskServicesDialog(
 ) {
     val services = controller.addableServices(task)
     var selected by remember(task.folderName) { mutableStateOf<Set<String>>(emptySet()) }
+    var serviceSearch by remember(task.folderName) { mutableStateOf("") }
     var checkingBranchReuse by remember(task.folderName) { mutableStateOf(false) }
     var branchConflicts by remember(task.folderName) { mutableStateOf<List<BranchReuseConflict>?>(null) }
     val moduleDraftsByService = remember(task.folderName) { mutableStateMapOf<String, List<TaskModuleUiDraft>>() }
+    val visibleServices = filterAddTaskServices(services, serviceSearch)
     fun effectiveSelections(): List<TaskServiceSelection> = services.filter { it.id in selected }.map { service ->
         TaskServiceSelection(
             service.id,
@@ -157,7 +159,18 @@ internal fun AddTaskServicesDialog(
         text = {
             Column(Modifier.widthIn(min = 560.dp).heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("新增服务沿用任务分支：${task.featureBranch}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                services.forEach { service ->
+                OutlinedTextField(
+                    value = serviceSearch,
+                    onValueChange = { serviceSearch = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("搜索服务") },
+                    placeholder = { Text("按服务名或服务 ID 搜索") },
+                    singleLine = true,
+                )
+                if (visibleServices.isEmpty()) {
+                    Text("没有匹配的服务", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                visibleServices.forEach { service ->
                     val checked = service.id in selected
                     fun toggleService() {
                         if (checked) selected = selected - service.id else {
@@ -294,6 +307,18 @@ internal fun AddTaskServicesDialog(
                 onAdd(selected.toList(), keys, effectiveSelections())
             },
         )
+    }
+}
+
+internal fun filterAddTaskServices(
+    services: List<GroupServiceConfig>,
+    query: String,
+): List<GroupServiceConfig> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return services
+    return services.filter { service ->
+        service.displayName.contains(normalizedQuery, ignoreCase = true) ||
+            service.id.contains(normalizedQuery, ignoreCase = true)
     }
 }
 

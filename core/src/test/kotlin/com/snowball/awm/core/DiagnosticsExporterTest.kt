@@ -26,6 +26,7 @@ class DiagnosticsExporterTest {
             terminalExecutable = "C:/secret/terminal.exe",
             meegleExecutablePath = "C:/secret/user/meegle.cmd",
             gitExecutablePath = "C:/secret/user/git.exe",
+            genbuExecutablePath = "C:/secret/user/genbu.exe",
         )
 
         val archive = DiagnosticsExporter(paths, runner).export(config, "broken task")
@@ -41,6 +42,7 @@ class DiagnosticsExporterTest {
             assertTrue(configText.contains("<configured:PYCHARM>"))
             assertTrue(configText.contains("\"meegleExecutablePath\": \"<configured>\""))
             assertTrue(configText.contains("\"gitExecutablePath\": \"<configured>\""))
+            assertTrue(configText.contains("\"genbuExecutablePath\": \"<configured>\""))
         }
     }
 }

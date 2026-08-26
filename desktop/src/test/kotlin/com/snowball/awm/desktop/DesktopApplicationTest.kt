@@ -6,7 +6,9 @@ import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.CommandResult
 import com.snowball.awm.core.CommandRunner
 import com.snowball.awm.core.ConfiguredGitExecutable
+import com.snowball.awm.core.ConfiguredGenbuExecutable
 import com.snowball.awm.core.ConfiguredMeegleExecutable
+import com.snowball.awm.core.GenbuCommandSource
 import com.snowball.awm.core.GitCommandSource
 import com.snowball.awm.core.LocalGitEnvironmentInspector
 import com.snowball.awm.core.ManifestStore
@@ -106,6 +108,41 @@ class DesktopApplicationTest {
 
             assertEquals(1, runner.calls)
             assertEquals(2, cli.statusCalls)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `first Genbu probe detects and persists the executable path`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-genbu-auto-save")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val detected = Files.createFile(root.resolve(if (System.getProperty("os.name").startsWith("Windows")) "genbu.exe" else "genbu"))
+            .toAbsolutePath()
+        detected.toFile().setExecutable(true)
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val configuredPath = AtomicReference<String?>(null)
+        val runner = RecordingCommandRunner(CommandResult(0, "$detected\n", ""))
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            genbuExecutablePath = configuredPath,
+            genbuExecutable = ConfiguredGenbuExecutable(configuredPath::get, runner),
+            ioDispatcher = dispatcher,
+        )
+        try {
+            controller.refreshGenbuCommandResolution()
+            advanceUntilIdle()
+
+            assertEquals(detected.toString(), store.load().genbuExecutablePath)
+            assertEquals(detected.toString(), controller.config.genbuExecutablePath)
+            assertEquals(GenbuCommandSource.PROBED, controller.genbuCommandResolution().second)
+            assertEquals(1, runner.calls)
         } finally {
             controller.close()
             Dispatchers.resetMain()

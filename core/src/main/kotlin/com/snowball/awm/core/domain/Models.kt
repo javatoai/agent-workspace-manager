@@ -147,6 +147,10 @@ data class GroupServiceConfig(
     val repositoryId: String,
     val displayName: String,
     val enabled: Boolean = true,
+    /** Enables read-only UAT build/release checks for this service's successful Tags. */
+    val genbuProbeEnabled: Boolean = false,
+    /** Genbu service name; defaults to the service display name used by existing configurations. */
+    val genbuServiceName: String = displayName,
     val developmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
     val modules: List<ServiceModuleConfig> = listOf(
         ServiceModuleConfig(id = "default"),
@@ -159,6 +163,7 @@ data class GroupServiceConfig(
         require(TaskNaming.directoryName(id) == id) { "组内服务 ID 必须是安全且稳定的目录片段" }
         require(repositoryId.isNotBlank()) { "仓库 ID 不能为空" }
         require(displayName.isNotBlank()) { "服务名称不能为空" }
+        require(!genbuProbeEnabled || genbuServiceName.isNotBlank()) { "启用 Genbu 探测时必须配置 Genbu 服务名" }
         require(modules.isNotEmpty()) { "服务至少需要一个工作区模块" }
         require(modules.map { it.id.lowercase() }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复（忽略大小写）" }
         StandardWorktreeModuleNaming.requireValid(modules)
@@ -232,6 +237,8 @@ data class AppConfig(
     val meegleExecutablePath: String? = null,
     /** Absolute path to the Git executable; null means auto-detect. */
     val gitExecutablePath: String? = null,
+    /** Absolute path to Genbu CLI; used only when automatic command detection does not find Genbu. */
+    val genbuExecutablePath: String? = null,
     /** Absolute root for requirement research materials; null/blank disables the integration. */
     val requirementMaterialsRoot: String? = null,
     /** One safe child directory segment under each requirement directory; null/blank disables the integration. */
@@ -511,6 +518,28 @@ data class TagOperation(
     val conflictFiles: List<String> = emptyList(),
     val groupServiceId: String = repositoryId,
     val moduleId: String = "default",
+    /** Read-only Genbu build and release results kept separately from the local Git Tag state. */
+    val genbuStatus: GenbuTagProbeStatus = GenbuTagProbeStatus(),
+    /** Identifies the batch that created this operation; null for an individual Tag build. */
+    val batchId: String? = null,
+)
+
+@Serializable
+data class GenbuTagProbeStatus(
+    val built: Boolean = false,
+    /** UAT release result returned by `genbu query-tag`. */
+    val released: Boolean = false,
+    /** Production release result returned by pipeline step=9. */
+    val productionReleased: Boolean = false,
+    /** The Genbu CLI confirmed this exact Tag does not exist. */
+    val notFound: Boolean = false,
+    val builtCompletedAt: String? = null,
+    val releasedCompletedAt: String? = null,
+    val productionReleasedCompletedAt: String? = null,
+    val checkedAt: String? = null,
+    val failureReason: String? = null,
+    /** A later Tag for the same Genbu service was released, so this older Tag is no longer polled. */
+    val stoppedByNewerRelease: Boolean = false,
 )
 
 @Serializable
@@ -527,6 +556,23 @@ data class TagBuildHistoryEntry(
     val tag: String? = null,
     val state: TagOperationState,
     val message: String? = null,
+    /** Identifies the batch that created this history entry; null for an individual build. */
+    val batchId: String? = null,
+)
+
+/**
+ * One card in the Tag history view. Operations with the same non-null batch ID
+ * share a card; a legacy or single operation with no batch ID gets a one-item
+ * card keyed by its operation ID. The nullable batch ID lets the UI preserve
+ * the distinction without changing persisted operation JSON.
+ */
+data class TagHistoryItem(
+    val groupId: String,
+    val batchId: String?,
+    val folderName: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val operations: List<TagOperation>,
 )
 
 /** A reusable preset for the per-task AGENTS.md notes section. */

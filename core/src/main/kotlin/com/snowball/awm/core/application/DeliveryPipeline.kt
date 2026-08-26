@@ -70,11 +70,29 @@ class GitTagDeliveryAdapter(
     fun executeTag(target: DeliveryTarget): TagOperation =
         tags.build(target.config, target.taskDirectory, target.selectionKey)
 
+    fun inspectWorkspace(target: DeliveryTarget): TagWorkspaceCheck =
+        tags.inspectFeatureWorkspace(target.config, target.taskDirectory, target.selectionKey)
+
+    fun resumeConflict(target: DeliveryTarget, operationId: String): TagOperation =
+        tags.resumeConflict(target.config, target.taskDirectory, operationId)
+
+    fun resumeInterrupted(target: DeliveryTarget, operationId: String): TagOperation =
+        tags.resumeInterrupted(target.config, target.taskDirectory, operationId)
+
     fun executeBatch(config: AppConfig, taskDirectory: Path, selectionKeys: List<String>): List<TagOperation> =
         tags.buildBatch(config, taskDirectory, selectionKeys)
 
     fun historyOperations(config: AppConfig, tasks: List<TaskManifest>): List<TagOperation> =
         historyQuery.list(config, tasks)
+
+    fun historyItems(config: AppConfig, tasks: List<TaskManifest>): List<TagHistoryItem> =
+        historyQuery.listItems(config, tasks)
+
+    fun clearHistory(config: AppConfig, tasks: List<TaskManifest>): Int =
+        historyQuery.clear(config, tasks)
+
+    fun deleteHistory(config: AppConfig, tasks: List<TaskManifest>, operationIds: Collection<String>): Int =
+        historyQuery.deleteSelected(config, tasks, operationIds)
 
     override fun history(config: AppConfig, tasks: List<TaskManifest>): List<DeliveryHistoryRecord> =
         historyQuery.list(config, tasks).map { operation ->

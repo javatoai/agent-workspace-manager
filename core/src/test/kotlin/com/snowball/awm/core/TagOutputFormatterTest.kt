@@ -52,6 +52,31 @@ Tag未全部构建成功，请处理失败项后重试""",
         )
     }
 
+    @Test
+    fun `mixed batch output keeps the requirement link and never claims all tags are built`() {
+        val success = operation("api-service", "2.4.34.beta-6")
+        val failure = operation("job-manager", null).copy(
+            state = TagOperationState.CONFLICT,
+            message = "存在未解决冲突",
+        )
+
+        assertEquals(
+            """需求链接：https://project.feishu.cn/obt/userstory/detail/7060612727
+
+api-service · 2.4.34.beta-6
+
+构建失败：
+job-manager · CONFLICT · 存在未解决冲突
+
+Tag未全部构建成功，请处理失败项后重试""",
+            TagOutputFormatter.format(
+                "https://project.feishu.cn/obt/userstory/detail/7060612727",
+                listOf(success, failure),
+                includeFailures = true,
+            ),
+        )
+    }
+
     private fun operation(serviceName: String, tag: String?): TagOperation = TagOperation(
         operationId = serviceName,
         folderName = "TASK-1",

@@ -17,6 +17,7 @@ import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
 import com.snowball.awm.core.ConfiguredGitExecutable
+import com.snowball.awm.core.ConfiguredGenbuExecutable
 import com.snowball.awm.core.ConfiguredMeegleExecutable
 import com.snowball.awm.core.GitBranchReferenceValidator
 import com.snowball.awm.core.GitClient
@@ -34,6 +35,7 @@ import com.snowball.awm.core.DiagnosticsExporter
 import com.snowball.awm.core.ApplicationEvent
 import com.snowball.awm.core.ApplicationErrorLogReader
 import com.snowball.awm.core.EventSink
+import com.snowball.awm.core.FeishuWorkItemLink
 import com.snowball.awm.core.JsonlEventSink
 import com.snowball.awm.core.error
 import com.snowball.awm.core.MeegleRequirementLinkSource
@@ -57,8 +59,12 @@ import com.snowball.awm.core.RequirementMaterialsService
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
 import com.snowball.awm.core.GitTagDeliveryAdapter
+import com.snowball.awm.core.GenbuTagProbeService
+import com.snowball.awm.core.ProcessGenbuTagStatusService
 import com.snowball.awm.core.DeliveryPipelineRegistry
 import com.snowball.awm.core.TagOperation
+import com.snowball.awm.core.TagHistoryItem
+import com.snowball.awm.core.TagOutputFormatter
 import com.snowball.awm.core.TaskApplicationService
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.TaskOperationLock
@@ -108,6 +114,20 @@ enum class NavigationItem(val title: String, val subtitle: String) {
     SETTINGS("设置", "Settings"),
 }
 
+internal fun tagAnnouncementCopyMessage(metadata: RequirementMetadata?): String {
+    val qcOwners = metadata?.participants?.qcOwners.orEmpty()
+        .asSequence()
+        .map { it.name.trim() }
+        .filter(String::isNotBlank)
+        .distinct()
+        .toList()
+    return if (qcOwners.isEmpty()) {
+        "Tag 发版信息已复制"
+    } else {
+        "Tag 发版信息已复制，发给${qcOwners.joinToString("、")}"
+    }
+}
+
 data class DeleteRiskInspection(
     val loading: Boolean = true,
     val risks: List<DeleteRisk> = emptyList(),
@@ -154,6 +174,8 @@ class DesktopApplication(
     private val errorLogReader: ApplicationErrorLogReader = ApplicationErrorLogReader(paths),
     private val meegleExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
+    private val genbuExecutablePath: AtomicReference<String?> = AtomicReference(null),
+    private val genbuExecutable: ConfiguredGenbuExecutable = ConfiguredGenbuExecutable(genbuExecutablePath::get),
     private val gitExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val gitExecutable: ConfiguredGitExecutable = ConfiguredGitExecutable(gitExecutablePath::get),
     private val gitClient: GitClient = GitClient(executable = gitExecutable),
@@ -207,6 +229,9 @@ class DesktopApplication(
     private val tagDelivery: GitTagDeliveryAdapter = GitTagDeliveryAdapter(
         TagBuildService(paths = paths, git = gitClient, repositoryLock = repositoryLock),
     ),
+    private val genbuTagProbes: GenbuTagProbeService = GenbuTagProbeService(
+        genbu = ProcessGenbuTagStatusService(executable = genbuExecutable),
+    ),
     val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(tagDelivery)),
     private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(meegleExecutable = meegleExecutable),
     private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
@@ -253,6 +278,7 @@ class DesktopApplication(
     private val initialConfig = initial.getOrDefault(AppConfig()).also {
         meegleExecutablePath.set(it.meegleExecutablePath)
         gitExecutablePath.set(it.gitExecutablePath)
+        genbuExecutablePath.set(it.genbuExecutablePath)
     }
     private val initialTasks = scanTasks(initialConfig)
     private var taskScanWarning: String? = initialTasks.warning
@@ -329,6 +355,7 @@ class DesktopApplication(
             meegleCliService = meegleCliService,
             meegleExecutable = meegleExecutable,
             gitExecutable = gitExecutable,
+            genbuExecutable = genbuExecutable,
             localGitInspector = localGitInspector,
             scope = scope,
             ioDispatcher = ioDispatcher,
@@ -366,6 +393,9 @@ class DesktopApplication(
             operations = operationRunner,
             taskDirectory = ::taskDirectory,
             refreshGitStatus = ::refreshCurrentTaskGitStatus,
+            genbuTagProbes = genbuTagProbes,
+            scope = scope,
+            ioDispatcher = ioDispatcher,
         )
     }
 
@@ -374,6 +404,7 @@ class DesktopApplication(
         private set(value) {
             meegleExecutablePath.set(value.meegleExecutablePath)
             gitExecutablePath.set(value.gitExecutablePath)
+            genbuExecutablePath.set(value.genbuExecutablePath)
             sessionStore.config = value
         }
     var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
@@ -406,9 +437,39 @@ class DesktopApplication(
     fun cancelMeegleOperation(): Boolean = meegleOperationRunner.cancel()
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
-    val tagResult: TagOperation? get() = deliveryController.state.result
-    val batchTagResults: List<TagOperation>? get() = deliveryController.state.batchResults
     val tagHistory: List<TagOperation> get() = deliveryController.state.history
+    val tagHistoryItems: List<TagHistoryItem> get() = deliveryController.state.historyItems
+    private var tagAnnouncementCopyingGroupIds by mutableStateOf<Set<String>>(emptySet())
+    fun tagHistoryRequirementLink(folderName: String): String =
+        sessionStore.tasks.firstOrNull { it.folderName == folderName }?.requirementLink.orEmpty()
+    fun isTagAnnouncementCopying(groupId: String): Boolean = groupId in tagAnnouncementCopyingGroupIds
+    fun copyTagHistoryGroupAnnouncement(group: TagHistoryItem) {
+        if (isTagAnnouncementCopying(group.groupId)) return
+        val task = sessionStore.tasks.firstOrNull { it.folderName == group.folderName }
+        val requirementLink = task?.requirementLink.orEmpty()
+        val content = TagOutputFormatter.format(
+            requirementLink = requirementLink,
+            operations = groupAnnouncementOperations(group),
+            includeFailures = true,
+        )
+        val loadedMetadata = task?.let(requirementController::loadedMetadataFor)
+        if (loadedMetadata != null || task == null || FeishuWorkItemLink.parse(requirementLink) == null) {
+            copyText(content, tagAnnouncementCopyMessage(loadedMetadata))
+            return
+        }
+
+        tagAnnouncementCopyingGroupIds = tagAnnouncementCopyingGroupIds + group.groupId
+        showStatus("获取测试姓名中，请稍后")
+        requirementController.fetchMetadata(task) { metadata ->
+            tagAnnouncementCopyingGroupIds = tagAnnouncementCopyingGroupIds - group.groupId
+            copyText(content, tagAnnouncementCopyMessage(metadata))
+        }
+    }
+    fun clearTagHistory(): Boolean = deliveryController.clearHistory()
+    fun deleteTagHistory(operationIds: Set<String>): Boolean = deliveryController.deleteHistory(operationIds)
+    fun setGenbuTagProbeVisible(visible: Boolean) = deliveryController.setGenbuTagProbeVisible(visible)
+    fun refreshGenbuTagProbes(): Boolean = deliveryController.refreshGenbuTagProbes()
+    val isGenbuTagProbeRefreshing: Boolean get() = deliveryController.isGenbuProbeRefreshing
     val agentRevision: Long get() = agentInstructionsController.state.revision
     val agentConflict: AgentFileChange.Conflict? get() = agentInstructionsController.state.conflict
     val deleteRiskInspections: Map<String, DeleteRiskInspection> get() = taskController.state.deleteRisks
@@ -482,6 +543,10 @@ class DesktopApplication(
         settingsController.updateGitExecutablePath(raw, onFailure)
 
     fun gitCommandResolution(): Pair<String, GitCommandSource> = settingsController.gitCommandResolution()
+    fun updateGenbuExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateGenbuExecutablePath(raw, onFailure)
+    fun genbuCommandResolution() = settingsController.genbuCommandResolution()
+    fun refreshGenbuCommandResolution() = settingsController.refreshGenbuCommandResolution()
 
 
     fun refreshCurrentTaskGitStatus() = taskController.refreshGitStatus()
@@ -490,6 +555,17 @@ class DesktopApplication(
         val existing = task.services.map(ServiceWorkspace::groupServiceId).toSet()
         return config.group(task.groupId).services.filter { it.enabled && it.id !in existing }
     }
+
+    fun isGenbuProbeEnabled(operation: TagOperation): Boolean {
+        val task = tasks.firstOrNull { it.folderName == operation.folderName } ?: return false
+        return config.groups.firstOrNull { it.id == task.groupId }
+            ?.services
+            ?.firstOrNull { it.id == operation.groupServiceId }
+            ?.genbuProbeEnabled == true
+    }
+
+    val enabledGenbuProbeServiceCount: Int
+        get() = config.groups.sumOf { group -> group.services.count(GroupServiceConfig::genbuProbeEnabled) }
 
     fun canBuildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean = deliveryController.canBuild(task, workspace)
 
@@ -641,10 +717,111 @@ class DesktopApplication(
     fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}) =
         taskController.retryRequirementMaterials(task, onCompleted)
 
-    fun buildTag(task: TaskManifest, workspace: ServiceWorkspace) = deliveryController.build(task, workspace)
-    fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>, onCompleted: () -> Unit = {}) =
-        deliveryController.buildBatch(task, workspaces, onCompleted)
-    fun clearBatchTagResults() = deliveryController.clearBatchResults()
+    fun buildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
+        deliveryController.build(task, workspace).also { started -> if (started) navigation = NavigationItem.TAG }
+
+    fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>): Boolean =
+        deliveryController.buildBatch(task, workspaces).also { started -> if (started) navigation = NavigationItem.TAG }
+
+    /** Resolves the exact task workspace recorded by a Tag operation. */
+    fun tagOperationWorkspace(operation: TagOperation): ServiceWorkspace? =
+        sessionStore.tasks
+            .firstOrNull { it.folderName == operation.folderName }
+            ?.services
+            ?.singleOrNull { workspace ->
+                workspace.groupServiceId == operation.groupServiceId && workspace.moduleId == operation.moduleId
+            }
+
+    /** Opens only the configured IDE for a conflict workspace; no Git command is run. */
+    fun openConflictWorkspace(operation: TagOperation) {
+        if (operation.state != com.snowball.awm.core.TagOperationState.CONFLICT) {
+            showError(IllegalStateException("只有冲突 Tag 才能打开冲突工作区"))
+            return
+        }
+        val task = sessionStore.tasks.firstOrNull { it.folderName == operation.folderName }
+        if (task == null) {
+            showError(IllegalStateException("找不到 Tag 对应的研发任务：${operation.folderName}"))
+            return
+        }
+        val workspace = tagOperationWorkspace(operation)
+        if (workspace == null) {
+            showError(IllegalStateException("找不到 Tag 对应的服务工作区：${operation.groupServiceId}/${operation.moduleId}"))
+            return
+        }
+        desktopActions.openWorkspace(workspace)
+    }
+
+    /** Re-runs a conflict Tag on the same operation record after manual resolution. */
+    fun retryConflict(operation: TagOperation): Boolean {
+        if (operation.state != com.snowball.awm.core.TagOperationState.CONFLICT) {
+            showError(IllegalStateException("只有冲突 Tag 才能重试"))
+            return false
+        }
+        val task = sessionStore.tasks.firstOrNull { it.folderName == operation.folderName }
+        if (task == null) {
+            showError(IllegalStateException("找不到 Tag 对应的研发任务：${operation.folderName}"))
+            return false
+        }
+        val workspace = tagOperationWorkspace(operation)
+        if (workspace == null) {
+            showError(IllegalStateException("找不到 Tag 对应的服务工作区：${operation.groupServiceId}/${operation.moduleId}"))
+            return false
+        }
+        if (!canBuildTag(task, workspace)) {
+            showError(IllegalStateException("当前服务工作区不可构建 Tag，请确认任务和服务仍处于就绪状态"))
+            return false
+        }
+        return deliveryController.retryConflict(task, operation)
+    }
+
+    /** Rechecks the exact conflict workspace without starting another Tag flow. */
+    fun inspectConflictWorkspace(operation: TagOperation): Boolean {
+        if (!tagOperationCanInspectWorkspace(operation)) {
+            showError(IllegalStateException("当前 Tag 无需检测工作区"))
+            return false
+        }
+        val task = sessionStore.tasks.firstOrNull { it.folderName == operation.folderName }
+        if (task == null) {
+            showError(IllegalStateException("找不到 Tag 对应的研发任务：${operation.folderName}"))
+            return false
+        }
+        if (tagOperationWorkspace(operation) == null) {
+            showError(IllegalStateException("找不到 Tag 对应的服务工作区：${operation.groupServiceId}/${operation.moduleId}"))
+            return false
+        }
+        return deliveryController.inspectConflictWorkspace(task, operation)
+    }
+
+    fun conflictWorkspaceCheck(operation: TagOperation) = deliveryController.workspaceCheck(operation.operationId)
+
+    /** Restarts a safely interrupted Tag operation on its original history record. */
+    fun retryInterruptedTag(operation: TagOperation): Boolean {
+        if (!operation.isRetryableInterruptedTag()) {
+            showError(IllegalStateException("只有构建中断的 Tag 才能重试"))
+            return false
+        }
+        val task = sessionStore.tasks.firstOrNull { it.folderName == operation.folderName }
+        if (task == null) {
+            showError(IllegalStateException("找不到 Tag 对应的研发任务：${operation.folderName}"))
+            return false
+        }
+        val workspace = tagOperationWorkspace(operation)
+        if (workspace == null) {
+            showError(IllegalStateException("找不到 Tag 对应的服务工作区：${operation.groupServiceId}/${operation.moduleId}"))
+            return false
+        }
+        if (!canBuildTag(task, workspace)) {
+            showError(IllegalStateException("当前服务工作区不可构建 Tag，请确认任务和服务仍处于就绪状态"))
+            return false
+        }
+        return deliveryController.retryInterrupted(task, operation)
+    }
+
+    private fun TagOperation.isRetryableInterruptedTag(): Boolean = state in setOf(
+        com.snowball.awm.core.TagOperationState.CREATED,
+        com.snowball.awm.core.TagOperationState.PREFLIGHT_PASSED,
+        com.snowball.awm.core.TagOperationState.SOURCE_BRANCH_PUSHED,
+    )
 
     fun addServices(
         task: TaskManifest,
@@ -685,7 +862,6 @@ class DesktopApplication(
     ) = taskController.batchGit(task, mode, selectedWorkspaceKeys, commitMessages, expectedFingerprints, onCompleted)
     fun loadBatchGitPreviews(task: TaskManifest) = taskController.loadBatchGitPreviews(task)
 
-    fun clearTagResult() = deliveryController.clearResult()
 
     fun openWorkspace(workspace: ServiceWorkspace, type: com.snowball.awm.core.DevelopmentToolType = workspace.developmentTool) =
         desktopActions.openWorkspace(workspace, type)
@@ -791,6 +967,7 @@ class DesktopApplication(
     fun onWindowFocused() {
         agentInstructionsController.onWindowFocused()
         refreshConfigFileSnapshot()
+        refreshGenbuCommandResolution()
     }
     fun resolveAgentConflict(resolution: AgentConflictResolution) = agentInstructionsController.resolveConflict(resolution)
     fun dismissMessages() {

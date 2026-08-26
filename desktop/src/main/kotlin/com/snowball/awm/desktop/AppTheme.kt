@@ -95,8 +95,9 @@ fun AwmTheme(
 
 @Composable
 fun ColorScheme.statusColor(status: String): Color = when {
-    status.contains("READY") || status == "SUCCESS" -> SuccessGreen
-    status == "FAILED" || status == "CONFLICT" -> error
+    status.contains("READY") || status == "SUCCESS" || status in setOf("已构建", "UAT已发布", "已生产发布") -> SuccessGreen
+    status == "UAT未发布" -> outline
+    status == "FAILED" || status == "CONFLICT" || status in setOf("CREATED", "PREFLIGHT_PASSED", "SOURCE_BRANCH_PUSHED") -> error
     status == "PARTIAL" || status.contains("WARNING") -> WarningAmber
     else -> primary
 }

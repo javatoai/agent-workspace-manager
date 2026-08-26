@@ -117,6 +117,8 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
     val initialBootstrapText = remember(service) { json.encodeToString(service.bootstrap) }
     var name by remember { mutableStateOf(service.displayName) }
     var enabled by remember { mutableStateOf(service.enabled) }
+    var genbuProbeEnabled by remember { mutableStateOf(service.genbuProbeEnabled) }
+    var genbuServiceName by remember { mutableStateOf(service.genbuServiceName) }
     var developmentTool by remember { mutableStateOf(service.developmentTool) }
     var commitMessageTemplate by remember { mutableStateOf(service.commitMessageTemplate) }
     val initialModuleDrafts = remember(service) { service.modules.map(ServiceModuleConfig::toEditorDraft) }
@@ -130,7 +132,8 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
     var bootstrapCopied by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var selectedSection by remember { mutableStateOf("basic") }
-    val hasDraftChanges = name != service.displayName || enabled != service.enabled || developmentTool != service.developmentTool || commitMessageTemplate != service.commitMessageTemplate ||
+    val hasDraftChanges = name != service.displayName || enabled != service.enabled || genbuProbeEnabled != service.genbuProbeEnabled ||
+        genbuServiceName != service.genbuServiceName || developmentTool != service.developmentTool || commitMessageTemplate != service.commitMessageTemplate ||
         modules != initialModuleDrafts ||
         bootstrapConfig != service.bootstrap || bootstrapText != initialBootstrapText
     val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
@@ -212,6 +215,10 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                                 onNameChange = { name = it },
                                 enabled = enabled,
                                 onEnabledChange = { enabled = it },
+                                genbuProbeEnabled = genbuProbeEnabled,
+                                onGenbuProbeEnabledChange = { genbuProbeEnabled = it },
+                                genbuServiceName = genbuServiceName,
+                                onGenbuServiceNameChange = { genbuServiceName = it },
                             )
                             "tools" -> ServiceToolsSection(
                                 developmentTool = developmentTool,
@@ -260,7 +267,10 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                             val normalizedModules = modules.map(ServiceModuleEditorDraft::toConfig)
                             validateServiceWorkspaceModules(normalizedModules)
                             service.copy(
-                                displayName = name.trim(), enabled = enabled, developmentTool = developmentTool,
+                                displayName = name.trim(), enabled = enabled,
+                                genbuProbeEnabled = genbuProbeEnabled,
+                                genbuServiceName = genbuServiceName.trim(),
+                                developmentTool = developmentTool,
                                 commitMessageTemplate = commitMessageTemplate.trim(),
                                 modules = normalizedModules,
                                 bootstrap = bootstrap,
@@ -354,12 +364,30 @@ private fun ServiceBasicSection(
     onNameChange: (String) -> Unit,
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
+    genbuProbeEnabled: Boolean,
+    onGenbuProbeEnabledChange: (Boolean) -> Unit,
+    genbuServiceName: String,
+    onGenbuServiceNameChange: (String) -> Unit,
 ) {
     SectionHeader("基本信息", "展示名称用于服务列表与任务界面；停用后创建任务时不再可选")
     OutlinedTextField(name, onNameChange, Modifier.fillMaxWidth(), label = { Text("展示名称") })
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("启用服务", style = MaterialTheme.typography.titleSmall)
         Switch(enabled, onEnabledChange)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("启用 Genbu 探测", style = MaterialTheme.typography.titleSmall)
+        Switch(genbuProbeEnabled, onGenbuProbeEnabledChange)
+    }
+    if (genbuProbeEnabled) {
+        OutlinedTextField(
+            genbuServiceName,
+            onGenbuServiceNameChange,
+            Modifier.fillMaxWidth(),
+            label = { Text("Genbu 服务名") },
+            supportingText = { Text("用于查询该服务的测试环境 Tag 构建与发布状态") },
+            singleLine = true,
+        )
     }
 }
 

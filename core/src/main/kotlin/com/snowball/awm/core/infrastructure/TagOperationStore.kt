@@ -53,6 +53,54 @@ class TagOperationStore(
         }
     }
 
+    /** Deletes only persisted Tag-operation records and the legacy summary for one task. */
+    fun clear(taskDirectory: Path): Int {
+        var deleted = 0
+        val directory = taskDirectory.resolve("tag-operations")
+        if (directory.exists()) {
+            Files.list(directory).use { files ->
+                files.filter { it.fileName.toString().endsWith(".json") }.forEach { record ->
+                    if (Files.deleteIfExists(record)) deleted++
+                }
+            }
+        }
+        if (Files.deleteIfExists(taskDirectory.resolve("tag-build-history.jsonl"))) deleted++
+        return deleted
+    }
+
+    /**
+     * Deletes the selected operation records for one task.
+     *
+     * Operation IDs are compared with the file name rather than interpolated into a
+     * path. This keeps the operation selection bounded to this task's direct
+     * JSON files directly under the task's `tag-operations` directory, even if a
+     * caller supplies an unexpected ID.
+     * The legacy JSONL file is rewritten atomically and only valid entries whose
+     * operation ID is selected are removed; malformed or unrelated lines are kept.
+     */
+    fun deleteSelected(taskDirectory: Path, operationIds: Collection<String>): Int {
+        val selected = operationIds.filter(String::isNotBlank).toSet()
+        if (selected.isEmpty()) return 0
+
+        var deleted = 0
+        val directory = taskDirectory.resolve("tag-operations")
+        if (directory.exists()) {
+            Files.list(directory).use { files ->
+                files
+                    .filter { it.fileName.toString().endsWith(".json") }
+                    .forEach { record ->
+                        val fileOperationId = record.fileName.toString().removeSuffix(".json")
+                        if (fileOperationId in selected && Files.deleteIfExists(record)) {
+                            deleted++
+                        }
+                    }
+            }
+        }
+
+        rewriteLegacyHistory(taskDirectory.resolve("tag-build-history.jsonl"), selected)
+        return deleted
+    }
+
     fun appendHistory(taskDirectory: Path, entry: TagBuildHistoryEntry) {
         taskDirectory.createDirectories()
         val bytes = (Json.encodeToString(entry) + System.lineSeparator())
@@ -68,6 +116,39 @@ class TagOperationStore(
                 while (buffer.hasRemaining()) channel.write(buffer)
                 channel.force(false)
             }
+        }
+    }
+
+    private fun rewriteLegacyHistory(historyFile: Path, selected: Set<String>) {
+        if (!historyFile.exists()) return
+        val original = Files.readString(historyFile, StandardCharsets.UTF_8)
+        // Kotlin's default limit (0) retains the trailing empty element, so the
+        // original final newline is preserved when lines are joined below.
+        val retained = original.split('\n').filter { line ->
+            val entry = runCatching {
+                json.decodeFromString<TagBuildHistoryEntry>(line.trimEnd('\r'))
+            }.getOrNull()
+            entry == null || entry.operationId !in selected
+        }
+        val rewritten = retained.joinToString("\n")
+        if (rewritten == original) return
+
+        val parent = historyFile.parent ?: return
+        val temporary = Files.createTempFile(parent, ".${historyFile.fileName}-", ".tmp")
+        try {
+            Files.writeString(temporary, rewritten, StandardCharsets.UTF_8)
+            try {
+                Files.move(
+                    temporary,
+                    historyFile,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary, historyFile, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(temporary)
         }
     }
 }

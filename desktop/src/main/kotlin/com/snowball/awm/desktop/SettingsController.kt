@@ -19,6 +19,10 @@ import com.snowball.awm.core.MeegleExecutable
 import com.snowball.awm.core.normalizeMeegleExecutablePath
 import com.snowball.awm.core.GitCommandSource
 import com.snowball.awm.core.GitExecutable
+import com.snowball.awm.core.ConfiguredGenbuExecutable
+import com.snowball.awm.core.GenbuCommandSource
+import com.snowball.awm.core.GenbuExecutable
+import com.snowball.awm.core.normalizeGenbuExecutablePath
 import com.snowball.awm.core.normalizeGitExecutablePath
 import com.snowball.awm.core.MeegleProjectSummary
 import com.snowball.awm.core.LocalGitEnvironmentInspector
@@ -93,6 +97,11 @@ private data class GitExecutableAutoSave(
     val savedDetectedPath: Boolean,
 )
 
+private data class GenbuExecutableAutoSave(
+    val config: AppConfig,
+    val savedDetectedPath: Boolean,
+)
+
 /** Configuration and repository use cases with no dependency on DesktopApplication. */
 class SettingsController internal constructor(
     private val session: AppSessionStore,
@@ -105,6 +114,7 @@ class SettingsController internal constructor(
     private val meegleCliService: MeegleCliService,
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
     private val gitExecutable: GitExecutable = GitExecutable.pathFallback(),
+    private val genbuExecutable: GenbuExecutable = ConfiguredGenbuExecutable(),
     private val localGitInspector: LocalGitEnvironmentInspector,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -126,6 +136,7 @@ class SettingsController internal constructor(
     private var meegleCli by mutableStateOf<MeegleCliState>(MeegleCliState.Idle)
     private var localGit by mutableStateOf<LocalGitSettingsState>(LocalGitSettingsState.Idle)
     private var localGitJob: Job? = null
+    private var genbuCommand by mutableStateOf(genbuExecutable.current() to genbuExecutable.source())
     private var saveStates by mutableStateOf<Map<String, SettingsSaveState>>(emptyMap())
 
     val state: SettingsUiState
@@ -170,6 +181,58 @@ class SettingsController internal constructor(
     /** The currently effective Git command and where it came from; safe on the UI thread. */
     fun gitCommandResolution(): Pair<String, GitCommandSource> =
         gitExecutable.current() to gitExecutable.source()
+
+    fun genbuCommandResolution(): Pair<String, GenbuCommandSource> = genbuCommand
+
+    fun updateGenbuExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 Genbu 命令路径…",
+        "Genbu 命令路径已保存",
+        onFailure,
+        "genbu",
+        settingsOperations,
+        onCompleted = ::refreshGenbuCommandResolution,
+    ) { config ->
+        config.copy(genbuExecutablePath = normalizeGenbuExecutablePath(raw))
+    }
+
+    fun refreshGenbuCommandResolution() {
+        val shouldAutoDetect = session.config.genbuExecutablePath.isNullOrBlank()
+        scope.launch {
+            val (autoSave, resolution) = withContext(ioDispatcher) {
+                runCatching {
+                    val command = genbuExecutable.probe()
+                    val autoSave = autoSaveGenbuExecutablePath(shouldAutoDetect)
+                    autoSave to (command to genbuExecutable.source())
+                }.getOrElse {
+                    null to (genbuExecutable.current() to genbuExecutable.source())
+                }
+            }
+            autoSave?.let {
+                applyConfig(it.config)
+                if (it.savedDetectedPath) {
+                    setSaveState("genbu", SettingsSaveState.SAVED)
+                    showStatus("已自动检测并保存 Genbu 命令路径")
+                }
+            }
+            genbuCommand = resolution
+        }
+    }
+
+    private fun autoSaveGenbuExecutablePath(shouldAutoDetect: Boolean): GenbuExecutableAutoSave? {
+        if (!shouldAutoDetect || genbuExecutable.source() != GenbuCommandSource.PROBED) return null
+        val normalized = normalizeGenbuExecutablePath(genbuExecutable.current())
+            ?: error("自动探测到的 Genbu 命令路径为空")
+        var savedDetectedPath = false
+        val updated = configStore.update { current ->
+            if (current.genbuExecutablePath.isNullOrBlank()) {
+                savedDetectedPath = true
+                current.copy(genbuExecutablePath = normalized)
+            } else {
+                current
+            }
+        }
+        return GenbuExecutableAutoSave(updated, savedDetectedPath)
+    }
 
     fun setTheme(theme: ThemePreference): Boolean = mutate(
         "正在更新主题…",

@@ -8,7 +8,7 @@ class DevelopmentToolLaunchCommandTest {
     private val target = Path.of("D:/tasks/demo")
 
     @Test
-    fun `vscode uses a new window while jetbrains tools receive the directory`() {
+    fun `vscode uses a new window while jetbrains tools use the Windows shell`() {
         assertEquals(
             listOf("C:/Code.exe", "--new-window", target.toAbsolutePath().normalize().toString()),
             DevelopmentToolLaunchCommand.build(
@@ -19,7 +19,7 @@ class DevelopmentToolLaunchCommandTest {
             ),
         )
         assertEquals(
-            listOf("C:/idea64.exe", target.toAbsolutePath().normalize().toString()),
+            windowsShellLaunch("C:/idea64.exe", target.toAbsolutePath().normalize().toString()),
             DevelopmentToolLaunchCommand.build(
                 DevelopmentToolType.INTELLIJ_IDEA,
                 "C:/idea64.exe",
@@ -28,7 +28,7 @@ class DevelopmentToolLaunchCommandTest {
             ),
         )
         assertEquals(
-            listOf("C:/pycharm64.exe", target.toAbsolutePath().normalize().toString()),
+            windowsShellLaunch("C:/pycharm64.exe", target.toAbsolutePath().normalize().toString()),
             DevelopmentToolLaunchCommand.build(
                 DevelopmentToolType.PYCHARM,
                 "C:/pycharm64.exe",
@@ -37,7 +37,7 @@ class DevelopmentToolLaunchCommandTest {
             ),
         )
         assertEquals(
-            listOf("C:/studio64.exe", target.toAbsolutePath().normalize().toString()),
+            windowsShellLaunch("C:/studio64.exe", target.toAbsolutePath().normalize().toString()),
             DevelopmentToolLaunchCommand.build(
                 DevelopmentToolType.ANDROID_STUDIO,
                 "C:/studio64.exe",
@@ -46,6 +46,14 @@ class DevelopmentToolLaunchCommandTest {
             ),
         )
     }
+
+    private fun windowsShellLaunch(application: String, directory: String): List<String> =
+        listOf(
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Start-Process -FilePath '$application' -ArgumentList @('$directory')",
+        )
 
     @Test
     fun `mac application bundle is opened without shell interpolation`() {

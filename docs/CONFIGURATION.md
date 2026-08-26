@@ -32,6 +32,7 @@ agents/task-templates.json
   "requirementMaterialsRoot": null,
   "requirementMaterialsSubdirectory": null,
   "meegleExecutablePath": null,
+  "genbuExecutablePath": null,
   "repositories": [
     {
       "id": "repo-…",
@@ -56,6 +57,8 @@ agents/task-templates.json
           "repositoryId": "repo-…",
           "displayName": "订单服务",
           "enabled": true,
+          "genbuProbeEnabled": false,
+          "genbuServiceName": "service-order",
           "developmentTool": "INTELLIJ_IDEA",
           "commitMessageTemplate": "feat: {num} 完成开发",
           "modules": [
@@ -96,6 +99,8 @@ agents/task-templates.json
 
 工作区策略属于模块而不是服务。同一服务的 `modules` 可以同时包含 Worktree 与独立克隆模块：
 
+`genbuProbeEnabled` 是服务级开关，默认 `false`。开启后，Tag 构建页面会用 `where.exe genbu.exe` 自动发现本机 `genbu` CLI，并在页面打开期间以 `genbu query-tag <服务> <精确 Tag>` 查询所有带 Tag 记录的构建、UAT 发版和生产发版状态及其返回的完成时间；`genbuServiceName` 默认使用服务展示名称，可在服务配置中改为 Genbu 的实际服务名。自动轮询会跳过已完成 UAT 发布、被更晚 Tag 覆盖或已确认未在 Genbu 找到的记录；页面的“刷新 Genbu”会强制重新查询全部带 Tag 记录。
+
 ```json
 "modules": [
   {
@@ -126,6 +131,8 @@ agents/task-templates.json
 每个模块都会使用稳定的 `服务名-模块名` 目录。模块 ID、名称和目录名忽略大小写不得重复；独立克隆模块可以选择原仓库的任意远程作为来源，基础 Ref 使用 `<来源 remote>/<branch>` 格式。新建 clone 会将所选来源 URL 命名为自身的 `origin`，因此后续 Push、恢复和 Git 操作仍统一使用 `origin`。
 
 `meegleExecutablePath` 为 `null` 时，应用会通过平台 login shell 自动探测 Meegle CLI 并缓存结果；也可以在设置页填写已存在、可执行的绝对路径。探测失败时回退到 PATH 中的 `meegle.cmd`（Windows）或 `meegle`（macOS/Linux）。
+
+`genbuExecutablePath` 为 `null` 时，应用通过 `where.exe genbu.exe`（Windows）或平台 shell 自动探测，并会将首次成功识别到的绝对路径自动写回配置。填写已存在、可执行的绝对路径后，该路径只在自动探测未找到 Genbu 时作为兜底使用；自动识别到的命令始终优先。
 
 ## 需求资料目录
 

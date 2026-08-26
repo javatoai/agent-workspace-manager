@@ -12,6 +12,12 @@ import java.util.UUID
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
+private val interruptedRetryableTagStates = setOf(
+    TagOperationState.CREATED,
+    TagOperationState.PREFLIGHT_PASSED,
+    TagOperationState.SOURCE_BRANCH_PUSHED,
+)
+
 @Serializable
 enum class MergeMode {
     ALREADY_MERGED,
@@ -46,6 +52,30 @@ data class TagPreflight(
     val estimatedTag: String,
 )
 
+/** Read-only status of the feature worktree used before retrying a conflicted Tag. */
+data class TagWorkspaceCheck(
+    val changes: List<String>,
+) {
+    val clean: Boolean get() = changes.isEmpty()
+}
+
+internal fun tagWorkspaceChanges(statusOutput: String): List<String> = statusOutput.lineSequence()
+    .filter(String::isNotBlank)
+    .map { line ->
+        val code = line.take(2)
+        val path = line.drop(3).trim().ifBlank { "未命名路径" }
+        val kind = when {
+            code == "??" -> "未跟踪"
+            code.contains('U') || code in setOf("AA", "DD") -> "未解决冲突"
+            code[0] != ' ' && code[1] != ' ' -> "已暂存且有未暂存修改"
+            code[0] != ' ' -> "已暂存"
+            code[1] != ' ' -> "未暂存"
+            else -> "状态变更"
+        }
+        "$kind：$path"
+    }
+    .toList()
+
 class TagBuildService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val git: GitClient = GitClient(),
@@ -63,12 +93,13 @@ class TagBuildService(
         repositoryIds: List<String>,
     ): List<TagOperation> {
         if (repositoryIds.isEmpty()) return emptyList()
+        val batchId = UUID.randomUUID().toString()
         // Task lifecycle uses an exclusive lock. Batch operations intentionally
         // serialize within one task so archive/delete cannot interleave and a
         // non-blocking file lock does not turn sibling entries into false failures.
         return taskLock.withLock(taskDirectory) {
             repositoryIds.map { repositoryId ->
-                buildSafelyUnlocked(config, taskDirectory, repositoryId)
+                buildSafelyUnlocked(config, taskDirectory, repositoryId, batchId)
             }
         }
     }
@@ -77,8 +108,9 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         repositoryId: String,
+        batchId: String? = null,
     ): TagOperation = runCatching {
-        buildUnlocked(config, taskDirectory, repositoryId)
+        buildUnlocked(config, taskDirectory, repositoryId, batchId)
     }.getOrElse { error ->
         val manifest = manifests.load(taskDirectory)
         val workspace = resolveWorkspace(manifest, repositoryId)
@@ -100,6 +132,7 @@ class TagBuildService(
             message = error.message ?: error::class.simpleName ?: "构建失败",
             groupServiceId = workspace.groupServiceId,
             moduleId = workspace.moduleId,
+            batchId = batchId,
         ).also { operations.save(taskDirectory, it) }
     }
 
@@ -123,6 +156,27 @@ class TagBuildService(
         }
     }
 
+    /**
+     * Inspects only the recorded feature worktree. It does not fetch, merge, write Git state,
+     * or alter the persisted Tag operation.
+     */
+    fun inspectFeatureWorkspace(
+        config: AppConfig,
+        taskDirectory: Path,
+        repositoryId: String,
+    ): TagWorkspaceCheck = taskLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        val target = TagPolicy.resolve(config, manifest, repositoryId)
+        val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, target.workspace)
+        val output = git.readOnly(
+            validated.worktree,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ).stdout
+        TagWorkspaceCheck(tagWorkspaceChanges(output))
+    }
+
     fun build(
         config: AppConfig,
         taskDirectory: Path,
@@ -131,10 +185,82 @@ class TagBuildService(
         buildUnlocked(config, taskDirectory, repositoryId)
     }
 
+    /**
+     * Re-runs the complete Tag flow for an operation that stopped at a merge
+     * conflict. The persisted operation is intentionally reused so the Tag
+     * history keeps the original batch/card entry rather than adding a second
+     * record.
+     */
+    fun resumeConflict(
+        config: AppConfig,
+        taskDirectory: Path,
+        operationId: String,
+    ): TagOperation = resumeExisting(
+        config = config,
+        taskDirectory = taskDirectory,
+        operationId = operationId,
+        retryableStates = setOf(TagOperationState.CONFLICT),
+        invalidStateMessage = "只有 CONFLICT 操作可以重试",
+    )
+
+    /**
+     * Re-runs an operation interrupted before it changed the target branch or
+     * created a local Tag. Re-pushing the source branch is idempotent, and the
+     * complete preflight runs again before every following Git write.
+     */
+    fun resumeInterrupted(
+        config: AppConfig,
+        taskDirectory: Path,
+        operationId: String,
+    ): TagOperation = resumeExisting(
+        config = config,
+        taskDirectory = taskDirectory,
+        operationId = operationId,
+        retryableStates = interruptedRetryableTagStates,
+        invalidStateMessage = "只有构建中断的 Tag 操作可以重试",
+    )
+
+    private fun resumeExisting(
+        config: AppConfig,
+        taskDirectory: Path,
+        operationId: String,
+        retryableStates: Set<TagOperationState>,
+        invalidStateMessage: String,
+    ): TagOperation = taskLock.withLock(taskDirectory) {
+        val previous = operations.load(taskDirectory, operationId)
+        require(previous.state in retryableStates) { invalidStateMessage }
+        runCatching {
+            buildUnlocked(
+                config = config,
+                taskDirectory = taskDirectory,
+                repositoryId = "${previous.groupServiceId}:${previous.moduleId}",
+                existingOperation = previous,
+            )
+        }.getOrElse { error ->
+            // Resolution/validation happens before the normal build try/catch.
+            // Keep the same operation record even when the task or workspace is
+            // no longer available, so the UI can report a retryable failure.
+            previous.copy(
+                state = TagOperationState.FAILED,
+                updatedAt = AwmTime.format(Instant.now(clock)),
+                sourceSha = null,
+                targetSha = null,
+                tag = null,
+                message = error.message ?: error::class.simpleName ?: "重试失败",
+                conflictFiles = emptyList(),
+            ).also {
+                operations.save(taskDirectory, it)
+                recordHistory(taskDirectory, it)
+            }
+        }
+    }
+
     private fun buildUnlocked(
         config: AppConfig,
         taskDirectory: Path,
         repositoryId: String,
+        batchId: String? = null,
+        existingOperation: TagOperation? = null,
     ): TagOperation {
         val manifest = manifests.load(taskDirectory)
         val target = TagPolicy.resolve(config, manifest, repositoryId)
@@ -143,7 +269,24 @@ class TagBuildService(
         val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
         val repository = validated.repository
         val now = AwmTime.format(Instant.now(clock))
-        var operation = TagOperation(
+        var operation = existingOperation?.copy(
+            folderName = manifest.folderName,
+            serviceName = workspace.serviceName,
+            repositoryId = workspace.repositoryId,
+            sourceBranch = workspace.branch,
+            targetBranch = service.targetBranch,
+            remote = service.remote,
+            tagMode = service.mode,
+            state = TagOperationState.CREATED,
+            updatedAt = now,
+            sourceSha = null,
+            targetSha = null,
+            tag = null,
+            message = null,
+            conflictFiles = emptyList(),
+            groupServiceId = workspace.groupServiceId,
+            moduleId = workspace.moduleId,
+        ) ?: TagOperation(
             operationId = UUID.randomUUID().toString(),
             folderName = manifest.folderName,
             serviceName = workspace.serviceName,
@@ -157,6 +300,7 @@ class TagBuildService(
             updatedAt = now,
             groupServiceId = workspace.groupServiceId,
             moduleId = workspace.moduleId,
+            batchId = batchId,
         )
         operations.save(taskDirectory, operation)
         events.info(
@@ -166,6 +310,7 @@ class TagBuildService(
                 "operationId" to operation.operationId,
                 "folderName" to operation.folderName,
                 "service" to operation.serviceName,
+                "batchId" to operation.batchId.orEmpty(),
             ),
             clock = clock,
         )
@@ -670,6 +815,7 @@ class TagBuildService(
                 tag = operation.tag,
                 state = operation.state,
                 message = operation.message,
+                batchId = operation.batchId,
             ),
         )
         val metadata = mapOf(

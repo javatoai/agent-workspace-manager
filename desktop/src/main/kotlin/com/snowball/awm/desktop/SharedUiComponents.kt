@@ -115,6 +115,7 @@ private fun statusLabel(status: String): String = when (status) {
     "SUCCESS" -> "成功"
     "CONFLICT" -> "有冲突"
     "PARTIAL" -> "部分完成"
+    "CREATED", "PREFLIGHT_PASSED", "SOURCE_BRANCH_PUSHED" -> "构建已中断"
     else -> status
 }
 

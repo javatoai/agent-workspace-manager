@@ -142,8 +142,32 @@ object DevelopmentToolLaunchCommand {
             (normalizedPath.endsWith(".cmd", true) || normalizedPath.endsWith(".bat", true))
         ) {
             listOf("cmd.exe", "/d", "/c", normalizedPath) + arguments
+        } else if (osName.startsWith("Windows", ignoreCase = true) && type in JETBRAINS_TOOL_TYPES) {
+            windowsShellLaunch(normalizedPath, arguments)
         } else {
             listOf(normalizedPath) + arguments
         }
     }
+
+    /**
+     * Some JetBrains launchers installed below Program Files require elevation. Launching them
+     * directly with ProcessBuilder bypasses the Windows shell and fails with CreateProcess 740.
+     */
+    private fun windowsShellLaunch(application: String, arguments: List<String>): List<String> =
+        listOf(
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Start-Process -FilePath ${powerShellLiteral(application)} -ArgumentList @(${arguments.joinToString(",") { powerShellLiteral(it) }})",
+        )
+
+    private fun powerShellLiteral(value: String): String = "'${value.replace("'", "''")}'"
+
+    private val JETBRAINS_TOOL_TYPES = setOf(
+        DevelopmentToolType.INTELLIJ_IDEA,
+        DevelopmentToolType.WEBSTORM,
+        DevelopmentToolType.PYCHARM,
+        DevelopmentToolType.ANDROID_STUDIO,
+        DevelopmentToolType.DEVECO_STUDIO,
+    )
 }

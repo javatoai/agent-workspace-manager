@@ -14,10 +14,12 @@ class TagConflictIntegrationTest {
     lateinit var temporary: Path
 
     @Test
-    fun `reports conflicts and leaves feature worktree untouched`() {
+    fun `reports conflicts and resumes same operation after manual resolution`() {
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("source"))
         GitTestSupport.run(seed, "branch", "release/test")
         GitTestSupport.run(seed, "push", "origin", "release/test")
+        createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
         val repository = GitTestSupport.clone(remote, temporary.resolve("services").resolve("conflict-service"))
         val repositoryInfo = GitRepositoryInspector().inspect(repository)
 
@@ -90,5 +92,54 @@ class TagConflictIntegrationTest {
         assertEquals(featureSha, GitTestSupport.run(featureWorktree, "rev-parse", "HEAD"))
         assertEquals("feature version", Files.readString(featureWorktree.resolve("README.md")).trim())
         assertTrue(GitClient().worktrees(repository).none { it.path.startsWith(temporary.resolve("app-home")) })
+
+        val conflicted = builder.buildBatch(config, taskDirectory, listOf(repositoryInfo.id)).single()
+        assertEquals(TagOperationState.CONFLICT, conflicted.state)
+        assertEquals(listOf("README.md"), conflicted.conflictFiles)
+
+        val stillConflicted = builder.resumeConflict(config, taskDirectory, conflicted.operationId)
+        assertEquals(TagOperationState.CONFLICT, stillConflicted.state)
+        assertEquals(conflicted.operationId, stillConflicted.operationId)
+        assertEquals(conflicted.batchId, stillConflicted.batchId)
+        assertEquals(conflicted.createdAt, stillConflicted.createdAt)
+        assertEquals(listOf("README.md"), stillConflicted.conflictFiles)
+
+        val merge = GitClient().run(
+            featureWorktree,
+            "merge",
+            "--no-edit",
+            "origin/release/test",
+            check = false,
+        )
+        assertTrue(!merge.succeeded)
+        Files.writeString(featureWorktree.resolve("README.md"), "resolved version\n")
+        GitTestSupport.run(featureWorktree, "add", "README.md")
+        GitTestSupport.run(featureWorktree, "commit", "-m", "resolve tag conflict")
+        GitTestSupport.run(featureWorktree, "push", "origin", "feature/CONFLICT-1")
+
+        val resumed = builder.resumeConflict(config, taskDirectory, conflicted.operationId)
+        assertEquals(TagOperationState.SUCCESS, resumed.state, resumed.message)
+        assertEquals(conflicted.operationId, resumed.operationId)
+        assertEquals(conflicted.batchId, resumed.batchId)
+        assertEquals(conflicted.createdAt, resumed.createdAt)
+        assertTrue(resumed.conflictFiles.isEmpty())
+        assertEquals("1.0.0.beta-1", resumed.tag)
+        assertEquals(
+            resumed.operationId,
+            TagOperationStore().load(taskDirectory, resumed.operationId).operationId,
+        )
+        assertTrue(
+            GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1")
+                .isNotBlank(),
+        )
+    }
+
+    private fun createAnnotatedTag(repository: Path, tag: String, date: String) {
+        val result = ProcessCommandRunner().run(
+            command = listOf("git", "tag", "-a", tag, "-m", tag),
+            workingDirectory = repository,
+            environment = mapOf("GIT_COMMITTER_DATE" to date),
+        )
+        assertEquals(0, result.exitCode, result.stderr)
     }
 }

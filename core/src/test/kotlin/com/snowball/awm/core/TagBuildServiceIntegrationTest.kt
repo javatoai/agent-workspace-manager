@@ -115,6 +115,28 @@ Builder: ${System.getProperty("user.name")}
         assertTrue(!annotation.contains("Service:"))
         assertTrue(!annotation.contains("Feature:"))
         assertTrue(!annotation.contains("Test:"))
+
+        // Simulate a process stop immediately after the source branch was
+        // pushed. The retry must keep one operation record and safely rerun
+        // the complete flow rather than creating a duplicate history row.
+        val interrupted = result.copy(
+            state = TagOperationState.SOURCE_BRANCH_PUSHED,
+            tag = null,
+            targetSha = null,
+            message = null,
+        )
+        TagOperationStore().save(taskDirectory, interrupted)
+
+        val resumed = builder.resumeInterrupted(config, taskDirectory, interrupted.operationId)
+
+        assertEquals(TagOperationState.SUCCESS, resumed.state, resumed.message)
+        assertEquals(interrupted.operationId, resumed.operationId)
+        assertEquals(interrupted.createdAt, resumed.createdAt)
+        assertEquals("1.6.89.beta-12", resumed.tag)
+        assertTrue(
+            GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.6.89.beta-12")
+                .isNotBlank(),
+        )
     }
 
     @Test

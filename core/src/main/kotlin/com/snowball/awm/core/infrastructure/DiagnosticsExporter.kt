@@ -83,6 +83,7 @@ class DiagnosticsExporter(
         terminalExecutable = terminalExecutable?.let { "<configured>" },
         meegleExecutablePath = meegleExecutablePath?.let { "<configured>" },
         gitExecutablePath = gitExecutablePath?.let { "<configured>" },
+        genbuExecutablePath = genbuExecutablePath?.let { "<configured>" },
     )
 
     private fun gitVersion(): String = runCatching {

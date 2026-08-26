@@ -122,7 +122,6 @@ import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.TaskNaming
-import com.snowball.awm.core.TagOutputFormatter
 import com.snowball.awm.core.RequirementDraftState
 import com.snowball.awm.core.WorkspaceToolLaunchStatus
 import com.snowball.awm.core.ThemePreference
@@ -273,39 +272,6 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
             content = error,
             onDismiss = controller::dismissMessages,
             onCopy = { controller.copyText(error, "错误详情已复制") },
-        )
-    }
-    controller.tagResult?.let { result ->
-        val output = TagOutputFormatter.format(controller.selectedTask?.requirementLink.orEmpty(), listOf(result), includeFailures = true)
-        TagResultDialog(
-            title = "Tag 构建结果",
-            content = output,
-            onDismiss = controller::clearTagResult,
-            onCopy = { controller.copyText(output, "构建结果已复制") },
-        )
-    }
-    controller.batchTagResults?.let { results ->
-        val successful = results.filter { it.state.name == "SUCCESS" && !it.tag.isNullOrBlank() }
-        val successOutput = TagOutputFormatter.format(controller.selectedTask?.requirementLink.orEmpty(), successful, includeFailures = false)
-        AlertDialog(
-            onDismissRequest = controller::clearBatchTagResults,
-            title = { Text("批量 Tag 构建结果") },
-            text = {
-                SelectionContainer {
-                    Column(Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        results.forEach { result ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(result.serviceName, fontWeight = FontWeight.SemiBold)
-                                    Text(result.tag ?: result.message.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                StatusPill(result.state.name)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { Row { OutlinedButton(onClick = { controller.copyText(successOutput, "成功 Tag 已复制") }, enabled = successful.isNotEmpty()) { Text(if (successful.isEmpty()) "没有可复制的成功 Tag" else "复制成功 Tag") }; Spacer(Modifier.width(8.dp)); Button(onClick = controller::clearBatchTagResults) { Text("完成") } } },
         )
     }
     controller.repositoryAddResult?.let { result ->

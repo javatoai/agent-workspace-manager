@@ -4,6 +4,8 @@ import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.RequirementMetadataProvider
+import com.snowball.awm.core.RequirementParticipants
+import com.snowball.awm.core.RequirementPerson
 import com.snowball.awm.core.TaskManifest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,6 +98,39 @@ class RequirementControllerTest {
         advanceUntilIdle()
         retried.await()
         assertEquals(2, calls.get())
+    }
+
+    @Test
+    fun `action metadata fetch reuses the coordinator and returns QC owners`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val calls = AtomicInteger()
+        val task = task("one", LINK)
+        val session = AppSessionStore(
+            AppConfig(meegleProjects = listOf(MeegleProjectConfig("project", "obt"))),
+            listOf(task),
+        )
+        val coordinator = RequirementMetadataCoordinator(
+            provider = RequirementMetadataProvider {
+                calls.incrementAndGet()
+                RequirementMetadata(
+                    status = "测试中",
+                    participants = RequirementParticipants(qcOwners = listOf(RequirementPerson("测试同事"))),
+                )
+            },
+            scope = this,
+            ioDispatcher = dispatcher,
+        )
+        val controller = RequirementController(session, this, coordinator)
+        var first: RequirementMetadata? = null
+        var second: RequirementMetadata? = null
+
+        controller.fetchMetadata(task) { first = it }
+        controller.fetchMetadata(task) { second = it }
+        advanceUntilIdle()
+
+        assertEquals(listOf("测试同事"), first?.participants?.qcOwners?.map { it.name })
+        assertEquals(first, second)
+        assertEquals(1, calls.get())
     }
 
     @Test
