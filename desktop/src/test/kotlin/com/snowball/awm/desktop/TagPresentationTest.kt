@@ -50,7 +50,7 @@ class TagPresentationTest {
         )
 
         assertEquals(
-            "请在当前任务工作区将 upstream/uat 合入 feature/task-42，解决冲突后提交并推送，再点击“已解决，重新构建 Tag”。",
+            "请将 feature/task-42 合入 upstream/uat，解决冲突后提交并推送 upstream/uat，再点击“已解决，重新构建 Tag”。",
             tagConflictGuidance(conflict),
         )
     }

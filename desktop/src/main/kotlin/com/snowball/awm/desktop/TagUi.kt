@@ -513,7 +513,7 @@ private fun TagWorkspaceCheckResult(check: TagWorkspaceCheck?) {
 
 internal fun tagConflictGuidance(operation: TagOperation): String {
     val target = operation.targetBranch?.let { "${operation.remote}/$it" } ?: "目标分支"
-    return "请在当前任务工作区将 $target 合入 ${operation.sourceBranch}，解决冲突后提交并推送，再点击“已解决，重新构建 Tag”。"
+    return "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再点击“已解决，重新构建 Tag”。"
 }
 
 internal fun tagConflictFilesSummary(operation: TagOperation): String =

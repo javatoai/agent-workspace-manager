@@ -76,6 +76,9 @@ internal fun tagWorkspaceChanges(statusOutput: String): List<String> = statusOut
     }
     .toList()
 
+internal fun tagMergeConflictMessage(sourceBranch: String, remote: String, targetBranch: String): String =
+    "自动将 $sourceBranch 合入 $remote/$targetBranch 时检测到冲突，请手工解决后提交并推送 $remote/$targetBranch，再重试"
+
 class TagBuildService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val git: GitClient = GitClient(),
@@ -349,7 +352,7 @@ class TagBuildService(
                             taskDirectory,
                             operation,
                             TagOperationState.CONFLICT,
-                            message = "自动合并检测到冲突，请手工合并并推送 ${service.targetBranch} 后重试",
+                            message = tagMergeConflictMessage(workspace.branch, service.remote, requireNotNull(service.targetBranch)),
                             conflictFiles = mergeResult.conflicts,
                         )
                         recordHistory(taskDirectory, operation)
@@ -406,7 +409,7 @@ class TagBuildService(
                     taskDirectory,
                     operation,
                     TagOperationState.CONFLICT,
-                    message = "自动合并检测到冲突，请手工合并并推送 ${service.targetBranch} 后重试",
+                    message = tagMergeConflictMessage(workspace.branch, service.remote, requireNotNull(service.targetBranch)),
                     conflictFiles = conflict.files,
                 )
                 recordHistory(taskDirectory, operation)
