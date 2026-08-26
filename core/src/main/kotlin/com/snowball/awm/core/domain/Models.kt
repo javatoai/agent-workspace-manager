@@ -7,8 +7,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.10.0"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.10.0"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.11.0"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.11.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -208,11 +208,13 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.10.x is intentionally strict and does not migrate earlier schemas. */
+/** Version 0.11.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
     val taskRoot: String? = null,
+    /** Root of the human-owned requirement process notes produced by Agent CLI tasks. */
+    val requirementDocumentationRoot: String? = null,
     val repositories: List<RepositoryConfig> = emptyList(),
     val groups: List<GroupConfig> = listOf(
         GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME),
@@ -434,7 +436,27 @@ data class TaskManifest(
     val services: List<ServiceWorkspace>,
     val groupId: String = DEFAULT_GROUP_ID,
     val workspaceToolLaunches: List<WorkspaceToolLaunch> = emptyList(),
+    /** Present only for tasks created through the guarded Agent CLI flow. */
+    val agentContext: AgentTaskContext? = null,
 )
+
+/**
+ * Immutable facts injected into a CLI-created task. Its absence deliberately
+ * means this is a normal desktop-created task and no handoff protocol applies.
+ */
+@Serializable
+data class AgentTaskContext(
+    val protocolVersion: String = "1",
+    val documentationDirectory: String,
+    val iterationLabel: String,
+    val handoffRelativePath: String = ".awm/HANDOFF.md",
+) {
+    init {
+        require(documentationDirectory.isNotBlank()) { "需求过程文档目录不能为空" }
+        require(iterationLabel.isNotBlank()) { "迭代名称不能为空" }
+        require(handoffRelativePath == ".awm/HANDOFF.md") { "交接文件路径必须是 .awm/HANDOFF.md" }
+    }
+}
 
 /** Task health is derived from its workspaces and is never persisted independently. */
 val TaskManifest.health: WorkspaceHealth

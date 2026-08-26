@@ -258,12 +258,12 @@ class ConfigStoreTest {
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.10.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"0.11.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.10.9", compatible.schemaVersion)
+        assertEquals("0.11.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)

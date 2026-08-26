@@ -190,6 +190,23 @@ class SettingsController internal constructor(
         onFailure = { setSaveState("paths", SettingsSaveState.FAILED); onFailure(it) },
     ).also { started -> setSaveState("paths", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
 
+    /**
+     * This root is used only by Agent CLI tasks. Desktop-created tasks remain
+     * plain worktree tasks and do not create requirement-process documents.
+     */
+    fun updateRequirementDocumentationRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(
+        "正在保存需求文档根目录…",
+        "需求文档根目录已保存",
+        block = {
+            val normalized = value.trim()
+            val path = if (normalized.isBlank()) null else Path.of(normalized).toAbsolutePath().normalize()
+            path?.let(Files::createDirectories)
+            configStore.update { it.copy(requirementDocumentationRoot = path?.toString()) }
+        },
+        onSuccess = { applyConfig(it); setSaveState("paths", SettingsSaveState.SAVED) },
+        onFailure = { setSaveState("paths", SettingsSaveState.FAILED); onFailure(it) },
+    ).also { started -> setSaveState("paths", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
+
     /** Saves and normalizes the optional requirement-materials root independently. */
     fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(
         "正在保存需求资料根目录…",

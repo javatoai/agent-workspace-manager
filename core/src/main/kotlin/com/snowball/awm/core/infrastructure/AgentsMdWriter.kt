@@ -44,6 +44,21 @@ object AgentsMdWriter {
             appendLine()
             appendLine(manifest.requirementLink.ifBlank { "（未填写）" })
             appendLine()
+            manifest.agentContext?.let { context ->
+                appendLine("## AWM 任务交接（仅 Agent CLI 创建）")
+                appendLine()
+                appendLine("在阅读、修改或执行任何任务操作前，先阅读 `${context.handoffRelativePath}`。")
+                appendLine("将其作为本任务的目标、范围、已验证事实、风险与下一步的权威交接记录。")
+                appendLine("若该文件缺失、损坏、过期或与当前工作区状态矛盾，停止执行会产生副作用的操作，先向用户报告差异。")
+                appendLine()
+                appendLine("## 需求过程文档")
+                appendLine()
+                appendLine("- 本需求的过程文档目录：`${context.documentationDirectory}`")
+                appendLine("- 迭代：`${context.iterationLabel}`")
+                appendLine("- 需求分析、方案、验收、风险与交接等过程 Markdown 必须写入上方目录。")
+                appendLine("- 服务仓库自身的 README、ADR、API 文档等仍应留在相应 Worktree；不要把代码仓库文档迁移到过程文档目录。")
+                appendLine()
+            }
             appendLine("## 需求资料目录")
             appendLine()
             when (manifest.requirementMaterials.status) {
