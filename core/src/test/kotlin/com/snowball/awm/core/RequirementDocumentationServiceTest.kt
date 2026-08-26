@@ -1,5 +1,7 @@
 package com.snowball.awm.core
 
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -16,9 +18,9 @@ class RequirementDocumentationServiceTest {
     fun `creates deterministic iteration and requirement documents from the unique active Sprint`() {
         val root = Files.createDirectories(temporary.resolve("docs"))
         val service = RequirementDocumentationService(iterations = FixedIterations(singleActive))
-        val config = AppConfig(requirementDocumentationRoot = root.toString())
+        val config = materialsConfig(root)
 
-        val plan = service.plan(config, link, "登录优化")
+        val plan = service.plan(config, link, "登录优化", directoryFolderName = "任务目录")
         val materialized = service.materialize(config, plan)
 
         assertEquals("OBT-20260817--20260828", plan.sprint.label)
@@ -32,19 +34,124 @@ class RequirementDocumentationServiceTest {
     @Test
     fun `reuses exactly one historical manifest without querying Meegle again`() {
         val root = Files.createDirectories(temporary.resolve("docs-history"))
-        val config = AppConfig(requirementDocumentationRoot = root.toString())
+        val config = materialsConfig(root)
         val initial = RequirementDocumentationService(iterations = FixedIterations(singleActive))
-        val created = initial.plan(config, link, "登录优化")
+        val created = initial.plan(config, link, "登录优化", directoryFolderName = "任务目录")
         initial.materialize(config, created)
         val offline = RequirementDocumentationService(iterations = RequirementIterationProvider { _, _ ->
             error("historical reuse must not call Meegle")
         })
 
-        val reused = offline.plan(config, link, "不同的标题不会改变历史目录")
+        val reused = offline.plan(config, link, "不同的标题不会改变历史目录", directoryFolderName = "其他任务目录")
 
         assertEquals(true, reused.reusedHistoricalDirectory)
         assertEquals(created.documentationDirectory, reused.documentationDirectory)
         assertEquals("登录优化", reused.requirementTitle)
+    }
+
+    @Test
+    fun `adds Agent process documents to an existing desktop materials write root`() {
+        val root = Files.createDirectories(temporary.resolve("shared-materials"))
+        val existingWriteRoot = Files.createDirectories(
+            root.resolve("OBT-20260817--20260828").resolve("7064764629-桌面任务").resolve("研发"),
+        )
+        val config = materialsConfig(root)
+        val service = RequirementDocumentationService(iterations = FixedIterations(singleActive))
+
+        val plan = service.plan(config, link, "Agent 标题", directoryFolderName = "另一个任务名")
+        val materialized = service.materialize(config, plan)
+
+        assertEquals(existingWriteRoot.toString(), plan.documentationDirectory)
+        assertEquals(existingWriteRoot.toString(), materialized.agentContext.documentationDirectory)
+        assertTrue(Files.isRegularFile(existingWriteRoot.resolve(".awm-requirement.json")))
+        assertTrue(Files.isRegularFile(existingWriteRoot.resolve("00-需求总览.md")))
+    }
+
+    @Test
+    fun `keeps a legacy requirement-root manifest as an identity marker and writes Agent docs below subdirectory`() {
+        val root = Files.createDirectories(temporary.resolve("legacy-root-manifest"))
+        val requirementDirectory = Files.createDirectories(root.resolve("已结束 Sprint").resolve("7064764629-桌面任务"))
+        Files.writeString(
+            requirementDirectory.resolve(".awm-requirement.json"),
+            Json.encodeToString(
+                RequirementDocumentationManifest(
+                    identity = RequirementIdentity("obt", "userstory", "7064764629"),
+                    requirementTitle = "桌面任务",
+                    sprint = RequirementSprintSnapshot("", "已结束 Sprint"),
+                    directoryName = "7064764629-桌面任务",
+                    createdAt = "2026-08-23T00:00:00Z",
+                    updatedAt = "2026-08-23T00:00:00Z",
+                ),
+            ),
+        )
+        val service = RequirementDocumentationService(
+            iterations = RequirementIterationProvider { _, _ -> error("reuse must not query Sprint") },
+            metadata = RequirementMetadataProvider { error("reuse must not query metadata") },
+        )
+
+        val plan = service.plan(materialsConfig(root), link, requestedTitle = "Agent 标题", directoryFolderName = "其他任务")
+        val materialized = service.materialize(materialsConfig(root), plan)
+
+        assertEquals(requirementDirectory.resolve("研发").toString(), plan.documentationDirectory)
+        assertEquals(plan.documentationDirectory, materialized.agentContext.documentationDirectory)
+        assertTrue(Files.isRegularFile(requirementDirectory.resolve(".awm-requirement.json")))
+        assertTrue(Files.isRegularFile(requirementDirectory.resolve("研发/.awm-requirement.json")))
+    }
+
+    @Test
+    fun `blocks a legacy requirement-root manifest with a different identity`() {
+        val root = Files.createDirectories(temporary.resolve("legacy-root-mismatch"))
+        val requirementDirectory = Files.createDirectories(root.resolve("已结束 Sprint").resolve("7064764629-桌面任务"))
+        Files.writeString(
+            requirementDirectory.resolve(".awm-requirement.json"),
+            """{"identity":{"space":"obt","kind":"userstory","workItemId":"999"}}""",
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            RequirementDocumentationService(
+                iterations = RequirementIterationProvider { _, _ -> error("mismatch must not query Sprint") },
+            ).plan(materialsConfig(root), link, "Agent 标题", directoryFolderName = "任务目录")
+        }
+
+        assertTrue(error.message.orEmpty().contains("需求编号不一致"))
+    }
+
+    @Test
+    fun `reuses a desktop materials directory without requiring Meegle or an active Sprint`() {
+        val root = Files.createDirectories(temporary.resolve("shared-offline"))
+        val existingWriteRoot = Files.createDirectories(
+            root.resolve("已结束 Sprint").resolve("7064764629-桌面任务").resolve("研发"),
+        )
+        val service = RequirementDocumentationService(
+            iterations = RequirementIterationProvider { _, _ -> error("reuse must not query Sprint") },
+            metadata = RequirementMetadataProvider { error("reuse must not query metadata") },
+        )
+
+        val plan = service.plan(materialsConfig(root), link, requestedTitle = null, directoryFolderName = "Agent 任务")
+
+        assertTrue(plan.reusedHistoricalDirectory)
+        assertEquals(existingWriteRoot.toString(), plan.documentationDirectory)
+        assertEquals("已结束 Sprint", plan.sprint.label)
+    }
+
+    @Test
+    fun `materialize reuses a directory created after plan instead of creating a second one`() {
+        val root = Files.createDirectories(temporary.resolve("plan-apply-race"))
+        val config = materialsConfig(root)
+        val service = RequirementDocumentationService(iterations = FixedIterations(singleActive))
+        val plan = service.plan(config, link, "登录优化", directoryFolderName = "任务目录")
+        val concurrentRequirementDirectory = Files.createDirectories(
+            root.resolve("已结束 Sprint").resolve("7064764629-并发任务"),
+        )
+
+        val materialized = service.materialize(config, plan)
+
+        assertEquals(
+            concurrentRequirementDirectory.resolve("研发").toString(),
+            materialized.agentContext.documentationDirectory,
+        )
+        assertTrue(Files.isRegularFile(concurrentRequirementDirectory.resolve("研发/.awm-requirement.json")))
+        assertTrue(!Files.exists(Path.of(plan.documentationDirectory)))
     }
 
     @Test
@@ -60,7 +167,7 @@ class RequirementDocumentationServiceTest {
         )
 
         val error = assertFailsWith<IllegalArgumentException> {
-            service.plan(AppConfig(requirementDocumentationRoot = root.toString()), link, "登录优化")
+            service.plan(materialsConfig(root), link, "登录优化", directoryFolderName = "任务目录")
         }
         assertTrue(error.message.orEmpty().contains("多个进行中 Sprint"))
     }
@@ -68,22 +175,61 @@ class RequirementDocumentationServiceTest {
     @Test
     fun `does not let an index hide a second historical manifest`() {
         val root = Files.createDirectories(temporary.resolve("docs-duplicate"))
-        val config = AppConfig(requirementDocumentationRoot = root.toString())
+        val config = materialsConfig(root)
         val service = RequirementDocumentationService(iterations = FixedIterations(singleActive))
-        val first = service.plan(config, link, "登录优化")
+        val first = service.plan(config, link, "登录优化", directoryFolderName = "任务目录")
         service.materialize(config, first)
         val duplicate = Path.of(first.iterationDirectory).resolve("7064764629-重复目录")
         Files.createDirectory(duplicate)
-        Files.copy(Path.of(first.documentationDirectory).resolve(".awm-requirement.json"), duplicate.resolve(".awm-requirement.json"))
+        Files.createDirectory(duplicate.resolve("研发"))
+        Files.copy(Path.of(first.documentationDirectory).resolve(".awm-requirement.json"), duplicate.resolve("研发/.awm-requirement.json"))
 
-        val error = assertFailsWith<IllegalArgumentException> { service.plan(config, link, "登录优化") }
+        val error = assertFailsWith<IllegalArgumentException> {
+            service.plan(config, link, "登录优化", directoryFolderName = "任务目录")
+        }
 
         assertTrue(error.message.orEmpty().contains("多个历史目录"))
+    }
+
+    @Test
+    fun `does not reuse a manifest outside the canonical requirement write root`() {
+        val root = Files.createDirectories(temporary.resolve("docs-invalid-layout"))
+        val invalidManifest = root.resolve("OBT-20260817--20260828")
+            .resolve("7064764629-任务目录")
+            .resolve("研发")
+            .resolve("nested")
+            .resolve(".awm-requirement.json")
+        Files.createDirectories(invalidManifest.parent)
+        Files.writeString(
+            invalidManifest,
+            Json.encodeToString(
+                RequirementDocumentationManifest(
+                    identity = RequirementIdentity("obt", "userstory", "7064764629"),
+                    requirementTitle = "登录优化",
+                    sprint = RequirementSprintSnapshot("7070412889", "OBT-20260817--20260828"),
+                    directoryName = "7064764629-任务目录",
+                    createdAt = "2026-08-23T00:00:00Z",
+                    updatedAt = "2026-08-23T00:00:00Z",
+                ),
+            ),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            RequirementDocumentationService(iterations = FixedIterations(singleActive))
+                .plan(materialsConfig(root), link, "登录优化", directoryFolderName = "任务目录")
+        }
+
+        assertTrue(error.message.orEmpty().contains("必须位于需求资料写入目录"))
     }
 
     private class FixedIterations(private val values: List<RequirementSprint>) : RequirementIterationProvider {
         override fun resolve(requirementLink: String, projectKey: String): List<RequirementSprint> = values
     }
+
+    private fun materialsConfig(root: Path) = AppConfig(
+        requirementMaterialsRoot = root.toString(),
+        requirementMaterialsSubdirectory = "研发",
+    )
 
     private companion object {
         const val link = "https://project.feishu.cn/obt/userstory/detail/7064764629"

@@ -145,7 +145,7 @@ compose.desktop {
             packageName = "Agent Workspace Manager"
             // macOS jpackage rejects versions whose first component is zero.
             // CI overrides this with a compatible internal app version while the
-            // project and release version remain 0.11.1.
+            // project and release version remain 0.12.0.
             packageVersion = macPackageVersion.get()
             description = "Task-level Agent development workspace orchestrator"
             vendor = "Snowball Technology"

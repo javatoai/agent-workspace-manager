@@ -253,20 +253,35 @@ class ConfigStoreTest {
     }
 
     @Test
-    fun `config from another patch release is read and saved as current patch`() {
+    fun `config from another patch release in the current minor line is read and saved as current patch`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.11.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"0.12.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.11.9", compatible.schemaVersion)
+        assertEquals("0.12.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)
+    }
+
+    @Test
+    fun `removed requirement documentation root is rejected without rewriting config`() {
+        val paths = ApplicationPaths(temporary.resolve("removed-documentation-root"))
+        Files.createDirectories(paths.home)
+        val original = """{
+          "schemaVersion":"$CURRENT_APP_CONFIG_SCHEMA_VERSION",
+          "requirementDocumentationRoot":"D:/docs",
+          "groups":[{"id":"default","name":"默认组","services":[]}]
+        }""".trimIndent()
+        Files.writeString(paths.config, original)
+
+        assertThrows(SerializationException::class.java) { ConfigStore(paths).load() }
+        assertEquals(original, Files.readString(paths.config))
     }
 
     @Test

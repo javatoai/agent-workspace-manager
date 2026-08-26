@@ -32,6 +32,21 @@ class RequirementMaterialsServiceTest {
     }
 
     @Test
+    fun `rejects a reused directory whose process manifest belongs to another requirement`() {
+        val existing = Files.createDirectories(root.resolve("Sprint-8").resolve("123-existing"))
+        Files.createDirectories(existing.resolve("研发")).resolve(".awm-requirement.json").toFile().writeText(
+            """{"identity":{"space":"obt","kind":"userstory","workItemId":"999"}}""",
+        )
+        val runner = RecordingRunner { error("CLI must not be called after an identity mismatch") }
+
+        val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
+
+        assertTrue(result is RequirementMaterialsResult.Failed)
+        assertTrue((result as RequirementMaterialsResult.Failed).reason.contains("需求编号不一致"))
+        assertEquals(0, runner.commands.size)
+    }
+
+    @Test
     fun `blocks ambiguous matching directories`() {
         Files.createDirectories(root.resolve("a").resolve("123-one"))
         Files.createDirectories(root.resolve("b").resolve("123-two"))
@@ -236,7 +251,10 @@ class RequirementMaterialsServiceTest {
         val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
 
         assertTrue((result as RequirementMaterialsResult.Failed).reason.contains("not authenticated"))
-        assertEquals(emptyList<Path>(), Files.list(root).use { it.toList() })
+        assertEquals(
+            listOf(root.resolve(".awm-requirement-materials.lock")),
+            Files.list(root).use { it.toList() },
+        )
     }
 
     @Test

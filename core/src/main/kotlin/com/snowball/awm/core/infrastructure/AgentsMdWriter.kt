@@ -51,13 +51,6 @@ object AgentsMdWriter {
                 appendLine("将其作为本任务的目标、范围、已验证事实、风险与下一步的权威交接记录。")
                 appendLine("若该文件缺失、损坏、过期或与当前工作区状态矛盾，停止执行会产生副作用的操作，先向用户报告差异。")
                 appendLine()
-                appendLine("## 需求过程文档")
-                appendLine()
-                appendLine("- 本需求的过程文档目录：`${context.documentationDirectory}`")
-                appendLine("- 迭代：`${context.iterationLabel}`")
-                appendLine("- 需求分析、方案、验收、风险与交接等过程 Markdown 必须写入上方目录。")
-                appendLine("- 服务仓库自身的 README、ADR、API 文档等仍应留在相应 Worktree；不要把代码仓库文档迁移到过程文档目录。")
-                appendLine()
             }
             appendLine("## 需求资料目录")
             appendLine()
@@ -70,9 +63,16 @@ object AgentsMdWriter {
                     },
                 )
                 RequirementMaterialsStatus.READY -> {
-                    appendLine("`${manifest.requirementMaterials.writeRoot}`")
+                    val writeRoot = manifest.requirementMaterials.writeRoot
+                    appendLine("`${writeRoot}`")
                     appendLine()
-                    appendLine("需求辅助 Markdown、SQL 和脚本写入此目录；产品源代码仍写入本任务 Worktree。")
+                    if (manifest.agentContext != null) {
+                        appendLine("Agent 过程文档与需求分析、方案、验收、风险、SQL 和脚本等研发辅助资料统一写入此目录。")
+                        appendLine("迭代：`${manifest.agentContext.iterationLabel}`；`.awm/HANDOFF.md` 仍位于任务目录，用于记录本任务交接上下文。")
+                    } else {
+                        appendLine("需求辅助 Markdown、SQL 和脚本写入此目录；产品源代码仍写入本任务 Worktree。")
+                    }
+                    appendLine("产品源代码仍写入本任务 Worktree；服务仓库自身的 README、ADR、API 文档等仍留在相应 Worktree。")
                 }
                 RequirementMaterialsStatus.FAILED -> {
                     appendLine("（暂不可用）")

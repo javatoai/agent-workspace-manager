@@ -8,4 +8,6 @@ AWM 使用 `MAJOR.MINOR.PATCH` 版本号，产品版本、Gradle、安装包、G
 
 `AGENTS.md`、日志、Tag 历史和构建产物不属于 schema 字段。相同 `MAJOR.MINOR` 的不同 PATCH（如 `0.5.0` 与 `0.5.1`）兼容读取，下一次正常保存时会写为当前 PATCH；不同主版本或次版本始终严格拒绝，不自动迁移。
 
-`0.11.0` 是新的 schema 硬边界：0.10.x 及更早版本的 `config.json` 和 `agent-workspace.json` 不兼容，应用不会读取、迁移或改写这些文件。新增 Agent CLI 交接上下文与需求过程文档根目录，因此配置与任务 schema 同步升至 `0.11.0`。
+`0.12.0` 是新的 schema 硬边界：0.11.x 及更早版本的 `config.json` 和 `agent-workspace.json` 不兼容，应用不会读取、迁移或改写这些文件。需求资料根与 Agent 过程文档合并为同一目录模型，并移除 `requirementDocumentationRoot`，因此配置与任务 schema 同步升至 `0.12.0`。
+
+升级到 0.12.0 不执行自动迁移。请先备份用户数据，再手工移除旧 `config.json` 中的 `requirementDocumentationRoot`，将两个 schema 字段改为 `0.12.0`，并在设置页重新保存 `requirementMaterialsRoot` 与 `requirementMaterialsSubdirectory`。旧的独立过程文档目录、配置和任务清单保持原样，不会被 AWM 搬迁、删除或读取。

@@ -619,8 +619,6 @@ class DesktopApplication(
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
-    fun updateRequirementDocumentationRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
-        settingsController.updateRequirementDocumentationRoot(value, onFailure)
     fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateRequirementMaterialsRoot(value, onFailure)
     fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}) =
@@ -1048,7 +1046,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.11.x 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个与当前 AWM 0.12.0 不兼容的任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(

@@ -42,6 +42,19 @@ data class RequirementMaterialsRequest(
 )
 
 /**
+ * A validated requirement-directory context shared by desktop and Agent flows.
+ * The application layer must not derive these relationships itself: a
+ * requirement directory is always directly below a Sprint directory and its
+ * write root is always the configured materials subdirectory.
+ */
+data class RequirementMaterialsDirectoryContext(
+    val requirementDirectory: Path,
+    val writeRoot: Path,
+    val iterationDirectory: Path,
+    val sprint: RequirementSprintSnapshot,
+)
+
+/**
  * Creates (or reuses) the non-source-code directory used for requirement notes and scripts.
  *
  * The service deliberately has no deletion operation.  A failed CLI lookup is returned as a
@@ -51,6 +64,7 @@ class RequirementMaterialsService(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
     private val commandTimeout: Duration = Duration.ofSeconds(20),
+    private val documentationFiles: RequirementDocumentationFileStore = RequirementDocumentationFileStore(),
 ) {
     fun ensure(
         requirementInput: String,
@@ -83,45 +97,51 @@ class RequirementMaterialsService(
             val folder = validateSegment(request.folderName, "需求文件夹名称", 80)
                 ?: return RequirementMaterialsResult.Failed(requirementId, "需求文件夹名称不能为空")
 
-            val existing = findRequirementDirectories(root, requirementId)
-            if (existing.size > 1) {
-                return RequirementMaterialsResult.Failed(
-                    requirementId,
-                    "同一需求编号匹配到多个需求目录，未自动选择",
-                    existing,
-                )
-            }
-            if (existing.singleOrNull() != null) {
-                val requirementPath = existing.single()
+            FileLocking.withExclusiveLock(
+                root.resolve(LOCK_FILE),
+                "需求资料目录正在被另一个 AWM 操作修改：$root",
+            ) {
+                val existing = findRequirementDirectories(root, requirementId)
+                if (existing.size > 1) {
+                    return@withExclusiveLock RequirementMaterialsResult.Failed(
+                        requirementId,
+                        "同一需求编号匹配到多个需求目录，未自动选择",
+                        existing,
+                    )
+                }
+                if (existing.singleOrNull() != null) {
+                    val context = resolveExistingRequirementDirectory(
+                        root = root,
+                        id = requirementId,
+                        subdirectory = subdirectory,
+                        requirementInput = request.requirementInput,
+                    ) ?: error("需求资料目录复用判定丢失")
+                    val writeRoot = ensureDirectory(root, context.writeRoot)
+                    return@withExclusiveLock RequirementMaterialsResult.Ready(
+                        requirementId = requirementId,
+                        requirementPath = context.requirementDirectory,
+                        writeRoot = writeRoot,
+                        status = RequirementMaterialsResult.Ready.Status.REUSED,
+                    )
+                }
+
+                val project = resolveProject(parsed, requirementId, request.projects)
+                    ?: return@withExclusiveLock RequirementMaterialsResult.Failed(
+                        requirementId,
+                        lastFailure ?: if (request.projects.isEmpty()) "未配置 Meegle 项目" else "未能唯一匹配需求所属的 Meegle 项目",
+                    )
+                val sprint = resolveActiveSprint(project, requirementId)
+                    ?: return@withExclusiveLock RequirementMaterialsResult.Failed(requirementId, lastFailure ?: "需求没有关联当前进行中的 Sprint")
+
+                val requirementPath = buildRequirementDirectory(root, sprint.name, requirementId, folder)
                 val writeRoot = ensureDirectory(root, requirementPath.resolve(subdirectory))
-                return RequirementMaterialsResult.Ready(
+                RequirementMaterialsResult.Ready(
                     requirementId = requirementId,
                     requirementPath = requirementPath,
                     writeRoot = writeRoot,
-                    status = RequirementMaterialsResult.Ready.Status.REUSED,
+                    status = RequirementMaterialsResult.Ready.Status.CREATED,
                 )
             }
-
-            val project = resolveProject(parsed, requirementId, request.projects)
-                ?: return RequirementMaterialsResult.Failed(
-                    requirementId,
-                    lastFailure ?: if (request.projects.isEmpty()) "未配置 Meegle 项目" else "未能唯一匹配需求所属的 Meegle 项目",
-                )
-            val sprint = resolveActiveSprint(project, requirementId)
-                ?: return RequirementMaterialsResult.Failed(requirementId, lastFailure ?: "需求没有关联当前进行中的 Sprint")
-
-            val sprintName = validateSegment(sprint.name, "Sprint 名称", 120)
-                ?: return RequirementMaterialsResult.Failed(requirementId, "Sprint 名称不能为空")
-            val requirementName = validateSegment("$requirementId-$folder", "需求目录名", 140)
-                ?: return RequirementMaterialsResult.Failed(requirementId, "需求目录名不能为空")
-            val requirementPath = root.resolve(sprintName).resolve(requirementName)
-            val writeRoot = ensureDirectory(root, requirementPath.resolve(subdirectory))
-            RequirementMaterialsResult.Ready(
-                requirementId = requirementId,
-                requirementPath = requirementPath,
-                writeRoot = writeRoot,
-                status = RequirementMaterialsResult.Ready.Status.CREATED,
-            )
         } catch (error: Exception) {
             RequirementMaterialsResult.Failed(requirementId, "需求资料目录创建失败：${error.message ?: error::class.simpleName}")
         }
@@ -129,15 +149,58 @@ class RequirementMaterialsService(
 
     private var lastFailure: String? = null
 
-    private data class ParsedRequirement(val id: String, val simpleName: String?)
+    /**
+     * Parses a Feishu work-item link for Agent flows.
+     *
+     * This is the single boundary for converting an external requirement link
+     * into the domain identity used by both desktop and Agent material flows.
+     * Invalid input is returned as a failed Result so callers can keep their
+     * own error handling boundary.
+     */
+    fun parseRequirementIdentity(raw: String): Result<RequirementIdentity> = runCatching {
+        val link = FeishuWorkItemLink.parse(raw)
+            ?: throw IllegalArgumentException("需求链接不是支持的飞书项目工作项链接")
+        RequirementIdentity(
+            space = link.space,
+            kind = link.kind,
+            workItemId = link.workItemId,
+        )
+    }
+
+    /** Returns the built-in Feishu project key for a validated requirement link, when known. */
+    fun resolveRequirementProjectKey(raw: String): String? = FeishuWorkItemLink.parse(raw)?.projectKey
+
+    /** Validates the configured root for both desktop and Agent material flows. */
+    fun requireMaterialsRoot(raw: String?): Path = validateRoot(raw)
+        ?: throw IllegalStateException("尚未配置需求资料根目录；请在 AWM 设置 > 路径设置中配置")
+
+    /** Validates the configured write-root child for both desktop and Agent flows. */
+    fun requireMaterialsSubdirectory(raw: String?): String = validateSegment(raw, "资料子目录名", 100)
+        ?: throw IllegalStateException("尚未配置需求资料子目录；请在 AWM 设置 > 路径设置中配置")
+
+    /** Applies the single path-boundary rule owned by the materials service. */
+    fun requirePathInsideMaterialsRoot(path: Path, root: Path, label: String): Path {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        val normalized = path.toAbsolutePath().normalize()
+        require(normalized.startsWith(normalizedRoot)) { "$label 超出配置的需求资料根目录：$path" }
+        return normalized
+    }
+
+    /** Creates only missing directories beneath an already validated root. */
+    fun ensureMaterialsDirectory(root: Path, path: Path): Path = ensureDirectory(
+        root.toAbsolutePath().normalize(),
+        requirePathInsideMaterialsRoot(path, root, "需求资料目录"),
+    )
+
+    private data class ParsedRequirement(val id: String, val simpleName: String?, val kind: String?)
     private data class ProjectMatch(val project: MeegleProjectConfig)
     private data class SprintMatch(val id: String, val name: String)
 
     private fun parseRequirementInput(raw: String): ParsedRequirement? {
         val value = raw.trim().trimEnd(',', '，', '。', ';', '；')
-        if (value.matches(Regex("\\d+"))) return ParsedRequirement(value, null)
+        if (value.matches(Regex("\\d+"))) return ParsedRequirement(value, null, null)
         val link = FeishuWorkItemLink.parse(value) ?: return null
-        return ParsedRequirement(link.workItemId, link.space)
+        return ParsedRequirement(link.workItemId, link.space, link.kind)
     }
 
     private fun resolveProject(
@@ -282,10 +345,21 @@ class RequirementMaterialsService(
             val archived = row["archiving_status"]?.toBooleanStrictOrNull() ?: false
             relatedIds.contains(id) && !archived && (status == "进行中" || status.equals("In Progress", true))
         }
-        return when {
-            active.size == 1 -> SprintMatch(active.single()["work_item_id"]!!, active.single()["name"].orEmpty())
-            active.isEmpty() -> { lastFailure = "需求没有关联当前进行中的 Sprint"; null }
-            else -> { lastFailure = "需求同时关联多个当前进行中的 Sprint"; null }
+        return try {
+            val snapshot = resolveUniqueActiveSprint(active.map {
+                RequirementSprint(
+                    id = it["work_item_id"] ?: it["item_id"].orEmpty(),
+                    label = it["name"].orEmpty(),
+                    status = "进行中",
+                )
+            })
+            SprintMatch(snapshot.id, snapshot.label)
+        } catch (error: IllegalArgumentException) {
+            lastFailure = when {
+                active.isEmpty() -> "需求没有关联当前进行中的 Sprint"
+                else -> "需求同时关联多个当前进行中的 Sprint"
+            }
+            null
         }
     }
 
@@ -325,6 +399,237 @@ class RequirementMaterialsService(
         val baseName = segment.trimEnd('.', ' ')
         require(baseName.uppercase(Locale.ROOT) !in reservedNames) { "$label 使用了 Windows 保留名称" }
         return segment
+    }
+
+    /**
+     * Finds requirement directories that can be reused by either the desktop
+     * task flow or the Agent documentation flow.  The directory name is the
+     * only stable local identity available for a materials directory, so an
+     * exact id or an id-prefixed name is accepted and every match is returned
+     * to let the caller enforce the unique-match rule.
+     */
+    fun findExistingRequirementDirectories(root: Path, id: String): List<Path> =
+        findRequirementDirectories(root.toAbsolutePath().normalize(), id)
+
+    /**
+     * Resolves the one existing requirement directory, if any, and validates
+     * its Sprint and configured write-root structure.  This is intentionally
+     * independent of Meegle, so historical directories remain reusable when
+     * the CLI is offline or their Sprint has ended.
+     */
+    fun resolveExistingRequirementDirectory(
+        root: Path,
+        id: String,
+        subdirectory: String,
+        requirementInput: String? = null,
+        readSprint: (Path) -> RequirementSprintSnapshot? = { null },
+    ): RequirementMaterialsDirectoryContext? {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        val matches = findExistingRequirementDirectories(normalizedRoot, id)
+        require(matches.size <= 1) {
+            "同一需求编号匹配到多个需求目录，未自动选择（多个历史目录）：${matches.joinToString()}"
+        }
+        val requirementDirectory = matches.singleOrNull() ?: return null
+        requirementInput?.let { validateExistingRequirementDirectory(requirementDirectory, it) }
+        return existingDirectoryContext(normalizedRoot, requirementDirectory, id, subdirectory, readSprint)
+    }
+
+    /**
+     * Finds all process-manifest paths for the supplied requirement number.
+     * Reading and decoding those files stays in [RequirementDocumentationFileStore];
+     * this API only performs filesystem discovery.
+     */
+    fun findRequirementManifestPaths(root: Path, id: String): List<Path> {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        if (!Files.exists(normalizedRoot, LinkOption.NOFOLLOW_LINKS)) return emptyList()
+        val requirementDirectories = findExistingRequirementDirectories(normalizedRoot, id)
+        return requirementDirectories.flatMap { requirementDirectory ->
+            Files.walk(requirementDirectory).use { paths ->
+                paths.filter { path -> path.fileName?.toString() == REQUIREMENT_MANIFEST }.toList()
+            }
+        }.distinct()
+    }
+
+    /**
+     * Validates the canonical location of a process manifest and returns its
+     * directory context. A manifest directly under the requirement directory
+     * is a legacy desktop identity marker and therefore returns null; callers
+     * must still read it to validate identity, but must never use it as the
+     * Agent write root.
+     */
+    fun contextForRequirementManifest(
+        root: Path,
+        manifestPath: Path,
+        id: String,
+        subdirectory: String,
+        readSprint: (Path) -> RequirementSprintSnapshot? = { null },
+    ): RequirementMaterialsDirectoryContext? {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        val path = manifestPath.toAbsolutePath().normalize()
+        require(path.fileName?.toString() == REQUIREMENT_MANIFEST) {
+            "需求资料 manifest 文件名不正确：$manifestPath"
+        }
+        require(path.startsWith(normalizedRoot)) { "需求资料 manifest 超出资料根目录：$manifestPath" }
+        val parent = path.parent ?: throw IllegalArgumentException("需求资料 manifest 缺少父目录：$manifestPath")
+        val requirementDirectory = if (parent.fileName?.toString() == subdirectory) {
+            parent.parent ?: throw IllegalArgumentException("需求资料 manifest 缺少需求目录：$manifestPath")
+        } else {
+            generateSequence(parent) { it.parent }
+                .firstOrNull { candidate ->
+                    val name = candidate.fileName?.toString().orEmpty()
+                    name.equals(id, ignoreCase = true) || name.startsWith("$id-", ignoreCase = true)
+                }
+                ?: throw IllegalArgumentException("需求资料 manifest 必须位于需求资料写入目录：$manifestPath")
+        }
+        val context = existingDirectoryContext(normalizedRoot, requirementDirectory, id, subdirectory, readSprint)
+        if (parent == requirementDirectory) return null
+        require(parent == context.writeRoot) {
+            "需求资料 manifest 必须位于需求资料写入目录：$manifestPath"
+        }
+        return context
+    }
+
+    /** Validates the paths captured by an Agent plan before it is materialized. */
+    fun validatePlannedDirectory(
+        root: Path,
+        requirementDirectory: Path,
+        writeRoot: Path,
+        iterationDirectory: Path,
+        id: String,
+        subdirectory: String,
+        sprint: RequirementSprintSnapshot,
+    ): RequirementMaterialsDirectoryContext {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        val normalizedRequirement = requirePathInsideMaterialsRoot(requirementDirectory, normalizedRoot, "需求目录")
+        val normalizedWriteRoot = requirePathInsideMaterialsRoot(writeRoot, normalizedRoot, "需求资料写入目录")
+        val normalizedIteration = requirePathInsideMaterialsRoot(iterationDirectory, normalizedRoot, "迭代目录")
+        require(normalizedWriteRoot == normalizedRequirement.resolve(subdirectory)) {
+            "需求资料写入目录必须是需求目录的当前资料子目录"
+        }
+        require(normalizedRequirement.parent == normalizedIteration && normalizedIteration.parent == normalizedRoot) {
+            "需求目录必须直接位于资料根目录的 Sprint 子目录"
+        }
+        require(normalizedRequirement.fileName?.toString()?.equals(id, true) == true ||
+            normalizedRequirement.fileName?.toString()?.startsWith("$id-", true) == true) {
+            "需求目录名称与需求编号不一致：$normalizedRequirement"
+        }
+        validateSegment(sprint.label, "Sprint 名称", 120)
+        return RequirementMaterialsDirectoryContext(
+            requirementDirectory = normalizedRequirement,
+            writeRoot = normalizedWriteRoot,
+            iterationDirectory = normalizedIteration,
+            sprint = sprint,
+        )
+    }
+
+    /** Shared Sprint cardinality rule used by desktop and Agent flows. */
+    fun resolveUniqueActiveSprint(sprints: List<RequirementSprint>): RequirementSprintSnapshot {
+        val active = sprints.filter {
+            it.status == ACTIVE_SPRINT_STATUS || it.status.equals("In Progress", ignoreCase = true)
+        }
+        require(active.size == 1) {
+            when (active.size) {
+                0 -> "需求未关联唯一的进行中 Sprint，已停止创建需求资料目录"
+                else -> "需求关联多个进行中 Sprint，已停止创建需求资料目录：${active.joinToString { it.label }}"
+            }
+        }
+        val sprint = active.single()
+        return RequirementSprintSnapshot(sprint.id, validateSegment(sprint.label, "Sprint 名称", 120)!!)
+    }
+
+    /** Shared requirement-directory naming and path-boundary rule. */
+    fun buildRequirementDirectory(root: Path, sprintLabel: String, id: String, folderName: String?): Path {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        val safeSprint = validateSegment(sprintLabel, "Sprint 名称", 120)
+            ?: throw IllegalArgumentException("Sprint 名称不能为空")
+        val safeFolder = validateSegment(folderName, "需求文件夹名称", 80)
+            ?: throw IllegalArgumentException("需求文件夹名称不能为空")
+        val directoryName = validateSegment("$id-$safeFolder", "需求目录名", 140)
+            ?: throw IllegalArgumentException("需求目录名不能为空")
+        return normalizedRoot.resolve(safeSprint).resolve(directoryName)
+            .normalize().also { require(it.startsWith(normalizedRoot)) { "需求资料目录超出资料根目录" } }
+    }
+
+    /**
+     * Runs a materials operation under the same lock used by desktop creation.
+     * Agent planning/materialization uses this seam too, so the two flows cannot
+     * make different reuse decisions while another process is changing the tree.
+     */
+    fun <T> withMaterialsLock(root: Path, block: () -> T): T {
+        val normalized = root.toAbsolutePath().normalize()
+        return FileLocking.withExclusiveLock(
+            normalized.resolve(LOCK_FILE),
+            "需求资料目录正在被另一个 AWM 操作修改：$normalized",
+            block,
+        )
+    }
+
+    /**
+     * Validates every process manifest beneath an existing materials directory.
+     * A desktop-created directory normally has no manifest, but once one exists
+     * it is an identity boundary and must never be silently reused for another
+     * Feishu work item. Numeric input can validate the stable work-item id;
+     * links additionally validate space and work-item kind.
+     */
+    fun validateExistingRequirementDirectory(requirementPath: Path, requirementInput: String) {
+        val parsed = parseRequirementInput(requirementInput)
+            ?: throw IllegalArgumentException("需求输入必须是数字需求编号或 Meegle 详情链接")
+        val normalized = requirementPath.toAbsolutePath().normalize()
+        if (!Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) return
+        require(Files.isDirectory(normalized, LinkOption.NOFOLLOW_LINKS)) { "需求目录不是目录：$normalized" }
+        require(!Files.isSymbolicLink(normalized) && !isReparsePoint(normalized)) { "需求目录不能是链接或重解析点：$normalized" }
+        Files.walk(normalized).use { paths ->
+            paths.forEach { path ->
+                if (Files.isSymbolicLink(path) || isReparsePoint(path)) {
+                    throw IllegalArgumentException("需求目录包含链接或重解析点，拒绝使用：$path")
+                }
+                if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || path.fileName?.toString() != REQUIREMENT_MANIFEST) {
+                    return@forEach
+                }
+                val identity = documentationFiles.readRequirementIdentity(path)
+                val id = identity.workItemId
+                require(id == parsed.id) {
+                    "需求资料目录中的 manifest 与当前需求编号不一致，已停止写入：$path"
+                }
+                parsed.simpleName?.let { space ->
+                    require(identity.space.equals(space, ignoreCase = true)) {
+                        "需求资料目录中的 manifest 与当前需求空间不一致，已停止写入：$path"
+                    }
+                    require(identity.kind.equals(parsed.kind, ignoreCase = true)) {
+                        "需求资料目录中的 manifest 与当前需求类型不一致，已停止写入：$path"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun existingDirectoryContext(
+        root: Path,
+        requirementDirectory: Path,
+        id: String,
+        subdirectory: String,
+        readSprint: (Path) -> RequirementSprintSnapshot?,
+    ): RequirementMaterialsDirectoryContext {
+        val normalizedRoot = root.toAbsolutePath().normalize()
+        val normalizedRequirement = requirePathInsideMaterialsRoot(requirementDirectory, normalizedRoot, "需求目录")
+        assertDirectory(normalizedRequirement)
+        require(!Files.isSymbolicLink(normalizedRequirement) && !isReparsePoint(normalizedRequirement)) {
+            "需求目录不能是链接或重解析点：$normalizedRequirement"
+        }
+        val iterationDirectory = normalizedRequirement.parent
+            ?: throw IllegalStateException("需求资料目录缺少 Sprint 目录：$normalizedRequirement")
+        require(iterationDirectory.parent?.toAbsolutePath()?.normalize() == normalizedRoot) {
+            "需求资料目录必须位于资料根目录的 Sprint 子目录：$normalizedRequirement"
+        }
+        val directoryName = normalizedRequirement.fileName?.toString().orEmpty()
+        require(directoryName.equals(id, ignoreCase = true) || directoryName.startsWith("$id-", ignoreCase = true)) {
+            "需求目录名称与需求编号不一致：$normalizedRequirement"
+        }
+        val sprint = readSprint(iterationDirectory.resolve(ITERATION_MANIFEST))
+            ?: RequirementSprintSnapshot("", iterationDirectory.fileName?.toString().orEmpty())
+        validateSegment(sprint.label, "Sprint 名称", 120)
+        val writeRoot = requirePathInsideMaterialsRoot(normalizedRequirement.resolve(subdirectory), normalizedRoot, "需求资料写入目录")
+        return RequirementMaterialsDirectoryContext(normalizedRequirement, writeRoot, iterationDirectory, sprint)
     }
 
     private fun findRequirementDirectories(root: Path, id: String): List<Path> {
@@ -447,6 +752,10 @@ class RequirementMaterialsService(
     }
 
     private companion object {
+        const val ACTIVE_SPRINT_STATUS = "进行中"
+        const val LOCK_FILE = ".awm-requirement-materials.lock"
+        const val ITERATION_MANIFEST = ".awm-iteration.json"
+        const val REQUIREMENT_MANIFEST = ".awm-requirement.json"
         val json = Json { ignoreUnknownKeys = true }
         val invalidSegmentPattern = Regex("[<>:\"/\\\\|?*\\u0000-\\u001F]")
         val reservedNames = setOf(

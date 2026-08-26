@@ -25,7 +25,7 @@ data class AgentCreateTaskRequest(
     val groupId: String,
     val serviceIds: List<String>,
     val requirementLink: String,
-    /** A concise Chinese title used in the requirement documentation directory. */
+    /** A concise Chinese title used as the Markdown title in the requirement materials directory. */
     val requirementTitle: String? = null,
     val taskNotes: String = "",
     /** A self-contained Markdown handoff. A safe template is used when omitted. */
@@ -87,7 +87,8 @@ data class AgentOperationRecord(
 @Serializable
 data class AgentInspection(
     val taskRoot: String?,
-    val requirementDocumentationRoot: String?,
+    val requirementMaterialsRoot: String?,
+    val requirementMaterialsSubdirectory: String?,
     val canPlan: Boolean,
     val configurationMessage: String? = null,
 )
@@ -123,14 +124,17 @@ class AgentOperationService(
     fun inspect(): AgentInspection {
         val config = configurations.load()
         val taskRoot = config.taskRoot
-        val documentationRoot = config.requirementDocumentationRoot
+        val materialsRoot = config.requirementMaterialsRoot
+        val materialsSubdirectory = config.requirementMaterialsSubdirectory
         val missing = buildList {
             if (taskRoot.isNullOrBlank()) add("任务根目录")
-            if (documentationRoot.isNullOrBlank()) add("需求过程文档根目录")
+            if (materialsRoot.isNullOrBlank()) add("需求资料根目录")
+            if (materialsSubdirectory.isNullOrBlank()) add("需求资料子目录")
         }
         return AgentInspection(
             taskRoot = taskRoot,
-            requirementDocumentationRoot = documentationRoot,
+            requirementMaterialsRoot = materialsRoot,
+            requirementMaterialsSubdirectory = materialsSubdirectory,
             canPlan = missing.isEmpty(),
             configurationMessage = missing.takeIf(List<String>::isNotEmpty)?.joinToString("、", postfix = "尚未配置"),
         )
@@ -229,7 +233,12 @@ class AgentOperationService(
         val folder = TaskNaming.requireValidDirectoryName(request.folderName)
         val taskDirectory = taskRoot.resolve(folder).normalize()
         require(taskDirectory.parent == taskRoot) { "任务目录必须是任务根目录的直接子目录" }
-        val documentationPlan = documentation.plan(config, request.requirementLink, request.requirementTitle)
+        val documentationPlan = documentation.plan(
+            config = config,
+            requirementLink = request.requirementLink,
+            requestedTitle = request.requirementTitle,
+            directoryFolderName = folder,
+        )
         val domainRequest = CreateGroupedTaskRequest(
             folderName = folder,
             featureBranch = request.featureBranch,
@@ -247,7 +256,6 @@ class AgentOperationService(
             listOf(
                 json.encodeToString(config),
                 json.encodeToString(request),
-                json.encodeToString(documentationPlan),
                 taskDirectory.toString(),
                 "taskDirectoryExists=${taskDirectory.exists()}",
                 json.encodeToString(conflicts),

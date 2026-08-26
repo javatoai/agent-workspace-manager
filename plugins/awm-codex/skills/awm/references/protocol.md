@@ -40,29 +40,39 @@ documentation directory. `apply` expires after ten minutes and recomputes a
 fingerprint over the configuration, task path, Sprint/history decision, and
 branch state before creating anything.
 
-## Sprint and documentation decision
+## Sprint and shared materials-directory decision
 
-AWM first searches the configured documentation root for an exact manifest
+AWM uses the configured `requirementMaterialsRoot` and
+`requirementMaterialsSubdirectory` for both desktop materials and Agent
+process documents. It first searches the materials root for an exact manifest
 identity `{space, kind, workItemId}`. One valid historical directory is reused.
-Multiple historical directories block the operation. If there is no history,
-AWM queries the linked requirement's Sprint associations through the local
-Meegle CLI and requires exactly one Sprint whose status is `进行中`.
+Multiple `<workItemId>` / `<workItemId>-*` directories block the operation. If
+there is no history, AWM queries the linked requirement's Sprint associations
+through the local Meegle CLI and requires exactly one Sprint whose status is
+`进行中`. The requirement directory name always uses the task `folderName`;
+`requirementTitle` is a Markdown title only.
 
 For a new document workspace AWM writes:
 
 ```text
-<documentation-root>/
+<requirementMaterialsRoot>/
   .awm-requirement-index.jsonl
   <sprint-label>/
     .awm-iteration.json
     00-迭代任务总览.md
-    <requirement-id>-<Chinese-title>/
+    <requirement-id>-<task-folder-name>/
       .awm-requirement.json
       00-需求总览.md
+      <requirementMaterialsSubdirectory>/
+        ... process documents and development materials ...
 ```
 
-The index is only an accelerator: its target manifest is validated before it is
-used. AWM does not fuzzy-match titles or mutate a pre-existing non-AWM folder.
+The plan's `write_root` points to the final materials subdirectory. `apply`
+writes process documents there, while `.awm/HANDOFF.md` remains in the task
+directory. The index is only an accelerator: its target manifest is validated
+before it is used. AWM does not fuzzy-match titles, mutate a pre-existing
+non-AWM folder, move/delete old standalone documentation, or automatically
+migrate it.
 
 ## Branch reuse
 

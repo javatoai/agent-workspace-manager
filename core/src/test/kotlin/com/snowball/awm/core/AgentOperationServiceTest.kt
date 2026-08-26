@@ -19,7 +19,7 @@ class AgentOperationServiceTest {
             val paths = ApplicationPaths(root.resolve("awm-home"))
             Files.createDirectories(paths.home)
             val original = """
-                {"schemaVersion":"$CURRENT_APP_CONFIG_SCHEMA_VERSION","taskRoot":"D:/tasks","requirementDocumentationRoot":"D:/docs","productionTagBuildEnabled":true}
+                {"schemaVersion":"$CURRENT_APP_CONFIG_SCHEMA_VERSION","taskRoot":"D:/tasks","requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"研发","productionTagBuildEnabled":true}
             """.trimIndent()
             Files.writeString(paths.config, original)
             val configurations = AgentCompatibleConfigurationRepository(paths)
@@ -29,7 +29,8 @@ class AgentOperationServiceTest {
 
             assertTrue(inspection.canPlan)
             assertEquals("D:/tasks", inspection.taskRoot)
-            assertEquals("D:/docs", inspection.requirementDocumentationRoot)
+            assertEquals("D:/materials", inspection.requirementMaterialsRoot)
+            assertEquals("研发", inspection.requirementMaterialsSubdirectory)
             assertFailsWith<UnsupportedOperationException> { configurations.save(AppConfig()) }
             assertEquals(original, Files.readString(paths.config))
         } finally {
@@ -43,10 +44,11 @@ class AgentOperationServiceTest {
     fun `apply rechecks a fingerprint and passes the Agent-only context into task creation`() {
         val root = Files.createTempDirectory("agent-operation-")
         val taskRoot = Files.createDirectories(root.resolve("tasks"))
-        val documentationRoot = Files.createDirectories(root.resolve("docs"))
+        val materialsRoot = Files.createDirectories(root.resolve("materials"))
         val config = AppConfig(
             taskRoot = taskRoot.toString(),
-            requirementDocumentationRoot = documentationRoot.toString(),
+            requirementMaterialsRoot = materialsRoot.toString(),
+            requirementMaterialsSubdirectory = "研发",
         )
         val taskOperations = RecordingTaskOperations(taskRoot)
         val paths = ApplicationPaths(root.resolve("awm-home"))
@@ -89,6 +91,51 @@ class AgentOperationServiceTest {
         assertTrue(Files.isRegularFile(Path.of(plan.documentation.documentationDirectory).resolve(".awm-requirement.json")))
         assertEquals(applied, service.status(plan.operationId))
         assertEquals(applied, service.apply(plan.operationId, plan.nonce))
+    }
+
+    @Test
+    fun `apply accepts a newly created unique materials directory and lets the locked write reuse it`() {
+        val root = Files.createTempDirectory("agent-operation-materials-race-")
+        val taskRoot = Files.createDirectories(root.resolve("tasks"))
+        val materialsRoot = Files.createDirectories(root.resolve("materials"))
+        val config = AppConfig(
+            taskRoot = taskRoot.toString(),
+            requirementMaterialsRoot = materialsRoot.toString(),
+            requirementMaterialsSubdirectory = "研发",
+        )
+        val taskOperations = RecordingTaskOperations(taskRoot)
+        val service = AgentOperationService(
+            configurations = object : ConfigurationRepository {
+                override fun load(): AppConfig = config
+                override fun save(config: AppConfig) = Unit
+            },
+            documentation = RequirementDocumentationService(
+                iterations = RequirementIterationProvider { _, _ ->
+                    listOf(RequirementSprint("sprint-1", "OBT-20260817--20260828", "进行中"))
+                },
+            ),
+            tasks = taskOperations,
+            store = AgentOperationStore(ApplicationPaths(root.resolve("awm-home"))),
+        )
+        val request = AgentCreateTaskRequest(
+            folderName = "OBT-7064764629-登录优化",
+            featureBranch = "feature/OBT-7064764629",
+            groupId = DEFAULT_GROUP_ID,
+            serviceIds = listOf("orders"),
+            requirementLink = "https://project.feishu.cn/obt/userstory/detail/7064764629",
+            requirementTitle = "登录优化",
+        )
+
+        val plan = service.plan(request)
+        val competingWriteRoot = Files.createDirectories(
+            materialsRoot.resolve("OBT-20260817--20260828").resolve("7064764629-已有资料").resolve("研发"),
+        )
+
+        val applied = service.apply(plan.operationId, plan.nonce)
+
+        assertEquals(AgentOperationState.APPLIED, applied.state)
+        assertEquals(competingWriteRoot.toString(), taskOperations.createdRequest!!.agentContext!!.documentationDirectory)
+        assertTrue(!Files.exists(Path.of(plan.documentation.documentationDirectory).parent))
     }
 
     private class RecordingTaskOperations(private val taskRoot: Path) : AgentTaskOperations {

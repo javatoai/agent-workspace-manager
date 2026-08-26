@@ -100,9 +100,6 @@ import java.nio.file.Path
 @Composable
 internal fun SettingsScreen(controller: DesktopApplication) {
     var taskRoot by remember(controller.config.taskRoot) { mutableStateOf(controller.config.taskRoot.orEmpty()) }
-    var requirementDocumentationRoot by remember(controller.config.requirementDocumentationRoot) {
-        mutableStateOf(controller.config.requirementDocumentationRoot.orEmpty())
-    }
     var requirementMaterialsRoot by remember(controller.config.requirementMaterialsRoot) {
         mutableStateOf(controller.config.requirementMaterialsRoot.orEmpty())
     }
@@ -295,8 +292,6 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     controller = controller,
                     taskRoot = taskRoot,
                     onTaskRootChange = { taskRoot = it },
-                    requirementDocumentationRoot = requirementDocumentationRoot,
-                    onRequirementDocumentationRootChange = { requirementDocumentationRoot = it },
                     requirementMaterialsRoot = requirementMaterialsRoot,
                     onRequirementMaterialsRootChange = { requirementMaterialsRoot = it },
                     requirementMaterialsSubdirectory = requirementMaterialsSubdirectory,
@@ -547,8 +542,6 @@ private fun SettingsPathsSection(
     controller: DesktopApplication,
     taskRoot: String,
     onTaskRootChange: (String) -> Unit,
-    requirementDocumentationRoot: String,
-    onRequirementDocumentationRootChange: (String) -> Unit,
     requirementMaterialsRoot: String,
     onRequirementMaterialsRootChange: (String) -> Unit,
     requirementMaterialsSubdirectory: String,
@@ -562,7 +555,7 @@ private fun SettingsPathsSection(
     val materialsSaving = controller.settingsSaveState("requirement-materials-root") == SettingsSaveState.SAVING ||
         controller.settingsSaveState("requirement-materials-subdirectory") == SettingsSaveState.SAVING
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard("任务路径设置", "选择 AWM 扫描任务的根目录，以及 Agent CLI 写入需求过程文档的根目录。") {
+        SettingsCard("任务路径设置", "选择 AWM 扫描任务的根目录。") {
             AutoSaveStatus(controller, "paths")
             PathField(
                 "任务根目录",
@@ -580,38 +573,13 @@ private fun SettingsPathsSection(
                     controller.updateTaskRoot(selected) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
                 }
             }
-            PathField(
-                "需求过程文档根目录（仅 Agent CLI）",
-                requirementDocumentationRoot,
-                onRequirementDocumentationRootChange,
-                !controller.pathPickerBusy && !controller.busy && !saving,
-                Modifier.onFocusChanged { focus ->
-                    if (!focus.isFocused && requirementDocumentationRoot != controller.config.requirementDocumentationRoot.orEmpty()) {
-                        controller.updateRequirementDocumentationRoot(requirementDocumentationRoot) {
-                            onRequirementDocumentationRootChange(controller.config.requirementDocumentationRoot.orEmpty())
-                        }
-                    }
-                },
-            ) {
-                controller.chooseDirectory(requirementDocumentationRoot) { selected ->
-                    onRequirementDocumentationRootChange(selected)
-                    controller.updateRequirementDocumentationRoot(selected) {
-                        onRequirementDocumentationRootChange(controller.config.requirementDocumentationRoot.orEmpty())
-                    }
-                }
-            }
-            Text(
-                "用于 <迭代>/<需求编号-中文简写> 的需求分析、方案和交接资料。人工在桌面端创建任务不会读取或创建该目录。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             TaskManifestIssues(controller)
         }
-        SettingsCard("需求资料目录设置", "需求编号已填写且以下两项均不为空时，AWM 会创建或复用需求研发资料目录。") {
+        SettingsCard("需求资料目录设置", "需求编号已填写且以下两项均不为空时，AWM 会创建或复用需求资料目录；Agent CLI 会在同一目录补充过程文档。") {
             AutoSaveStatus(controller, "requirement-materials-root")
             AutoSaveStatus(controller, "requirement-materials-subdirectory")
             PathField(
-                "资料保存根路径",
+                "需求资料根目录",
                 requirementMaterialsRoot,
                 onRequirementMaterialsRootChange,
                 !controller.pathPickerBusy && !controller.busy && !materialsSaving,
@@ -640,7 +608,7 @@ private fun SettingsPathsSection(
                         }
                     }
                 },
-                label = { Text("需求目录下的子目录名") },
+                label = { Text("需求资料子目录") },
                 placeholder = { Text("例如：研发") },
                 supportingText = { Text("可留空；非空时只能填写一个安全的 Windows 目录名，保存时会自动去除首尾空格。") },
                 singleLine = true,
