@@ -2,7 +2,7 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.10.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。0.11.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -14,12 +14,13 @@ agents/task-templates.json
 
 ## 严格数组 schema
 
-0.10.0 的 `config.json` 使用严格字符串 schema `"0.10.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+0.11.0 的 `config.json` 使用严格字符串 schema `"0.11.0"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "0.10.0",
+  "schemaVersion": "0.11.0",
   "taskRoot": "Q:\\tasks",
+  "requirementDocumentationRoot": null,
   "developmentTools": [
     { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
     { "type": "VISUAL_STUDIO_CODE", "path": "C:\\Tools\\Code.exe" }
@@ -140,7 +141,11 @@ agents/task-templates.json
 
 两个字段任意一个为空时，需求资料目录功能均视为未配置，不会隐式使用默认路径或默认子目录。配置有效且创建任务时填写需求编号或飞书需求链接后，AWM 才会创建或复用需求资料目录。
 
-未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。0.9.x 及更早版本的配置与任务清单不会被 0.10.x 读取或迁移；旧用户目录与任务文件也不会被读取、迁移或删除。
+## Agent CLI 需求过程文档
+
+`requirementDocumentationRoot` 只用于通过 `awm agent` 创建的任务。设置后，CLI 会按 `<迭代>/<需求编号-中文简写>` 创建或复用过程文档目录，并在 Agent 创建的任务 `AGENTS.md` 中写入 `.awm/HANDOFF.md` 与该目录的只读指引。桌面端人工创建任务不会读取、创建或要求此目录。
+
+未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。0.10.x 及更早版本的配置与任务清单不会被 0.11.x 读取或迁移；旧用户目录与任务文件也不会被读取、迁移或删除。
 
 ## 组
 
@@ -223,11 +228,11 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema `"0.10.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.10.x 不读取或迁移 0.9.x 及更早版本的配置和任务清单。
+`agent-workspace.json` 使用严格字符串 schema `"0.11.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。0.11.x 不读取或迁移 0.10.x 及更早版本的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "0.10.0",
+  "schemaVersion": "0.11.0",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {

@@ -586,7 +586,7 @@ class TaskController internal constructor(
             return LoadedTaskSnapshot(emptyList(), "任务目录扫描失败：${error.message ?: error::class.simpleName}")
         }
         val messages = buildList {
-            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.10.x 任务目录")
+            if (scan.unsupportedDirectories.isNotEmpty()) add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.11.x 任务目录")
             if (scan.failures.isNotEmpty()) {
                 add("${scan.failures.size} 个任务清单读取失败：" + scan.failures.entries.joinToString { (path, reason) -> "${path.fileName}：$reason" })
             }

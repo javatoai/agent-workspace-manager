@@ -12,6 +12,37 @@ import kotlin.test.assertTrue
 
 class TaskApplicationServiceTest {
     @Test
+    fun `Agent CLI context creates a handoff while a normal request remains opt in`() {
+        val root = Files.createTempDirectory("agent-handoff-task-")
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE))),
+            agentDocuments = AgentDocumentService(ApplicationPaths(root.resolve("awm-home"))),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        application.create(
+            taskConfig(root.resolve("tasks")),
+            CreateGroupedTaskRequest(
+                folderName = "AGENT-HANDOFF",
+                featureBranch = "feature/agent-handoff",
+                groupId = "alpha",
+                serviceIds = listOf("standard"),
+                agentContext = AgentTaskContext(
+                    documentationDirectory = root.resolve("docs").toString(),
+                    iterationLabel = "OBT-20260817--20260828",
+                ),
+                agentHandoffMarkdown = "api_key: should-be-redacted",
+            ),
+        )
+
+        val taskDirectory = root.resolve("tasks").resolve("AGENT-HANDOFF")
+        assertTrue(Files.readString(taskDirectory.resolve("AGENTS.md")).contains("AWM 任务交接（仅 Agent CLI 创建）"))
+        val handoff = Files.readString(taskDirectory.resolve(".awm").resolve("HANDOFF.md"))
+        assertTrue(handoff.contains("[REDACTED]"))
+        assertTrue(!handoff.contains("should-be-redacted"))
+    }
+
+    @Test
     fun `create rejects an unsafe task directory name before provisioning`() {
         val root = Files.createTempDirectory("unsafe-task-name-")
         val service = TaskApplicationService(operationLock = NoOpTaskOperationLock)

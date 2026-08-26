@@ -100,6 +100,9 @@ import java.nio.file.Path
 @Composable
 internal fun SettingsScreen(controller: DesktopApplication) {
     var taskRoot by remember(controller.config.taskRoot) { mutableStateOf(controller.config.taskRoot.orEmpty()) }
+    var requirementDocumentationRoot by remember(controller.config.requirementDocumentationRoot) {
+        mutableStateOf(controller.config.requirementDocumentationRoot.orEmpty())
+    }
     var requirementMaterialsRoot by remember(controller.config.requirementMaterialsRoot) {
         mutableStateOf(controller.config.requirementMaterialsRoot.orEmpty())
     }
@@ -157,6 +160,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "groups" to "任务组",
         "agents" to "Agent 说明",
         "tools" to "开发工具",
+        "cli" to "命令行",
         "branches" to "分支",
         "git" to "Git",
         "genbu" to "Genbu",
@@ -207,6 +211,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
 
     LaunchedEffect(selectedSection) {
         if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
+        if (selectedSection == "cli") controller.refreshCliInstallationStatus()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
         if (selectedSection == "genbu") controller.refreshGenbuCommandResolution()
@@ -290,6 +295,8 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     controller = controller,
                     taskRoot = taskRoot,
                     onTaskRootChange = { taskRoot = it },
+                    requirementDocumentationRoot = requirementDocumentationRoot,
+                    onRequirementDocumentationRootChange = { requirementDocumentationRoot = it },
                     requirementMaterialsRoot = requirementMaterialsRoot,
                     onRequirementMaterialsRootChange = { requirementMaterialsRoot = it },
                     requirementMaterialsSubdirectory = requirementMaterialsSubdirectory,
@@ -342,6 +349,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     saving = saving("tools"),
                     onSaveDevelopmentTools = ::saveDevelopmentTools,
                 )
+            }
+            if (selectedSection == "cli") item {
+                SettingsCliSection(controller)
             }
             if (selectedSection == "branches") item {
                 SettingsBranchesSection(
@@ -537,6 +547,8 @@ private fun SettingsPathsSection(
     controller: DesktopApplication,
     taskRoot: String,
     onTaskRootChange: (String) -> Unit,
+    requirementDocumentationRoot: String,
+    onRequirementDocumentationRootChange: (String) -> Unit,
     requirementMaterialsRoot: String,
     onRequirementMaterialsRootChange: (String) -> Unit,
     requirementMaterialsSubdirectory: String,
@@ -550,7 +562,7 @@ private fun SettingsPathsSection(
     val materialsSaving = controller.settingsSaveState("requirement-materials-root") == SettingsSaveState.SAVING ||
         controller.settingsSaveState("requirement-materials-subdirectory") == SettingsSaveState.SAVING
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard("任务路径设置", "选择 AWM 扫描和创建任务的根目录。") {
+        SettingsCard("任务路径设置", "选择 AWM 扫描任务的根目录，以及 Agent CLI 写入需求过程文档的根目录。") {
             AutoSaveStatus(controller, "paths")
             PathField(
                 "任务根目录",
@@ -568,6 +580,31 @@ private fun SettingsPathsSection(
                     controller.updateTaskRoot(selected) { onTaskRootChange(controller.config.taskRoot.orEmpty()) }
                 }
             }
+            PathField(
+                "需求过程文档根目录（仅 Agent CLI）",
+                requirementDocumentationRoot,
+                onRequirementDocumentationRootChange,
+                !controller.pathPickerBusy && !controller.busy && !saving,
+                Modifier.onFocusChanged { focus ->
+                    if (!focus.isFocused && requirementDocumentationRoot != controller.config.requirementDocumentationRoot.orEmpty()) {
+                        controller.updateRequirementDocumentationRoot(requirementDocumentationRoot) {
+                            onRequirementDocumentationRootChange(controller.config.requirementDocumentationRoot.orEmpty())
+                        }
+                    }
+                },
+            ) {
+                controller.chooseDirectory(requirementDocumentationRoot) { selected ->
+                    onRequirementDocumentationRootChange(selected)
+                    controller.updateRequirementDocumentationRoot(selected) {
+                        onRequirementDocumentationRootChange(controller.config.requirementDocumentationRoot.orEmpty())
+                    }
+                }
+            }
+            Text(
+                "用于 <迭代>/<需求编号-中文简写> 的需求分析、方案和交接资料。人工在桌面端创建任务不会读取或创建该目录。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             TaskManifestIssues(controller)
         }
         SettingsCard("需求资料目录设置", "需求编号已填写且以下两项均不为空时，AWM 会创建或复用需求研发资料目录。") {
@@ -646,6 +683,77 @@ private fun SettingsPathsSection(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsCliSection(controller: DesktopApplication) {
+    val status = controller.cliInstallationStatus
+    var confirmUninstall by remember { mutableStateOf(false) }
+    SettingsCard("AWM CLI", "将绿色包内置的 Agent CLI 安装为当前用户可用的 awm 命令。") {
+        Text("安装状态", style = MaterialTheme.typography.titleSmall)
+        SelectionContainer {
+            Text(status.message, style = MaterialTheme.typography.bodyMedium)
+        }
+        status.commandPath?.let { commandPath ->
+            SelectionContainer {
+                Text(
+                    "命令入口：$commandPath",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (status.supported) {
+            Text(
+                "安装会复制绿色包中的 CLI 与 Java 运行时至当前用户的 LOCALAPPDATA，并将其命令目录加入用户 PATH；不需要管理员权限。完成后请重开终端；若从 Codex、IDE 或 Windows Terminal 打开终端，请重启对应应用。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = controller::installCli,
+                    enabled = status.bundledPayloadAvailable && (status.installed || !status.uninstallAvailable) && !controller.settingsBusy,
+                ) {
+                    Icon(Icons.Outlined.Terminal, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(if (status.installed) "更新 CLI" else "安装 CLI")
+                }
+                OutlinedButton(onClick = controller::refreshCliInstallationStatus, enabled = !controller.settingsBusy) {
+                    Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("刷新状态")
+                }
+                OutlinedButton(
+                    onClick = { confirmUninstall = true },
+                    enabled = status.uninstallAvailable && !controller.settingsBusy,
+                ) {
+                    Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("卸载 CLI")
+                }
+            }
+        } else {
+            Text(
+                "macOS/Linux 的绿色包内提供 bin/awm；该一键安装入口目前只适用于 Windows。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (confirmUninstall) {
+        ConfirmDialog(
+            title = "卸载 AWM CLI？",
+            message = "将删除 AWM 安装的所有 CLI 版本和随附运行时，并从当前用户 PATH 移除 awm。不会删除任务、配置、项目文件或系统 Java。",
+            confirmLabel = "卸载 CLI",
+            destructive = true,
+            enabled = !controller.settingsBusy,
+            onDismiss = { confirmUninstall = false },
+            onConfirm = {
+                controller.uninstallCli()
+                confirmUninstall = false
+            },
+        )
     }
 }
 
@@ -1729,6 +1837,7 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "Agent 说明" -> Icons.AutoMirrored.Outlined.Article
     "任务说明模板" -> Icons.Outlined.Edit
     "开发工具" -> Icons.Outlined.Build
+    "AWM CLI" -> Icons.Outlined.Terminal
     "分支" -> Icons.Outlined.AccountTree
     "Git 环境" -> Icons.Outlined.Terminal
     "分支写保护" -> Icons.Outlined.Lock

@@ -291,6 +291,9 @@ class DesktopApplication(
     )
     var recentErrors by mutableStateOf(errorLogReader.latest())
         private set
+    private val cliInstallationService: CliInstallationService = WindowsCliInstallationService()
+    var cliInstallationStatus by mutableStateOf(cliInstallationService.inspect())
+        private set
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
     private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
     private val settingsOperationRunner = OperationRunner(settingsOperationCoordinator, scope, ioDispatcher)
@@ -435,6 +438,25 @@ class DesktopApplication(
     val meegleOperationCancellable: Boolean get() = meegleOperationCoordinator.cancellable
     val meegleOperationError: String? get() = meegleOperationCoordinator.errorMessage
     fun cancelMeegleOperation(): Boolean = meegleOperationRunner.cancel()
+    fun refreshCliInstallationStatus() {
+        cliInstallationStatus = cliInstallationService.inspect()
+    }
+
+    fun installCli(): Boolean = settingsOperationRunner.run(
+        activeMessage = "正在安装 AWM CLI…",
+        successMessage = "AWM CLI 已安装；请打开新的终端运行 awm。",
+        block = cliInstallationService::install,
+        onFailure = { refreshCliInstallationStatus() },
+        onSuccess = { cliInstallationStatus = it },
+    )
+
+    fun uninstallCli(): Boolean = settingsOperationRunner.run(
+        activeMessage = "正在卸载 AWM CLI…",
+        successMessage = "AWM CLI 已卸载；已从用户 PATH 移除。",
+        block = cliInstallationService::uninstall,
+        onFailure = { refreshCliInstallationStatus() },
+        onSuccess = { cliInstallationStatus = it },
+    )
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
     val tagHistory: List<TagOperation> get() = deliveryController.state.history
@@ -597,6 +619,8 @@ class DesktopApplication(
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
+    fun updateRequirementDocumentationRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateRequirementDocumentationRoot(value, onFailure)
     fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateRequirementMaterialsRoot(value, onFailure)
     fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}) =
@@ -1024,7 +1048,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.10.x 任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个非 AWM 0.11.x 任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(

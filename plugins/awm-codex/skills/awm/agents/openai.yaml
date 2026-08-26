@@ -1,0 +1,6 @@
+interface:
+  display_name: "AWM Agent Handoff"
+  short_description: "Plan and delegate safe AWM operations"
+  default_prompt: "Use $awm to prepare a safe AWM task workspace."
+policy:
+  allow_implicit_invocation: false
