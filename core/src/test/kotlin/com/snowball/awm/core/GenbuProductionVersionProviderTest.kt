@@ -80,6 +80,35 @@ class GenbuProductionVersionProviderTest {
     }
 
     @Test
+    fun `provider queries production pods with the real CLI subcommand`() {
+        var captured: List<String>? = null
+        val runner = object : CommandRunner {
+            override fun run(
+                command: List<String>,
+                workingDirectory: Path?,
+                timeout: Duration,
+                environment: Map<String, String>,
+            ): CommandResult {
+                captured = command
+                return CommandResult(
+                    0,
+                    """{"service":"svc","environment":"PRD","pods":[
+                      {"pod_name":"a","app_version":"1.0.0","restart_count":0,"phase":"Running","ready":true}
+                    ]}""",
+                    "",
+                )
+            }
+        }
+
+        GenbuProductionVersionProvider(GenbuExecutable { "genbu" }, runner).current("android-transit-service")
+
+        assertEquals(
+            listOf("genbu", "query-service-pods", "-j", "prod", "android-transit-service"),
+            captured,
+        )
+    }
+
+    @Test
     fun `provider distinguishes command failure from an unhealthy successful snapshot`() {
         fun runner(result: CommandResult) = object : CommandRunner {
             override fun run(

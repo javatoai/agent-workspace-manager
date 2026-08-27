@@ -80,7 +80,7 @@ class GenbuProductionVersionProvider(
         val command = executable.resolve()
         val result = try {
             val result = runner.run(
-                listOf(command, "pod", "-j", "prod", repositoryName),
+                listOf(command, "query-service-pods", "-j", "prod", repositoryName),
                 timeout = Duration.ofMinutes(2),
             )
             if (!result.succeeded) throw ProductionVersionUnavailableException(
