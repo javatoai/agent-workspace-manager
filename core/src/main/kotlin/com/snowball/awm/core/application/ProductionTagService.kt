@@ -101,6 +101,9 @@ class ProductionFeatureTopologyException(message: String) : IllegalStateExceptio
 class ProductionMergeRequestUnavailableException :
     IllegalStateException("无合并权限，无法生成合并请求链接")
 
+/** The production merge conflicted in the local worktree before any remote write was attempted. */
+class ProductionMergeConflictException(message: String) : IllegalStateException(message)
+
 class ProductionTagConfirmationChangedException :
     IllegalStateException("预期 Tag 或 Release SHA 已变化，旧确认已取消，请核对页面最新值后重新点击")
 
@@ -620,6 +623,10 @@ class ProductionTagService(
 
     /** Finalizes failures for which the gateway proved that no remote write happened. */
     private fun finishKnownFailure(pipeline: ProductionTagPipeline, error: Throwable) {
+        if (error is ProductionMergeConflictException) {
+            finishOperation(pipeline, ProductionAuditState.CONFLICT, error.message)
+            return
+        }
         if (error is ProductionNoPushPermissionException ||
             error is ProductionFeatureTopologyException ||
             error is ProductionMergeRequestUnavailableException

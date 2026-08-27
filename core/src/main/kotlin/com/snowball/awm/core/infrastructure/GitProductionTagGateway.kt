@@ -88,9 +88,10 @@ class GitProductionTagGateway(
             )
             if (!merge.succeeded) {
                 val files = conflictFiles(worktree)
-                throw GitException(
-                    if (files.isEmpty()) "生产 Tag 合并到 master 失败" else "生产 Tag 合并到 master 存在冲突：${files.joinToString()} ",
-                    merge,
+                // The merge failed inside the temporary worktree, so no remote write happened
+                // and the operation lease can be finalized instead of waiting for reconciliation.
+                throw ProductionMergeConflictException(
+                    if (files.isEmpty()) "生产 Tag 合并到 master 失败" else "生产 Tag 合并到 master 存在冲突：${files.joinToString()}",
                 )
             }
             val expectedCommit = git.resolve(worktree, "HEAD")

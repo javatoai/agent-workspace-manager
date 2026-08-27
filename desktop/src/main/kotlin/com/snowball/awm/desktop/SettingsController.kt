@@ -197,11 +197,12 @@ class SettingsController internal constructor(
 
     /** Lightweight window-focus refresh: detects once, persists a first-time result, writes no audit. */
     fun refreshGenbuCommandResolution() {
-        val shouldAutoDetect = session.config.genbuExecutablePath.isNullOrBlank()
+        val existingGenbuPath = session.config.genbuExecutablePath
+        val shouldAutoDetect = existingGenbuPath.isNullOrBlank()
         scope.launch {
             val (autoSave, resolution) = withContext(ioDispatcher) {
                 runCatching {
-                    val autoSave = autoSaveGenbuExecutablePath(shouldAutoDetect)
+                    val autoSave = autoSaveGenbuExecutablePath(shouldAutoDetect, existingGenbuPath)
                     autoSave to (genbuExecutable.current() to genbuExecutable.source())
                 }.getOrElse {
                     null to (genbuExecutable.current() to genbuExecutable.source())
@@ -253,12 +254,13 @@ class SettingsController internal constructor(
     fun refreshGenbu(force: Boolean = false) {
         if (!force && genbu is GenbuSettingsState.Loading) return
         if (force) genbuJob?.cancel()
-        val shouldAutoDetect = session.config.genbuExecutablePath.isNullOrBlank() ||
+        val existingGenbuPath = session.config.genbuExecutablePath
+        val shouldAutoDetect = existingGenbuPath.isNullOrBlank() ||
             session.config.genbuExecutableAutoDetected
         genbu = GenbuSettingsState.Loading
         genbuJob = scope.launch {
             val (autoSave, result) = withContext(ioDispatcher) {
-                val autoSaveResult = runCatching { autoSaveGenbuExecutablePath(shouldAutoDetect) }
+                val autoSaveResult = runCatching { autoSaveGenbuExecutablePath(shouldAutoDetect, existingGenbuPath) }
                 if (autoSaveResult.isFailure) {
                     null to Result.failure(autoSaveResult.exceptionOrNull()!!)
                 } else {
@@ -322,10 +324,14 @@ class SettingsController internal constructor(
         }
     }
 
-    private fun autoSaveGenbuExecutablePath(shouldAutoDetect: Boolean): GenbuExecutableAutoSave? {
+    private fun autoSaveGenbuExecutablePath(shouldAutoDetect: Boolean, existingPath: String?): GenbuExecutableAutoSave? {
         if (!shouldAutoDetect) return null
-        // detect() rescans bundled/PATH locations even while an auto-saved path still resolves,
-        // so a moved installation replaces the stale auto-detected configuration.
+        // A still-valid auto-detected path stays authoritative; rescanning while it works could
+        // silently swap in a different copy sitting earlier in the scan order. Only a broken
+        // path (deleted/moved installation) triggers a fresh scan that may replace it.
+        val existingValid = !existingPath.isNullOrBlank() &&
+            runCatching { normalizeGenbuExecutablePath(existingPath) }.getOrNull() != null
+        if (existingValid) return null
         val detected = genbuExecutable.detect() ?: return null
         val normalized = normalizeGenbuExecutablePath(detected)
             ?: error("自动探测到的 Genbu 命令路径为空")

@@ -611,6 +611,36 @@ class ProductionTagServiceTest {
     }
 
     @Test
+    fun `production merge conflict releases the lease without reconciliation`() {
+        val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
+        val config = managedConfig(repository)
+        val service = ProductionTagService(
+            store = ProductionTagPipelineStore(ApplicationPaths(temporary.resolve("master-merge-conflict-home"))),
+            versions = ProductionVersionProvider {
+                ProductionRuntimeSnapshot("svc", "PRD", "3.11.70", listOf(ProductionPodSnapshot("pod", "3.11.70", "Running", true, 0)))
+            },
+            git = FakeProductionGitGateway(
+                baselineState = ProductionBaselineState.MERGE_REQUIRED,
+                productionMergeConflict = true,
+            ),
+            now = { "now" },
+            id = { "master-merge-conflict" },
+        )
+        val pipeline = service.create(config, repository.id)
+
+        val error = assertFailsWith<ProductionMergeConflictException> {
+            service.mergeProduction(config, pipeline.id)
+        }
+        val conflicted = service.get(pipeline.id)
+
+        assertEquals("生产 Tag 合并到 master 存在冲突：src/App.kt", error.message)
+        assertEquals(null, conflicted.activeOperation)
+        assertEquals(ProductionAuditState.CONFLICT, conflicted.auditEvents.last().state)
+        assertEquals(error.message, conflicted.auditEvents.last().reason)
+        assertEquals(ProductionBaselineState.MERGE_REQUIRED, conflicted.baselineState)
+    }
+
+    @Test
     fun `master merge is reconciled after process exit following the remote write`() {
         val repository = RepositoryConfig("repo", "android-transit-service", "Q:/repo", "Q:/repo/.git", "git@example.test:fp/repo.git")
         val config = managedConfig(repository)
@@ -806,6 +836,7 @@ class ProductionTagServiceTest {
         private val onTagPush: () -> Unit = {},
         private val throwAfterTagWrite: Boolean = false,
         private val mergeRequestUnavailable: Boolean = false,
+        private val productionMergeConflict: Boolean = false,
     ) : ProductionGitGateway {
         var mergedBranches: List<String> = emptyList()
         var productionMergeCalls: Int = 0
@@ -834,6 +865,7 @@ class ProductionTagServiceTest {
 
         override fun mergeProduction(repository: RepositoryConfig, pipeline: ProductionTagPipeline): ProductionBranchWrite {
             productionMergeCalls += 1
+            if (productionMergeConflict) throw ProductionMergeConflictException("生产 Tag 合并到 master 存在冲突：src/App.kt")
             if (mergeRequestUnavailable) throw ProductionMergeRequestUnavailableException()
             return if (currentBaselineState == ProductionBaselineState.MERGE_REQUIRED && !directProductionMerge) {
                 val request = ProductionMergeRequest(
