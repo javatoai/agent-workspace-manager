@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -93,7 +94,6 @@ import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.gitProbeCommandDisplay
 import com.snowball.awm.core.meegleProbeCommandDisplay
-import com.snowball.awm.core.genbuProbeCommandDisplay
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -128,6 +128,12 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var blockedGitWriteBranches by remember(controller.config.blockedGitWriteBranches) {
         mutableStateOf(controller.config.blockedGitWriteBranches)
     }
+    var productionTagEnabled by remember(controller.config.productionTagBuildEnabled) {
+        mutableStateOf(controller.config.productionTagBuildEnabled)
+    }
+    var genbuPath by remember(controller.config.genbuExecutablePath) {
+        mutableStateOf(controller.config.genbuExecutablePath.orEmpty())
+    }
     val meegleProjects = remember(controller.config.meegleProjects) {
         mutableStateMapOf<Int, MeegleProjectConfig>().apply {
             controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) }
@@ -160,7 +166,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "cli" to "命令行",
         "branches" to "分支",
         "git" to "Git",
-        "genbu" to "Genbu",
+        "production-tag" to "生产 Tag 构建",
         "feishu" to "飞书项目",
         "logs" to "日志",
     )
@@ -211,7 +217,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         if (selectedSection == "cli") controller.refreshCliInstallationStatus()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
-        if (selectedSection == "genbu") controller.refreshGenbuCommandResolution()
+        if (selectedSection == "production-tag") controller.refreshGenbu()
     }
     DisposableEffect(selectedSection) {
         onDispose { if (selectedSection == "feishu") controller.cancelMeegleProjectLoad() }
@@ -368,7 +374,22 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
                 )
             }
-            if (selectedSection == "genbu") item { SettingsGenbuSection(controller) }
+            if (selectedSection == "production-tag") item {
+                SettingsProductionTagSection(
+                    controller = controller,
+                    enabled = productionTagEnabled,
+                    onEnabledChange = { enabled ->
+                        val previous = productionTagEnabled
+                        productionTagEnabled = enabled
+                        controller.updateProductionTagEnabled(enabled) {
+                            productionTagEnabled = previous
+                        }
+                    },
+                    genbuPath = genbuPath,
+                    onGenbuPathChange = { genbuPath = it },
+                    saving = saving("production-tag"),
+                )
+            }
             if (selectedSection == "feishu") item {
                 SettingsFeishuSection(
                     controller = controller,
@@ -453,6 +474,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
 
 internal fun normalizeSettingsSection(stored: String, supported: Set<String>): String = when (stored) {
     "advanced" -> "feishu"
+    "genbu" -> if ("production-tag" in supported) "production-tag" else "basic"
     in supported -> stored
     else -> "basic"
 }
@@ -482,58 +504,92 @@ private fun SettingsBasicSection(
 }
 
 @Composable
-private fun SettingsGenbuSection(controller: DesktopApplication) {
-    val (command, source) = controller.genbuCommandResolution()
-    val sourceLabel = when (source) {
-        GenbuCommandSource.PROBED -> "自动识别"
-        GenbuCommandSource.CONFIGURED_FALLBACK -> "已配置兜底"
-        GenbuCommandSource.PATH_FALLBACK -> "PATH 回退"
-    }
-    val probeCommand = genbuProbeCommandDisplay(System.getProperty("os.name"))
-    SettingsCard("Genbu CLI", "自动识别本机 Genbu 命令；若未识别到，可填写可执行文件绝对路径作为兜底。") {
-        Text("当前路径：$command", style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
-        Text("来源：$sourceLabel", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("探测命令：$probeCommand", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = controller::refreshGenbuCommandResolution) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重新识别")
+private fun SettingsProductionTagSection(
+    controller: DesktopApplication,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    genbuPath: String,
+    onGenbuPathChange: (String) -> Unit,
+    saving: Boolean,
+) {
+    SettingsCard("生产 Tag 构建", "控制左侧生产发版入口，并配置生产版本查询命令。") {
+        AutoSaveStatus(controller, "production-tag")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("启用生产 Tag 构建", style = MaterialTheme.typography.titleSmall)
+                Text("默认打开；关闭后隐藏左侧“生产 Tag 构建”栏目。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            OutlinedButton(onClick = { controller.copyText(command, "Genbu 命令路径已复制") }) {
-                Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("复制路径")
-            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChange,
+                enabled = !controller.settingsBusy && !saving,
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        GenbuExecutablePathEditor(controller)
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Text("服务级开关默认关闭。请在“服务仓库 → 编辑服务 → 基本信息”中开启“启用 Genbu 探测”；旧服务会默认使用展示名称作为 Genbu 服务名。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun GenbuExecutablePathEditor(controller: DesktopApplication) {
-    var pathInput by remember(controller.config.genbuExecutablePath) {
-        mutableStateOf(controller.config.genbuExecutablePath.orEmpty())
-    }
-    val saving = controller.settingsSaveState("genbu") == SettingsSaveState.SAVING
-    val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            pathInput,
-            { pathInput = it },
-            Modifier.fillMaxWidth().onFocusChanged { focus ->
-                if (!focus.isFocused && pathInput.trim() != controller.config.genbuExecutablePath.orEmpty()) {
-                    controller.updateGenbuExecutablePath(pathInput) {
-                        pathInput = controller.config.genbuExecutablePath.orEmpty()
-                    }
+        Text("Genbu 自动检测", style = MaterialTheme.typography.titleSmall)
+        when (val state = controller.genbuSettingsState) {
+            GenbuSettingsState.Idle -> Text("尚未检测", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            GenbuSettingsState.Loading -> {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("正在自动检测 Genbu 路径…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            is GenbuSettingsState.Loaded -> {
+                val source = when (state.source) {
+                    GenbuCommandSource.CONFIGURED -> "手动配置"
+                    GenbuCommandSource.PROBED -> "自动检测"
+                    GenbuCommandSource.PATH_FALLBACK -> "PATH"
                 }
-            },
-            label = { Text("Genbu 命令路径（自动探测失败时使用）") },
-            placeholder = { Text(if (isWindows) "例如 D:\\cli-list\\genbu.exe" else "例如 /usr/local/bin/genbu") },
-            supportingText = { Text("留空则只使用自动探测和 PATH 回退；已探测到命令时，此路径不会覆盖自动结果。") },
-            singleLine = true,
-            readOnly = controller.busy || saving,
-        )
-        AutoSaveStatus(controller, "genbu")
+                Text("已检测到（$source）", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
+                SelectionContainer { Text(state.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                Text("最近检测：${state.detectedAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            is GenbuSettingsState.Failed -> Text(state.message, color = MaterialTheme.colorScheme.error)
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { controller.refreshGenbu(force = true) }, enabled = !saving) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("重新自动检测")
+            }
+        }
+        if (controller.config.genbuDetectionAudit.isNotEmpty()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("最近检测记录", style = MaterialTheme.typography.titleSmall)
+            controller.config.genbuDetectionAudit.asReversed().take(5).forEach { audit ->
+                val result = if (audit.status == "LOADED") {
+                    listOfNotNull(audit.source, audit.command).joinToString(" · ")
+                } else {
+                    audit.message ?: "检测失败"
+                }
+                Text(
+                    "${audit.detectedAt} · ${audit.status} · $result",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (audit.status == "LOADED") SuccessGreen else MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        if (controller.genbuSettingsState is GenbuSettingsState.Failed ||
+            (controller.config.genbuExecutablePath != null && !controller.config.genbuExecutableAutoDetected)
+        ) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("手动配置", style = MaterialTheme.typography.titleSmall)
+            PathField(
+                "Genbu 可执行文件",
+                genbuPath,
+                onGenbuPathChange,
+                !controller.pathPickerBusy && !saving,
+            ) {
+                controller.chooseApplication(genbuPath) { onGenbuPathChange(it) }
+            }
+            Button(
+                onClick = {
+                    controller.updateProductionTagSettings(enabled, genbuPath) {
+                        onGenbuPathChange(controller.config.genbuExecutablePath.orEmpty())
+                    }
+                },
+                enabled = genbuPath.isNotBlank() && !saving,
+            ) { Text("保存 Genbu 路径") }
+        }
     }
 }
 
@@ -1809,6 +1865,7 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "分支" -> Icons.Outlined.AccountTree
     "Git 环境" -> Icons.Outlined.Terminal
     "分支写保护" -> Icons.Outlined.Lock
+    "生产 Tag 构建" -> Icons.Outlined.Sell
     "飞书项目" -> Icons.Outlined.Link
     "日志" -> Icons.AutoMirrored.Outlined.Subject
     else -> Icons.Outlined.Description

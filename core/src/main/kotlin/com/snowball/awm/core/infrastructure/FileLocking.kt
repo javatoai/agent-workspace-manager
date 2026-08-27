@@ -26,9 +26,45 @@ internal object FileLocking {
         }
     }
 
+    fun <T> withExclusiveLockWaiting(
+        lockPath: Path,
+        block: () -> T,
+    ): T {
+        lockPath.parent.createDirectories()
+        var interrupted = false
+        try {
+            FileChannel.open(
+                lockPath,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+            ).use { channel ->
+                while (true) {
+                    val lock = try {
+                        channel.tryLock()
+                    } catch (_: OverlappingFileLockException) {
+                        null
+                    }
+                    if (lock != null) lock.use { return block() }
+                    try {
+                        Thread.sleep(50)
+                    } catch (_: InterruptedException) {
+                        // An accepted Build click must still be reconciled after the active writer.
+                        // Preserve cancellation for the caller without losing its build/audit record.
+                        interrupted = true
+                    }
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
     fun stablePathHash(path: Path, length: Int = 16): String =
+        stableTextHash(path.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT), length)
+
+    fun stableTextHash(value: String, length: Int = 16): String =
         MessageDigest.getInstance("SHA-256")
-            .digest(path.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
             .take(length / 2)
             .joinToString("") { "%02x".format(Locale.ROOT, it) }
 }

@@ -51,6 +51,49 @@ import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 
 class DesktopApplicationTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `Genbu refresh persists a bounded diagnostic record`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-genbu-audit")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val detected = Files.createFile(root.resolve(if (System.getProperty("os.name").startsWith("Windows")) "genbu.exe" else "genbu"))
+            .toAbsolutePath()
+        detected.toFile().setExecutable(true)
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val configuredPath = AtomicReference<String?>(null)
+        val runner = RecordingCommandRunner(CommandResult(0, "$detected\n", ""))
+        val executable = ConfiguredGenbuExecutable(
+            configuredPath::get,
+            runner,
+            bundledDirectories = { emptyList() },
+        )
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            genbuExecutablePath = configuredPath,
+            genbuExecutable = executable,
+            ioDispatcher = dispatcher,
+        )
+        try {
+            controller.refreshGenbu()
+            advanceUntilIdle()
+
+            val persisted = store.load()
+            assertEquals(detected.toString(), persisted.genbuExecutablePath)
+            assertEquals(1, persisted.genbuDetectionAudit.size)
+            assertEquals("LOADED", persisted.genbuDetectionAudit.single().status)
+            assertEquals(detected.toString(), persisted.genbuDetectionAudit.single().command)
+            assertEquals(GenbuCommandSource.PROBED.name, persisted.genbuDetectionAudit.single().source)
+            assertIs<GenbuSettingsState.Loaded>(controller.genbuSettingsState)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun `configured Meegle executable is available after application initialization`() {
         val root = Files.createTempDirectory("awm-meegle-executable")
@@ -132,7 +175,7 @@ class DesktopApplicationTest {
             paths = paths,
             configStore = store,
             genbuExecutablePath = configuredPath,
-            genbuExecutable = ConfiguredGenbuExecutable(configuredPath::get, runner),
+            genbuExecutable = ConfiguredGenbuExecutable(configuredPath::get, runner, bundledDirectories = { emptyList() }),
             ioDispatcher = dispatcher,
         )
         try {
@@ -573,6 +616,31 @@ class DesktopApplicationTest {
 
             assertEquals(false, controller.showsTagNavigation)
             assertEquals(NavigationItem.TASKS, controller.navigation)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `disabling production Tag build hides its page and returns to tasks`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-production-tag-navigation")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            assertTrue(controller.showsProductionTagNavigation)
+            controller.navigation = NavigationItem.PRODUCTION_TAG
+            controller.updateProductionTagSettings(false, "")
+            advanceUntilIdle()
+
+            assertFalse(controller.showsProductionTagNavigation)
+            assertEquals(NavigationItem.TASKS, controller.navigation)
+            assertFalse(store.load().productionTagBuildEnabled)
         } finally {
             controller.close()
             Dispatchers.resetMain()

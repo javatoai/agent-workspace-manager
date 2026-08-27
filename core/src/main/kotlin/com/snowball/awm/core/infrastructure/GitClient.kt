@@ -89,6 +89,15 @@ class GitClient(
             ?.trim()
             ?.ifBlank { null }
 
+    fun remoteNames(repository: Path): List<String> =
+        run(repository, "remote").stdout.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+
+    fun addRemote(repository: Path, name: String, url: String) {
+        require(name.isNotBlank() && '/' !in name && name != "." && name != "..") { "远程名称不合法：$name" }
+        require(url.isNotBlank()) { "远程 URL 不能为空" }
+        run(repository, "remote", "add", name, url)
+    }
+
     fun remoteDefaultBranch(repository: Path, remote: String = "origin"): String? {
         val symbolic = run(
             repository,

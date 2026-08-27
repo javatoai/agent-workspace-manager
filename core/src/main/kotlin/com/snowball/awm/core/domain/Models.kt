@@ -213,6 +213,16 @@ data class GroupConfig(
     }
 }
 
+/** One bounded, credential-free Genbu detection result retained for local diagnostics. */
+@Serializable
+data class GenbuDetectionAuditEvent(
+    val detectedAt: String,
+    val status: String,
+    val command: String? = null,
+    val source: String? = null,
+    val message: String? = null,
+)
+
 /** Version 0.12.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
@@ -237,8 +247,14 @@ data class AppConfig(
     val meegleExecutablePath: String? = null,
     /** Absolute path to the Git executable; null means auto-detect. */
     val gitExecutablePath: String? = null,
-    /** Absolute path to Genbu CLI; used only when automatic command detection does not find Genbu. */
+    /** Shows the production Tag build navigation and workflow. */
+    val productionTagBuildEnabled: Boolean = true,
+    /** Absolute path to the Genbu CLI executable; null means auto-detect. */
     val genbuExecutablePath: String? = null,
+    /** True only when AWM persisted the path found by automatic Genbu detection. */
+    val genbuExecutableAutoDetected: Boolean = false,
+    /** Credential-free bounded history of automatic/manual Genbu executable checks. */
+    val genbuDetectionAudit: List<GenbuDetectionAuditEvent> = emptyList(),
     /** Absolute root for requirement research materials; null/blank disables the integration. */
     val requirementMaterialsRoot: String? = null,
     /** One safe child directory segment under each requirement directory; null/blank disables the integration. */

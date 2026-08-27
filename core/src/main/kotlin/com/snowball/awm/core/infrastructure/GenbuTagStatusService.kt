@@ -24,7 +24,7 @@ fun interface GenbuTagStatusProvider {
 
 /** Executes the single supported read-only Genbu command for a Tag. */
 class ProcessGenbuTagStatusService(
-    private val executable: GenbuExecutable = ConfiguredGenbuExecutable(),
+    private val executable: GenbuExecutable = GenbuExecutable.pathFallback(),
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val timeout: Duration = Duration.ofSeconds(20),
 ) : GenbuTagStatusProvider {

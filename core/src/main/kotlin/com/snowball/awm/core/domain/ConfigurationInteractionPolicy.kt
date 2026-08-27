@@ -42,6 +42,11 @@ object TagNavigationPolicy {
     fun isVisible(config: AppConfig): Boolean = config.groups.any(GroupConfig::tagEnabled)
 }
 
+/** Production Tag is a global capability shared by every managed service. */
+object ProductionTagNavigationPolicy {
+    fun isVisible(config: AppConfig): Boolean = config.productionTagBuildEnabled
+}
+
 /** Keeps a user's branch edit while allowing untouched drafts to follow the selected group. */
 object GroupBranchPrefixPolicy {
     fun onGroupChanged(
