@@ -263,8 +263,11 @@ class SettingsController internal constructor(
                     null to Result.failure(autoSaveResult.exceptionOrNull()!!)
                 } else {
                     autoSaveResult.getOrNull() to runCatching {
-                        val command = genbuExecutable.probe()
-                        val source = genbuExecutable.source()
+                        // A fresh detection result is authoritative; the in-memory configured
+                        // path still holds the pre-save value until applyConfig runs.
+                        val saved = autoSaveResult.getOrNull()?.config?.genbuExecutablePath
+                        val command = saved ?: genbuExecutable.probe()
+                        val source = if (saved != null) GenbuCommandSource.PROBED else genbuExecutable.source()
                         check(source != GenbuCommandSource.PATH_FALLBACK) {
                             "未自动检测到 Genbu，请手动选择 genbu 可执行文件"
                         }
@@ -321,8 +324,9 @@ class SettingsController internal constructor(
 
     private fun autoSaveGenbuExecutablePath(shouldAutoDetect: Boolean): GenbuExecutableAutoSave? {
         if (!shouldAutoDetect) return null
-        val detected = genbuExecutable.probe()
-        if (genbuExecutable.source() != GenbuCommandSource.PROBED) return null
+        // detect() rescans bundled/PATH locations even while an auto-saved path still resolves,
+        // so a moved installation replaces the stale auto-detected configuration.
+        val detected = genbuExecutable.detect() ?: return null
         val normalized = normalizeGenbuExecutablePath(detected)
             ?: error("自动探测到的 Genbu 命令路径为空")
         var savedDetectedPath = false

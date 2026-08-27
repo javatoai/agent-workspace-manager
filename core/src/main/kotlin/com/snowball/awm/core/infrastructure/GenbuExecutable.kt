@@ -12,6 +12,10 @@ fun interface GenbuExecutable {
     fun resolve(): String
     fun current(): String = resolve()
     fun probe(): String = resolve()
+
+    /** Fresh bundled/PATH scan that ignores any configured path; null when nothing is found. */
+    fun detect(): String? = null
+
     fun source(): GenbuCommandSource = GenbuCommandSource.PATH_FALLBACK
 
     companion object {
@@ -59,6 +63,13 @@ class ConfiguredGenbuExecutable(
         return probedPath ?: fallback()
     }
 
+    /** Re-detection must see a moved installation even while an auto-saved path still resolves. */
+    override fun detect(): String? = synchronized(this) {
+        probeAttempted = false
+        probeLocked()
+        return probedPath
+    }
+
     override fun source(): GenbuCommandSource = when {
         configured() != null -> GenbuCommandSource.CONFIGURED
         probedPath != null -> GenbuCommandSource.PROBED
@@ -73,7 +84,12 @@ class ConfiguredGenbuExecutable(
             .firstOrNull(Files::isRegularFile)
             ?.toString()
         val fromPath = if (bundled == null) runCatching {
-            val command = if (isWindows()) listOf("where.exe", executableName) else listOf("/bin/bash", "-lc", "command -v genbu")
+            val command = when {
+                isWindows() -> listOf("where.exe", executableName)
+                // macOS installs (e.g. Homebrew) often register genbu only in the zsh login environment.
+                isMac() -> listOf("/bin/zsh", "-lc", "command -v genbu")
+                else -> listOf("/bin/bash", "-lc", "command -v genbu")
+            }
             val result = runner.run(command, timeout = probeTimeout)
             result.takeIf(CommandResult::succeeded)?.stdout?.lineSequence()?.map(String::trim)?.firstOrNull { line ->
                 runCatching { Path.of(line).isAbsolute && Files.isRegularFile(Path.of(line)) }.getOrDefault(false)
@@ -88,6 +104,7 @@ class ConfiguredGenbuExecutable(
     }
     private fun fallback(): String = if (isWindows()) "genbu.exe" else "genbu"
     private fun isWindows(): Boolean = osName.lowercase(Locale.ROOT).contains("win")
+    private fun isMac(): Boolean = osName.lowercase(Locale.ROOT).contains("mac")
 }
 
 private fun defaultGenbuIsWindows(): Boolean =

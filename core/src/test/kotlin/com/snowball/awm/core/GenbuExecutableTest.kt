@@ -71,6 +71,48 @@ class GenbuExecutableTest {
     }
 
     @Test
+    fun `detect rescans locations and ignores a still-valid configured path`() {
+        val configured = Files.createFile(temporary.resolve("configured-genbu.exe"))
+        val directory = Files.createDirectories(temporary.resolve("Downloads"))
+        val moved = Files.createFile(directory.resolve("genbu.exe"))
+        val genbu = ConfiguredGenbuExecutable(
+            configuredPath = { configured.toString() },
+            runner = RecordingRunner(CommandResult(1, "", "not found")),
+            osName = "Windows 11",
+            bundledDirectories = { listOf(directory) },
+        )
+
+        assertEquals(moved.toAbsolutePath().normalize().toString(), genbu.detect())
+        assertEquals(configured.toString(), genbu.resolve())
+        assertEquals(GenbuCommandSource.CONFIGURED, genbu.source())
+    }
+
+    @Test
+    fun `macOS probing uses a zsh login shell`() {
+        val commands = mutableListOf<List<String>>()
+        val genbu = ConfiguredGenbuExecutable(
+            configuredPath = { null },
+            runner = object : CommandRunner {
+                override fun run(
+                    command: List<String>,
+                    workingDirectory: Path?,
+                    timeout: Duration,
+                    environment: Map<String, String>,
+                ): CommandResult {
+                    commands += command
+                    return CommandResult(1, "", "not found")
+                }
+            },
+            osName = "Mac OS X",
+            bundledDirectories = { emptyList() },
+        )
+
+        genbu.probe()
+
+        assertEquals(listOf(listOf("/bin/zsh", "-lc", "command -v genbu")), commands)
+    }
+
+    @Test
     fun `manual path normalization rejects relative and missing files`() {
         assertFailsWith<IllegalArgumentException> { normalizeGenbuExecutablePath("genbu.exe") }
         assertFailsWith<IllegalArgumentException> { normalizeGenbuExecutablePath(temporary.resolve("missing.exe").toString()) }
