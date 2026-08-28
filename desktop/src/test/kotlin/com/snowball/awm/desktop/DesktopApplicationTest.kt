@@ -53,10 +53,10 @@ import kotlin.test.assertFalse
 class DesktopApplicationTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `Genbu refresh persists a bounded diagnostic record`() = runTest {
+    fun `Genbu refresh persists only the detected executable and exposes version status`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
-        val root = Files.createTempDirectory("awm-genbu-audit")
+        val root = Files.createTempDirectory("awm-genbu-settings")
         val paths = ApplicationPaths(root.resolve("home"))
         val detected = Files.createFile(root.resolve(if (System.getProperty("os.name").startsWith("Windows")) "genbu.exe" else "genbu"))
             .toAbsolutePath()
@@ -75,6 +75,7 @@ class DesktopApplicationTest {
             configStore = store,
             genbuExecutablePath = configuredPath,
             genbuExecutable = executable,
+            cliVersionRunner = runner,
             ioDispatcher = dispatcher,
         )
         try {
@@ -83,11 +84,10 @@ class DesktopApplicationTest {
 
             val persisted = store.load()
             assertEquals(detected.toString(), persisted.genbuExecutablePath)
-            assertEquals(1, persisted.genbuDetectionAudit.size)
-            assertEquals("LOADED", persisted.genbuDetectionAudit.single().status)
-            assertEquals(detected.toString(), persisted.genbuDetectionAudit.single().command)
-            assertEquals(GenbuCommandSource.PROBED.name, persisted.genbuDetectionAudit.single().source)
-            assertIs<GenbuSettingsState.Loaded>(controller.genbuSettingsState)
+            val loaded = assertIs<GenbuSettingsState.Loaded>(controller.genbuSettingsState)
+            assertEquals(detected.toString(), loaded.command)
+            assertEquals(GenbuCommandSource.PROBED, loaded.source)
+            assertTrue(loaded.version?.succeeded == true)
         } finally {
             controller.close()
             Dispatchers.resetMain()
@@ -616,31 +616,6 @@ class DesktopApplicationTest {
 
             assertEquals(false, controller.showsTagNavigation)
             assertEquals(NavigationItem.TASKS, controller.navigation)
-        } finally {
-            controller.close()
-            Dispatchers.resetMain()
-        }
-    }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test
-    fun `disabling production Tag build hides its page and returns to tasks`() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        Dispatchers.setMain(dispatcher)
-        val root = Files.createTempDirectory("awm-production-tag-navigation")
-        val paths = ApplicationPaths(root.resolve("home"))
-        val store = ConfigStore(paths)
-        store.save(AppConfig())
-        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
-        try {
-            assertTrue(controller.showsProductionTagNavigation)
-            controller.navigation = NavigationItem.PRODUCTION_TAG
-            controller.updateProductionTagSettings(false, "")
-            advanceUntilIdle()
-
-            assertFalse(controller.showsProductionTagNavigation)
-            assertEquals(NavigationItem.TASKS, controller.navigation)
-            assertFalse(store.load().productionTagBuildEnabled)
         } finally {
             controller.close()
             Dispatchers.resetMain()

@@ -11,7 +11,7 @@ class TagOutputFormatterTest {
 
         assertEquals(
             """需求链接：https://project.feishu.cn/obt/userstory/detail/7035269559
-Tag 已构建完毕，辛苦发版：
+测试Tag已构建完毕，辛苦发版：
 
 android-transit-service · 3.11.69.beta-1
 api-service · 2.4.34.beta-6""",
@@ -26,7 +26,7 @@ api-service · 2.4.34.beta-6""",
     @Test
     fun `successful output without a link starts with the publish hint`() {
         assertEquals(
-            """Tag 已构建完毕，辛苦发版：
+            """测试Tag已构建完毕，辛苦发版：
 
 api-service · 2.4.34.beta-6""",
             TagOutputFormatter.format("", listOf(operation("api-service", "2.4.34.beta-6")), includeFailures = false),
@@ -45,9 +45,9 @@ api-service · 2.4.34.beta-6""",
             """api-service · 2.4.34.beta-6
 
 构建失败：
-job-manager · FAILED · 远端推送失败
+job-manager · 构建失败 · 远端推送失败
 
-Tag未全部构建成功，请处理失败项后重试""",
+测试Tag未全部构建成功，请处理失败项后重试""",
             TagOutputFormatter.format("", listOf(success, failure), includeFailures = true),
         )
     }
@@ -66,9 +66,9 @@ Tag未全部构建成功，请处理失败项后重试""",
 api-service · 2.4.34.beta-6
 
 构建失败：
-job-manager · CONFLICT · 存在未解决冲突
+job-manager · 存在冲突 · 存在未解决冲突
 
-Tag未全部构建成功，请处理失败项后重试""",
+测试Tag未全部构建成功，请处理失败项后重试""",
             TagOutputFormatter.format(
                 "https://project.feishu.cn/obt/userstory/detail/7060612727",
                 listOf(success, failure),

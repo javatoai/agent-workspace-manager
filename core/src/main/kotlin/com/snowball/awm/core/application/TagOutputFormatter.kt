@@ -25,16 +25,16 @@ object TagOutputFormatter {
                     if (index > 0) append('\n')
                     append(operation.serviceName)
                     append(" · ")
-                    append(operation.state.name)
+                    append(operation.state.userFacingLabel())
                     operation.message?.takeIf { it.isNotBlank() }?.let {
                         append(" · ")
                         append(it)
                     }
                 }
-                append("\n\nTag未全部构建成功，请处理失败项后重试")
+                append("\n\n测试Tag未全部构建成功，请处理失败项后重试")
             } else {
                 if (link.isNotEmpty()) append('\n')
-                append("Tag 已构建完毕，辛苦发版：\n\n")
+                append("测试Tag已构建完毕，辛苦发版：\n\n")
                 appendTagList(successes)
             }
         }

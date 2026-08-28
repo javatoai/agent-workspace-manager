@@ -338,7 +338,7 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
     if (confirmDiscard) {
         DiscardChangesDialog(
             title = "放弃服务配置修改？",
-            message = "尚未保存的模块、分支、Tag 和 Bootstrap 配置将丢失。",
+            message = "尚未保存的模块、分支、测试Tag和 Bootstrap 配置将丢失。",
             onDismiss = { confirmDiscard = false },
             onDiscard = onDismiss,
         )
@@ -385,7 +385,7 @@ private fun ServiceBasicSection(
             onGenbuServiceNameChange,
             Modifier.fillMaxWidth(),
             label = { Text("Genbu 服务名") },
-            supportingText = { Text("用于查询该服务的测试环境 Tag 构建与发布状态") },
+            supportingText = { Text("用于查询该服务的Tag构建与发布状态") },
             singleLine = true,
         )
     }
@@ -642,7 +642,7 @@ private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String,
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
+                Text("测试Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
             }
             if (module.tagEnabled) TagModeSelector(module.tagMode) { mode ->
                 onChange(module.copy(tagMode = mode, tagTargetRef = if (mode == TagBuildMode.CURRENT_BRANCH) "" else module.tagTargetRef.ifBlank { "origin/release/test" }))
@@ -666,12 +666,12 @@ private fun TagModeSelector(mode: TagBuildMode, onChange: (TagBuildMode) -> Unit
         FilterChip(
             selected = mode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
             onClick = { onChange(TagBuildMode.MERGE_TO_TARGET_BRANCH) },
-            label = { Text("合并到目标分支后打 Tag") },
+            label = { Text("合并到目标分支后构建测试Tag") },
         )
         FilterChip(
             selected = mode == TagBuildMode.CURRENT_BRANCH,
             onClick = { onChange(TagBuildMode.CURRENT_BRANCH) },
-            label = { Text("当前分支直接打 Tag") },
+            label = { Text("当前分支直接构建测试Tag") },
         )
     }
 }
@@ -714,7 +714,7 @@ private fun TagConfigurationFields(
             RemoteBranchPicker(
                 targetRef,
                 onTargetRefChange,
-                "Tag 目标分支",
+                "测试Tag目标分支",
                 repositoryId,
                 controller,
                 Modifier.weight(layout.targetWeight).tagConfigurationFieldHeight(layout.heightDp),
@@ -724,7 +724,7 @@ private fun TagConfigurationFields(
             messagePrefix,
             onMessagePrefixChange,
             Modifier.weight(layout.messageWeight).tagConfigurationFieldHeight(layout.heightDp),
-            label = { Text("Tag 消息前缀") },
+            label = { Text("测试Tag消息前缀") },
             singleLine = layout.singleLine,
             colors = branchPickerFieldColors(),
         )

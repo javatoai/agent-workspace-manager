@@ -227,7 +227,6 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                             NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true) { showCreate = true }
                             NavigationItem.SERVICES -> ServicesScreen(controller)
                             NavigationItem.TAG -> TagScreen(controller)
-                            NavigationItem.PRODUCTION_TAG -> ProductionTagScreen(controller)
                             NavigationItem.SETTINGS -> SettingsScreen(controller)
                         }
                     }
@@ -340,8 +339,7 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             NavigationItem.entries.filter { item ->
-                (item != NavigationItem.TAG || controller.showsTagNavigation) &&
-                    (item != NavigationItem.PRODUCTION_TAG || controller.showsProductionTagNavigation)
+                item != NavigationItem.TAG || controller.showsTagNavigation
             }.forEach { item ->
                 val selectedItem = item == controller.navigation
                 val icon = when (item) {
@@ -349,7 +347,6 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                     NavigationItem.ARCHIVED -> Icons.Outlined.Archive
                     NavigationItem.SERVICES -> Icons.Outlined.Dns
                     NavigationItem.TAG -> Icons.Outlined.Sell
-                    NavigationItem.PRODUCTION_TAG -> Icons.Outlined.Sell
                     NavigationItem.SETTINGS -> Icons.Outlined.Settings
                 }
                 Surface(
@@ -406,9 +403,7 @@ private fun TopBar(controller: DesktopApplication, onCreate: () -> Unit) {
             Spacer(Modifier.weight(1f))
             OutlinedButton(
                 onClick = {
-                    if (controller.navigation == NavigationItem.PRODUCTION_TAG) {
-                        controller.productionTagController.reload()
-                    } else controller.taskController.refresh()
+                    controller.taskController.refresh()
                 },
                 enabled = !controller.busy,
             ) {
@@ -430,7 +425,7 @@ private fun navigationCount(controller: DesktopApplication, item: NavigationItem
     NavigationItem.TASKS -> controller.tasks.count { it.lifecycleStatus != TaskLifecycleStatus.ARCHIVED }
     NavigationItem.ARCHIVED -> controller.tasks.count { it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED }
     NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
-    NavigationItem.TAG, NavigationItem.PRODUCTION_TAG, NavigationItem.SETTINGS -> null
+    NavigationItem.TAG, NavigationItem.SETTINGS -> null
 }
 
 private val NavigationItem.pageDescription: String
@@ -438,7 +433,6 @@ private val NavigationItem.pageDescription: String
         NavigationItem.TASKS -> "集中查看任务状态、工作区与任务说明"
         NavigationItem.ARCHIVED -> "查看已归档任务并按需恢复"
         NavigationItem.SERVICES -> "按组管理仓库、模块和工作区策略"
-        NavigationItem.TAG -> "从已启用的工作区安全构建测试标签"
-        NavigationItem.PRODUCTION_TAG -> "核对生产基线、合并 Feature 并推送正式 Tag"
+        NavigationItem.TAG -> "从已启用的工作区安全构建测试Tag"
         NavigationItem.SETTINGS -> "管理本地目录、组、Agent 说明与开发工具"
     }

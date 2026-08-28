@@ -1,6 +1,9 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -83,14 +86,15 @@ class ConfigStore(
     override fun load(): AppConfig {
         if (!exists()) return AppConfig()
         val content = Files.readString(paths.config)
-        val version = json.parseToJsonElement(content)
+        val element = json.parseToJsonElement(content).withoutRetiredConfigurationFields()
+        val version = element
             .jsonObject["schemaVersion"]
             ?.jsonPrimitive
             ?.contentOrNull
         if (!SchemaVersionCompatibility.isCompatible(version, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
             throw UnsupportedConfigVersionException(version)
         }
-        return json.decodeFromJsonElement<AppConfig>(json.parseToJsonElement(content))
+        return json.decodeFromJsonElement<AppConfig>(element)
     }
 
     override fun save(config: AppConfig) = withMutationLock {
@@ -119,7 +123,10 @@ class ConfigStore(
         val temporary = Files.createTempFile(paths.home, ".config-", ".json.tmp")
         // Writing always stamps the current PATCH version. This is safe because
         // PATCH releases are only compatible when persisted fields are unchanged.
-        Files.writeString(temporary, json.encodeToString(config.copy(schemaVersion = CURRENT_APP_CONFIG_SCHEMA_VERSION)))
+        Files.writeString(
+            temporary,
+            json.encodeToString(config.copy(schemaVersion = CURRENT_APP_CONFIG_SCHEMA_VERSION)),
+        )
         moveAtomically(temporary, paths.config)
     }
 
@@ -194,7 +201,7 @@ class ConfigStore(
 
     private fun decodeAndValidate(content: String): AppConfig {
         rejectRemovedSourceRepositoryStrategy(content, "配置文件提示：不再支持原仓库分支，请手工修改配置")
-        val element = json.parseToJsonElement(content)
+        val element = json.parseToJsonElement(content).withoutRetiredConfigurationFields()
         val version = element.jsonObject["schemaVersion"]?.jsonPrimitive?.contentOrNull
         if (!SchemaVersionCompatibility.isCompatible(version, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
             throw UnsupportedConfigVersionException(version)
@@ -229,6 +236,31 @@ class ConfigStore(
         val mutationLocks = ConcurrentHashMap<String, ReentrantLock>()
     }
 }
+
+/**
+ * Strip only known fields from previously persisted configuration that no
+ * longer have a model, while keeping strict decoding for every other unknown
+ * field.
+ */
+private fun JsonElement.withoutRetiredConfigurationFields(): JsonElement {
+    if (this !is JsonObject) return this
+    val sanitized = toMutableMap().also {
+        it.remove(RETIRED_GENBU_DETECTION_AUDIT_FIELD)
+        it.remove(RETIRED_PRODUCTION_TAG_BUILD_FIELD)
+    }
+    val groups = sanitized[GROUPS_FIELD]
+    if (groups is JsonArray) {
+        sanitized[GROUPS_FIELD] = JsonArray(groups.map { group ->
+            if (group !is JsonObject) return@map group
+            JsonObject(group.toMutableMap().also { it.remove(RETIRED_PRODUCTION_TAG_BUILD_FIELD) })
+        })
+    }
+    return JsonObject(sanitized)
+}
+
+private const val RETIRED_GENBU_DETECTION_AUDIT_FIELD = "genbuDetectionAudit"
+private const val RETIRED_PRODUCTION_TAG_BUILD_FIELD = "productionTagBuildEnabled"
+private const val GROUPS_FIELD = "groups"
 
 /**
  * Agent planning only reads configuration. It accepts forward-compatible

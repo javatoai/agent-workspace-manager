@@ -144,14 +144,6 @@ class ConfigStoreTest {
             defaultDevelopmentTool = DevelopmentToolType.VISUAL_STUDIO_CODE,
             allowTemporaryDevelopmentToolSelection = true,
             hiddenTaskDetailBranches = listOf("master", "develop"),
-            genbuDetectionAudit = listOf(
-                GenbuDetectionAuditEvent(
-                    detectedAt = "2026-08-24 12:00:00",
-                    status = "LOADED",
-                    command = "T:\\Downloads\\genbu.exe",
-                    source = "PROBED",
-                ),
-            ),
             repositories = listOf(repository),
             groups = listOf(
                 GroupConfig(
@@ -183,6 +175,81 @@ class ConfigStoreTest {
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
+    }
+
+    @Test
+    fun `legacy Genbu detection audit is ignored on load and omitted on save`() {
+        val paths = ApplicationPaths(temporary.resolve("retired-genbu-audit"))
+        Files.createDirectories(paths.home)
+        Files.writeString(
+            paths.config,
+            """
+            {
+              "schemaVersion": "$CURRENT_APP_CONFIG_SCHEMA_VERSION",
+              "taskRoot": "D:/tasks",
+              "genbuDetectionAudit": [
+                {"detectedAt": "2026-08-24 12:00:00", "status": "LOADED", "command": "genbu"}
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val loaded = ConfigStore(paths).load()
+
+        assertEquals("D:/tasks", loaded.taskRoot)
+        assertTrue(Files.readString(paths.config).contains("genbuDetectionAudit"))
+
+        ConfigStore(paths).save(loaded)
+
+        val persisted = Files.readString(paths.config)
+        assertFalse(persisted.contains("genbuDetectionAudit"))
+        assertEquals("D:/tasks", ConfigStore(paths).load().taskRoot)
+    }
+
+    @Test
+    fun `retired Genbu detection audit does not weaken strict unknown field validation`() {
+        val paths = ApplicationPaths(temporary.resolve("retired-genbu-audit-unknown"))
+        Files.createDirectories(paths.home)
+        Files.writeString(
+            paths.config,
+            """
+            {
+              "schemaVersion": "$CURRENT_APP_CONFIG_SCHEMA_VERSION",
+              "genbuDetectionAudit": [],
+              "unknownField": true
+            }
+            """.trimIndent(),
+        )
+
+        assertThrows(SerializationException::class.java) { ConfigStore(paths).load() }
+    }
+
+    @Test
+    fun `retired production Tag switches are ignored and omitted on save`() {
+        val paths = ApplicationPaths(temporary.resolve("legacy-production-tag"))
+        Files.createDirectories(paths.home)
+        Files.writeString(
+            paths.config,
+            """
+            {
+              "schemaVersion": "$CURRENT_APP_CONFIG_SCHEMA_VERSION",
+              "productionTagBuildEnabled": false,
+              "groups": [
+                {"id": "one", "name": "一组", "productionTagBuildEnabled": true, "services": []},
+                {"id": "two", "name": "二组", "productionTagBuildEnabled": false, "services": []}
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val loaded = ConfigStore(paths).load()
+        assertEquals(listOf("one", "two"), loaded.groups.map { it.id })
+
+        ConfigStore(paths).save(loaded)
+
+        val persisted = Files.readString(paths.config)
+        assertFalse(persisted.contains("productionTagBuildEnabled"))
+        assertEquals(listOf("one", "two"), ConfigStore(paths).load().groups.map { it.id })
     }
 
     @Test

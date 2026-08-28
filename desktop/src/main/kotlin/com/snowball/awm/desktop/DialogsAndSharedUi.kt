@@ -60,7 +60,7 @@ internal fun BatchTagDialog(
     var selected by remember(workspaces) { mutableStateOf(emptySet<String>()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("批量 Tag") },
+        title = { Text("批量测试Tag") },
         text = {
             Column(Modifier.widthIn(min = 520.dp).heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

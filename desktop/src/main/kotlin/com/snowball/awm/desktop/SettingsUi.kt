@@ -90,10 +90,9 @@ import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.GroupConfig
 import com.snowball.awm.core.GitConfigValue
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
+import com.snowball.awm.core.CommandVersionStatus
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ThemePreference
-import com.snowball.awm.core.gitProbeCommandDisplay
-import com.snowball.awm.core.meegleProbeCommandDisplay
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -127,9 +126,6 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var blockedGitBranchInput by remember { mutableStateOf("") }
     var blockedGitWriteBranches by remember(controller.config.blockedGitWriteBranches) {
         mutableStateOf(controller.config.blockedGitWriteBranches)
-    }
-    var productionTagEnabled by remember(controller.config.productionTagBuildEnabled) {
-        mutableStateOf(controller.config.productionTagBuildEnabled)
     }
     var genbuPath by remember(controller.config.genbuExecutablePath) {
         mutableStateOf(controller.config.genbuExecutablePath.orEmpty())
@@ -166,7 +162,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "cli" to "命令行",
         "branches" to "分支",
         "git" to "Git",
-        "production-tag" to "生产 Tag 构建",
+        "genbu" to "Genbu",
         "feishu" to "飞书项目",
         "logs" to "日志",
     )
@@ -217,7 +213,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         if (selectedSection == "cli") controller.refreshCliInstallationStatus()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
-        if (selectedSection == "production-tag") controller.refreshGenbu()
+        if (selectedSection == "genbu") controller.refreshGenbu()
     }
     DisposableEffect(selectedSection) {
         onDispose { if (selectedSection == "feishu") controller.cancelMeegleProjectLoad() }
@@ -374,20 +370,12 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
                 )
             }
-            if (selectedSection == "production-tag") item {
-                SettingsProductionTagSection(
+            if (selectedSection == "genbu") item {
+                SettingsGenbuSection(
                     controller = controller,
-                    enabled = productionTagEnabled,
-                    onEnabledChange = { enabled ->
-                        val previous = productionTagEnabled
-                        productionTagEnabled = enabled
-                        controller.updateProductionTagEnabled(enabled) {
-                            productionTagEnabled = previous
-                        }
-                    },
                     genbuPath = genbuPath,
                     onGenbuPathChange = { genbuPath = it },
-                    saving = saving("production-tag"),
+                    saving = saving("genbu"),
                 )
             }
             if (selectedSection == "feishu") item {
@@ -474,9 +462,134 @@ internal fun SettingsScreen(controller: DesktopApplication) {
 
 internal fun normalizeSettingsSection(stored: String, supported: Set<String>): String = when (stored) {
     "advanced" -> "feishu"
-    "genbu" -> if ("production-tag" in supported) "production-tag" else "basic"
+    "genbu" -> if ("genbu" in supported) "genbu" else "basic"
     in supported -> stored
     else -> "basic"
+}
+
+private enum class CliDetectionPhase { IDLE, LOADING, READY, FAILED }
+
+private fun genbuSourceLabel(source: GenbuCommandSource): String = when (source) {
+    GenbuCommandSource.CONFIGURED -> "手动配置"
+    GenbuCommandSource.PROBED -> "自动探测"
+    GenbuCommandSource.PATH_FALLBACK -> "PATH 回退"
+}
+
+private fun gitSourceLabel(source: GitCommandSource): String = when (source) {
+    GitCommandSource.CONFIGURED -> "手动配置"
+    GitCommandSource.PROBED -> "自动探测"
+    GitCommandSource.PATH_FALLBACK -> "PATH 回退"
+}
+
+private fun meegleSourceLabel(source: MeegleCommandSource): String = when (source) {
+    MeegleCommandSource.CONFIGURED -> "手动配置"
+    MeegleCommandSource.PROBED -> "自动探测"
+    MeegleCommandSource.PATH_FALLBACK -> "PATH 回退"
+}
+
+@Composable
+private fun CliCommandPanel(
+    controller: DesktopApplication,
+    title: String,
+    command: String,
+    source: String,
+    version: CommandVersionStatus?,
+    phase: CliDetectionPhase,
+    failure: String? = null,
+    configuredPath: String,
+    pathLabel: String,
+    pathPlaceholder: String,
+    saving: Boolean,
+    onPathChange: (String) -> Unit,
+    onSavePath: (String) -> Unit,
+    onChoosePath: (String) -> Unit,
+    onRefresh: () -> Unit,
+    extra: @Composable ColumnScope.() -> Unit = {},
+) {
+    var pathInput by remember(title, configuredPath) { mutableStateOf(configuredPath) }
+    val pathChanged = pathInput.trim() != configuredPath.trim()
+    val phaseLabel = when (phase) {
+        CliDetectionPhase.IDLE -> "尚未检测"
+        CliDetectionPhase.LOADING -> "检测中"
+        CliDetectionPhase.READY -> "检测成功"
+        CliDetectionPhase.FAILED -> "检测失败"
+    }
+    val phaseColor = when (phase) {
+        CliDetectionPhase.READY -> SuccessGreen
+        CliDetectionPhase.FAILED -> MaterialTheme.colorScheme.error
+        CliDetectionPhase.IDLE, CliDetectionPhase.LOADING -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(phaseLabel, color = phaseColor, style = MaterialTheme.typography.labelSmall)
+            }
+            GitEnvironmentGrid(
+                listOf(
+                    GitEnvironmentField("版本号", version?.version ?: "不可用", monospace = true),
+                    GitEnvironmentField("当前命令", command.ifBlank { "未解析" }, monospace = true),
+                    GitEnvironmentField("命令来源", source),
+                    GitEnvironmentField("检测状态", failure ?: phaseLabel),
+                ),
+            )
+            version?.error?.let { error ->
+                Text("版本检测失败：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onRefresh, enabled = phase != CliDetectionPhase.LOADING && !saving) {
+                    Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("重新检测")
+                }
+                OutlinedButton(
+                    onClick = { controller.copyCliCommandPath(command) },
+                    enabled = command.isNotBlank() && !saving,
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("复制命令路径")
+                }
+                OutlinedButton(
+                    onClick = { controller.runCliInTerminal(command) },
+                    enabled = command.isNotBlank() && !saving,
+                ) {
+                    Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("在终端中运行")
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("手动配置", style = MaterialTheme.typography.titleSmall)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = pathInput,
+                    onValueChange = {
+                        pathInput = it
+                        onPathChange(it)
+                    },
+                    modifier = Modifier.weight(1f).onFocusChanged { focus ->
+                        if (!focus.isFocused && pathInput.trim() != configuredPath.trim()) onSavePath(pathInput)
+                    },
+                    label = { Text(pathLabel) },
+                    placeholder = { Text(pathPlaceholder) },
+                    supportingText = { Text("留空时使用自动探测或 PATH 回退。") },
+                    singleLine = true,
+                    readOnly = controller.busy || saving,
+                )
+                OutlinedButton(onClick = { onChoosePath(pathInput) }, enabled = !controller.pathPickerBusy && !controller.busy && !saving) {
+                    Icon(Icons.Outlined.Folder, null)
+                    Text("选择")
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(onClick = { onSavePath(pathInput) }, enabled = pathChanged && !controller.busy && !saving) {
+                    Text("保存手动配置")
+                }
+            }
+            extra()
+        }
+    }
 }
 
 @Composable
@@ -504,92 +617,43 @@ private fun SettingsBasicSection(
 }
 
 @Composable
-private fun SettingsProductionTagSection(
+private fun SettingsGenbuSection(
     controller: DesktopApplication,
-    enabled: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
     genbuPath: String,
     onGenbuPathChange: (String) -> Unit,
     saving: Boolean,
 ) {
-    SettingsCard("生产 Tag 构建", "控制左侧生产发版入口，并配置生产版本查询命令。") {
-        AutoSaveStatus(controller, "production-tag")
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("启用生产 Tag 构建", style = MaterialTheme.typography.titleSmall)
-                Text("默认打开；关闭后隐藏左侧“生产 Tag 构建”栏目。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(
-                checked = enabled,
-                onCheckedChange = onEnabledChange,
-                enabled = !controller.settingsBusy && !saving,
-            )
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Text("Genbu 自动检测", style = MaterialTheme.typography.titleSmall)
-        when (val state = controller.genbuSettingsState) {
-            GenbuSettingsState.Idle -> Text("尚未检测", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            GenbuSettingsState.Loading -> {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("正在自动检测 Genbu 路径…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            is GenbuSettingsState.Loaded -> {
-                val source = when (state.source) {
-                    GenbuCommandSource.CONFIGURED -> "手动配置"
-                    GenbuCommandSource.PROBED -> "自动检测"
-                    GenbuCommandSource.PATH_FALLBACK -> "PATH"
-                }
-                Text("已检测到（$source）", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
-                SelectionContainer { Text(state.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
-                Text("最近检测：${state.detectedAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            is GenbuSettingsState.Failed -> Text(state.message, color = MaterialTheme.colorScheme.error)
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { controller.refreshGenbu(force = true) }, enabled = !saving) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("重新自动检测")
-            }
-        }
-        if (controller.config.genbuDetectionAudit.isNotEmpty()) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text("最近检测记录", style = MaterialTheme.typography.titleSmall)
-            controller.config.genbuDetectionAudit.asReversed().take(5).forEach { audit ->
-                val result = if (audit.status == "LOADED") {
-                    listOfNotNull(audit.source, audit.command).joinToString(" · ")
-                } else {
-                    audit.message ?: "检测失败"
-                }
-                Text(
-                    "${audit.detectedAt} · ${audit.status} · $result",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (audit.status == "LOADED") SuccessGreen else MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        if (controller.genbuSettingsState is GenbuSettingsState.Failed ||
-            (controller.config.genbuExecutablePath != null && !controller.config.genbuExecutableAutoDetected)
-        ) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text("手动配置", style = MaterialTheme.typography.titleSmall)
-            PathField(
-                "Genbu 可执行文件",
-                genbuPath,
-                onGenbuPathChange,
-                !controller.pathPickerBusy && !saving,
-            ) {
-                controller.chooseApplication(genbuPath) { onGenbuPathChange(it) }
-            }
-            Button(
-                onClick = {
-                    controller.updateProductionTagSettings(enabled, genbuPath) {
-                        onGenbuPathChange(controller.config.genbuExecutablePath.orEmpty())
-                    }
-                },
-                enabled = genbuPath.isNotBlank() && !saving,
-            ) { Text("保存 Genbu 路径") }
-        }
+    val state = controller.genbuSettingsState
+    val (command, source) = controller.genbuCommandResolution()
+    val loaded = state as? GenbuSettingsState.Loaded
+    val phase = when (state) {
+        GenbuSettingsState.Idle -> CliDetectionPhase.IDLE
+        GenbuSettingsState.Loading -> CliDetectionPhase.LOADING
+        is GenbuSettingsState.Loaded -> CliDetectionPhase.READY
+        is GenbuSettingsState.Failed -> CliDetectionPhase.FAILED
+    }
+    SettingsCard("Genbu", "配置并检查生产版本查询命令。") {
+        AutoSaveStatus(controller, "genbu")
+        CliCommandPanel(
+            controller = controller,
+            title = "Genbu 命令",
+            command = command,
+            source = genbuSourceLabel(source),
+            version = loaded?.version,
+            phase = phase,
+            failure = (state as? GenbuSettingsState.Failed)?.message,
+            configuredPath = genbuPath,
+            pathLabel = "Genbu 可执行文件路径",
+            pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+                "例如 C:\\tools\\genbu.exe" else "例如 /usr/local/bin/genbu",
+            saving = saving,
+            onPathChange = onGenbuPathChange,
+            onSavePath = { raw ->
+                controller.updateGenbuExecutablePath(raw) { onGenbuPathChange(controller.config.genbuExecutablePath.orEmpty()) }
+            },
+            onChoosePath = { initial -> controller.chooseApplication(initial) { onGenbuPathChange(it) } },
+            onRefresh = { controller.refreshGenbu(force = true) },
+        )
     }
 }
 
@@ -1111,15 +1175,13 @@ private fun SettingsGitSection(
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsCard("Git 环境", "自动探测或配置 Git 命令，并读取本机身份和全局配置。") {
-            GitExecutablePathEditor(controller)
             AutoSaveStatus(controller, "git")
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             GitEnvironmentPanel(controller, controller.localGitSettingsState)
         }
         SettingsCard("分支写保护", "保护指定分支，避免在 AWM 内执行 Git 写操作。") {
             AutoSaveStatus(controller, "git-write-policy")
         Text("分支写保护", style = MaterialTheme.typography.titleSmall)
-        Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的 Tag 流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的测试Tag流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 blockedGitBranchInput,
@@ -1157,90 +1219,60 @@ private fun SettingsGitSection(
 private fun GitEnvironmentPanel(controller: DesktopApplication, state: LocalGitSettingsState) {
     val snapshot = displayedGitSnapshot(state)
     val refreshing = state is LocalGitSettingsState.Loading
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column {
-            Text("本机 Git 状态", style = MaterialTheme.typography.titleSmall)
-            Text(
-                if (refreshing && snapshot != null) "正在刷新，保留上次读取结果" else "用于 AWM 的提交、推送与仓库检查",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { controller.refreshLocalGit(force = true) }, enabled = !refreshing) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(5.dp))
-                Text(if (refreshing) "正在刷新" else "刷新")
-            }
+    val (command, source) = controller.gitCommandResolution()
+    CliCommandPanel(
+        controller = controller,
+        title = "Git 命令",
+        command = command,
+        source = gitSourceLabel(source),
+        version = snapshot?.gitVersion?.let { CommandVersionStatus(command = command, version = it) },
+        phase = when (state) {
+            LocalGitSettingsState.Idle -> CliDetectionPhase.IDLE
+            is LocalGitSettingsState.Loading -> CliDetectionPhase.LOADING
+            is LocalGitSettingsState.Loaded -> CliDetectionPhase.READY
+            is LocalGitSettingsState.Failed -> CliDetectionPhase.FAILED
+        },
+        failure = (state as? LocalGitSettingsState.Failed)?.message,
+        configuredPath = controller.config.gitExecutablePath.orEmpty(),
+        pathLabel = "Git 可执行文件路径",
+        pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+            "例如 C:\\Program Files\\Git\\cmd\\git.exe" else "例如 /usr/bin/git",
+        saving = controller.settingsSaveState("git") == SettingsSaveState.SAVING,
+        onPathChange = {},
+        onSavePath = { raw ->
+            controller.updateGitExecutablePath(raw) { }
+        },
+        onChoosePath = { initial -> controller.chooseApplication(initial) { selected -> controller.updateGitExecutablePath(selected) } },
+        onRefresh = { controller.refreshLocalGit(force = true) },
+        extra = {
             snapshot?.let {
+                GitEnvironmentSummary(it)
                 OutlinedButton(onClick = { controller.copyText(formatLocalGitSettings(it), "Git 信息已复制") }) {
                     Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
                     Spacer(Modifier.width(5.dp))
-                    Text("复制全部")
+                    Text("复制全部 Git 信息")
                 }
             }
-            (state as? LocalGitSettingsState.Failed)?.let { failure ->
-                OutlinedButton(onClick = { controller.copyText(failure.message, "Git 错误已复制") }) {
+            (state as? LocalGitSettingsState.Failed)?.let { failureState ->
+                OutlinedButton(onClick = { controller.copyText(failureState.message, "Git 错误已复制") }) {
                     Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
                     Spacer(Modifier.width(5.dp))
                     Text("复制错误")
                 }
             }
-        }
-    }
-    snapshot?.let { GitEnvironmentSummary(it, refreshing) } ?: when (state) {
-        LocalGitSettingsState.Idle, is LocalGitSettingsState.Loading -> {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-            Text("正在读取本地 Git 信息…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        is LocalGitSettingsState.Failed -> {
-            OutlinedCard(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
-            ) {
-                SelectionContainer {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("无法读取本机 Git 信息", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.SemiBold)
-                        Text(state.message, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-        is LocalGitSettingsState.Loaded -> Unit
-    }
+            if (snapshot == null && state is LocalGitSettingsState.Loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        },
+    )
 }
 
+
 @Composable
-private fun GitEnvironmentSummary(snapshot: LocalGitEnvironmentSnapshot, refreshing: Boolean) {
+private fun GitEnvironmentSummary(snapshot: LocalGitEnvironmentSnapshot) {
     val credentialFields = snapshot.globalCredentialHelpers.ifEmpty {
         listOf(GitConfigValue("credential.helper", "未配置", null))
     }.map { GitEnvironmentField(it.key, it.value, it.origin) }
     val globalConfigFields = visibleGlobalGitKeyConfig(snapshot).map { GitEnvironmentField(it.key, it.value, it.origin) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(
-            Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-        ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Git 可用", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    if (refreshing) Text("刷新中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-                GitEnvironmentGrid(
-                    listOf(
-                        GitEnvironmentField("版本", snapshot.gitVersion ?: "未读取到"),
-                        GitEnvironmentField("生效路径", snapshot.gitExecutable ?: "未读取到", monospace = true),
-                    ),
-                )
-            }
-        }
         GitEnvironmentSection(
             "身份",
             listOf(
@@ -1393,51 +1425,6 @@ private fun TaskManifestIssues(controller: DesktopApplication) {
     }
 }
 
-@Composable
-private fun GitExecutablePathEditor(controller: DesktopApplication) {
-    var pathInput by remember(controller.config.gitExecutablePath) {
-        mutableStateOf(controller.config.gitExecutablePath.orEmpty())
-    }
-    val saving = controller.settingsSaveState("git") == SettingsSaveState.SAVING
-    val source = controller.gitCommandResolution().second
-    val osName = System.getProperty("os.name")
-    val isWindows = osName.startsWith("Windows", ignoreCase = true)
-    val probeHint = gitProbeCommandDisplay(osName)
-    val sourceLabel = when (source) {
-        GitCommandSource.CONFIGURED -> "已配置"
-        GitCommandSource.PROBED -> "自动探测"
-        GitCommandSource.PATH_FALLBACK -> "PATH 回退"
-    }
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            pathInput,
-            { pathInput = it },
-            Modifier.fillMaxWidth().onFocusChanged { focus ->
-                if (!focus.isFocused && pathInput.trim() != controller.config.gitExecutablePath.orEmpty()) {
-                    controller.updateGitExecutablePath(pathInput) {
-                        pathInput = controller.config.gitExecutablePath.orEmpty()
-                    }
-                }
-            },
-            label = { Text("Git 命令路径（留空时自动探测并保存）") },
-            placeholder = { Text(if (isWindows) "例如 C:\\Program Files\\Git\\cmd\\git.exe" else "例如 /usr/bin/git") },
-            supportingText = { Text("探测命令：$probeHint；已有保存路径时不再探测。") },
-            singleLine = true,
-            readOnly = controller.busy || saving,
-        )
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "命令来源：$sourceLabel；右侧可复制探测命令。",
-                Modifier.weight(1f),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            ActionIconButton("复制探测命令", { controller.copyText(probeHint, "命令已复制") }) {
-                Icon(Icons.Outlined.ContentCopy, "复制探测命令")
-            }
-        }
-    }
-}
 
 @Composable
 private fun SettingsFeishuSection(
@@ -1582,118 +1569,62 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
         is MeegleCliState.Loading -> cliState.previous
         MeegleCliState.Idle, is MeegleCliState.Failed -> null
     }
-    val refreshing = cliState is MeegleCliState.Loading
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text("Meegle CLI", fontWeight = FontWeight.SemiBold)
-                when (cliState) {
-                    MeegleCliState.Idle -> Text(
-                        "正在检查版本和登录状态…",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    is MeegleCliState.Failed -> SelectionContainer {
-                        Text(cliState.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    }
-                    is MeegleCliState.Loading, is MeegleCliState.Ready -> {
-                        val current = status ?: return@Column Text(
-                            "正在检查版本和登录状态…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (current.installed.not()) {
-                            Text("未安装或无法启动 Meegle CLI", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        } else {
-                            Text(
-                                "版本 ${current.version.orEmpty()} · ${if (current.authenticated) "已登录" else if (current.host != null) "登录已过期" else "未登录"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (current.authenticated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                            )
-                            Text(
-                                buildString {
-                                    append("站点：${current.host ?: "project.feishu.cn"}")
-                                    current.expiresInMinutes?.let { append(" · 凭据剩余 $it 分钟") }
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            if (refreshing) Text("正在刷新…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (current.authenticated && (current.expiresInMinutes ?: Long.MAX_VALUE) <= 5) {
-                                Text("登录凭据即将过期，建议刷新或重新登录", style = MaterialTheme.typography.labelSmall, color = WarningAmber)
-                            }
-                        }
-                    }
+    val (command, source) = controller.meegleCommandResolution()
+    val saving = controller.settingsSaveState("feishu") == SettingsSaveState.SAVING
+    val phase = when {
+        cliState is MeegleCliState.Failed -> CliDetectionPhase.FAILED
+        cliState is MeegleCliState.Loading -> CliDetectionPhase.LOADING
+        cliState is MeegleCliState.Ready && cliState.status.installed -> CliDetectionPhase.READY
+        cliState is MeegleCliState.Ready -> CliDetectionPhase.FAILED
+        else -> CliDetectionPhase.IDLE
+    }
+    val failure = when (cliState) {
+        is MeegleCliState.Failed -> cliState.message
+        is MeegleCliState.Ready -> cliState.status.takeUnless { it.installed }?.let { "未安装或无法启动 Meegle CLI" }
+        else -> null
+    }
+    CliCommandPanel(
+        controller = controller,
+        title = "Meegle CLI",
+        command = command,
+        source = meegleSourceLabel(source),
+        version = status?.version?.let { CommandVersionStatus(command = command, version = it) },
+        phase = phase,
+        failure = failure,
+        configuredPath = controller.config.meegleExecutablePath.orEmpty(),
+        pathLabel = "Meegle 可执行文件路径",
+        pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+            "例如 C:\\tools\\meegle.cmd" else "例如 /opt/homebrew/bin/meegle",
+        saving = saving,
+        onPathChange = {},
+        onSavePath = { raw -> controller.updateMeegleExecutablePath(raw) },
+        onChoosePath = { initial -> controller.chooseApplication(initial) { selected -> controller.updateMeegleExecutablePath(selected) } },
+        onRefresh = { controller.refreshMeegleStatus(force = true) },
+        extra = {
+            status?.let { current ->
+                Text(
+                    buildString {
+                        append("站点：${current.host ?: "project.feishu.cn"}")
+                        current.expiresInMinutes?.let { append(" · 凭据剩余 $it 分钟") }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (current.authenticated && (current.expiresInMinutes ?: Long.MAX_VALUE) <= 5) {
+                    Text("登录凭据即将过期，建议刷新或重新登录", style = MaterialTheme.typography.labelSmall, color = WarningAmber)
                 }
-            }
-            TextButton(onClick = { controller.refreshMeegleStatus(force = true) }, enabled = !refreshing && !controller.meegleBusy) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(if (refreshing) "正在刷新" else "刷新")
-            }
-            if (status?.installed == true && !status.authenticated) {
-                Button(onClick = controller::loginMeegle, enabled = !controller.meegleBusy) { Text("登录飞书项目") }
+                if (current.installed && !current.authenticated) {
+                    Button(onClick = controller::loginMeegle, enabled = !controller.meegleBusy) { Text("登录飞书项目") }
+                }
             }
             if (controller.meegleBusy && controller.meegleOperationCancellable) {
                 TextButton(onClick = { controller.cancelMeegleOperation() }) { Text("取消登录") }
             }
-        }
-        controller.meegleOperationError?.let { error ->
-            SelectionContainer {
-                Text(error, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            controller.meegleOperationError?.let { error ->
+                SelectionContainer { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        MeegleExecutablePathEditor(controller)
-    }
-}
-
-@Composable
-private fun MeegleExecutablePathEditor(controller: DesktopApplication) {
-    var pathInput by remember(controller.config.meegleExecutablePath) {
-        mutableStateOf(controller.config.meegleExecutablePath.orEmpty())
-    }
-    val saving = controller.settingsSaveState("feishu") == SettingsSaveState.SAVING
-    val (effectiveCommand, source) = controller.meegleCommandResolution()
-    val osName = System.getProperty("os.name")
-    val isWindows = osName.startsWith("Windows", ignoreCase = true)
-    val probeHint = meegleProbeCommandDisplay(osName)
-    val sourceLabel = when (source) {
-        MeegleCommandSource.CONFIGURED -> "已配置"
-        MeegleCommandSource.PROBED -> "自动探测"
-        MeegleCommandSource.PATH_FALLBACK -> "PATH 回退"
-    }
-    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            pathInput,
-            { pathInput = it },
-            Modifier.fillMaxWidth().onFocusChanged { focus ->
-                if (!focus.isFocused && pathInput.trim() != controller.config.meegleExecutablePath.orEmpty()) {
-                    controller.updateMeegleExecutablePath(pathInput) {
-                        pathInput = controller.config.meegleExecutablePath.orEmpty()
-                    }
-                }
-            },
-            label = { Text("Meegle 命令路径（留空时自动探测并保存）") },
-            placeholder = { Text(if (isWindows) "例如 C:\\tools\\meegle.cmd" else "例如 /opt/homebrew/bin/meegle") },
-            supportingText = { Text("探测命令：$probeHint；已有保存路径时不再探测。") },
-            singleLine = true,
-            readOnly = controller.busy || saving,
-        )
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "当前生效：$effectiveCommand（$sourceLabel）",
-                Modifier.weight(1f),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            ActionIconButton("复制探测命令", { controller.copyText(probeHint, "命令已复制") }) {
-                Icon(Icons.Outlined.ContentCopy, "复制探测命令")
-            }
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -1744,7 +1675,7 @@ private fun GroupSettingsRow(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                Text("Tag")
+                Text("测试Tag")
                 Spacer(Modifier.width(8.dp))
                 Switch(group.tagEnabled, { controller.setGroupTagEnabled(group.id, it) }, enabled = !controller.busy && !defaultsSaving)
                 if (groupCount > 1) {
@@ -1865,7 +1796,7 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "分支" -> Icons.Outlined.AccountTree
     "Git 环境" -> Icons.Outlined.Terminal
     "分支写保护" -> Icons.Outlined.Lock
-    "生产 Tag 构建" -> Icons.Outlined.Sell
+    "Genbu" -> Icons.Outlined.Sell
     "飞书项目" -> Icons.Outlined.Link
     "日志" -> Icons.AutoMirrored.Outlined.Subject
     else -> Icons.Outlined.Description

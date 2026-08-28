@@ -69,15 +69,15 @@ class DeliveryController internal constructor(
     }
 
     fun build(task: TaskManifest, workspace: ServiceWorkspace): Boolean = operations.run(
-        "正在构建 ${workspace.moduleName.ifBlank { workspace.serviceName }} Tag…",
-        "Tag 操作已完成",
+        "正在构建 ${workspace.moduleName.ifBlank { workspace.serviceName }} 测试Tag…",
+        "测试Tag操作已完成",
         block = { adapter.executeTag(DeliveryTarget(session.config, taskDirectory(task), workspace.selectionKey)) },
         onSuccess = { reloadHistory(); refreshGitStatus() },
     )
 
     fun buildBatch(task: TaskManifest, workspaces: List<ServiceWorkspace>): Boolean = operations.run(
-        "正在批量构建 Tag…",
-        "批量 Tag 操作已完成",
+        "正在批量构建测试Tag…",
+        "批量测试Tag操作已完成",
         block = { adapter.executeBatch(session.config, taskDirectory(task), workspaces.map(ServiceWorkspace::selectionKey)) },
         onSuccess = { reloadHistory(); refreshGitStatus() },
     )
@@ -89,10 +89,10 @@ class DeliveryController internal constructor(
      * authoritative state and branch checks before any Git write.
      */
     fun retryConflict(task: TaskManifest, operation: TagOperation): Boolean {
-        require(operation.state == com.snowball.awm.core.TagOperationState.CONFLICT) { "只有冲突 Tag 可以重试" }
+        require(operation.state == com.snowball.awm.core.TagOperationState.CONFLICT) { "只有冲突测试Tag可以重试" }
         return operations.run(
-            "正在重试 ${operation.serviceName} Tag…",
-            "Tag 重试已完成",
+            "正在重试 ${operation.serviceName} 测试Tag…",
+            "测试Tag重试已完成",
             block = {
                 adapter.resumeConflict(
                     DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
@@ -105,7 +105,7 @@ class DeliveryController internal constructor(
 
     /** Checks only the current feature worktree before a conflict retry. */
     fun inspectConflictWorkspace(task: TaskManifest, operation: TagOperation): Boolean {
-        require(tagOperationCanInspectWorkspace(operation)) { "当前 Tag 无需检测工作区" }
+        require(tagOperationCanInspectWorkspace(operation)) { "当前测试Tag无需检测工作区" }
         return operations.run(
             "正在检测 ${operation.serviceName} 工作区…",
             "工作区检测完成",
@@ -120,10 +120,10 @@ class DeliveryController internal constructor(
 
     /** Re-runs a safely interrupted operation while retaining its history row. */
     fun retryInterrupted(task: TaskManifest, operation: TagOperation): Boolean {
-        require(operation.state in retryableInterruptedTagStates) { "只有构建中断的 Tag 可以重试" }
+        require(operation.state in retryableInterruptedTagStates) { "只有构建中断的测试Tag可以重试" }
         return operations.run(
-            "正在重新构建 ${operation.serviceName} Tag…",
-            "Tag 重试已完成",
+            "正在重新构建 ${operation.serviceName} 测试Tag…",
+            "测试Tag重试已完成",
             block = {
                 adapter.resumeInterrupted(
                     DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
@@ -140,8 +140,8 @@ class DeliveryController internal constructor(
     }
 
     fun clearHistory(): Boolean = operations.run(
-        "正在清除 Tag 构建历史…",
-        "Tag 构建历史已清除",
+        "正在清除Tag构建历史…",
+        "Tag构建历史已清除",
         block = { adapter.clearHistory(session.config, session.tasks) },
         onSuccess = {
             reloadHistory()
@@ -152,8 +152,8 @@ class DeliveryController internal constructor(
     fun deleteHistory(operationIds: Set<String>): Boolean {
         if (operationIds.isEmpty()) return false
         return operations.run(
-            "正在删除 Tag 构建记录…",
-            "已删除 ${operationIds.size} 条 Tag 构建记录",
+            "正在删除Tag构建记录…",
+            "已删除 ${operationIds.size} 条Tag构建记录",
             block = {
                 runBlocking {
                     genbuProbeMutex.withLock {

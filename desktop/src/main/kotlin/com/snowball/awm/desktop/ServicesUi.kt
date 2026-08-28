@@ -124,7 +124,7 @@ internal fun ServicesScreen(controller: DesktopApplication) {
                         Column(Modifier.weight(1f)) {
                             Text(group.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "${filteredServices.size} / ${group.services.size} 个服务 · Tag ${if (group.tagEnabled) "已开启" else "已关闭"}",
+                                "${filteredServices.size} / ${group.services.size} 个服务 · 测试Tag${if (group.tagEnabled) "已开启" else "已关闭"}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

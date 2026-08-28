@@ -57,14 +57,20 @@ class ConfigurationInteractionPolicyTest {
             displayName = "Repo",
             modules = listOf(ServiceModuleConfig("main", tagTargetRef = "upstream/release/test")),
         )
-        val expected = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("g", "G", services = listOf(service))))
+        val expected = AppConfig(
+            repositories = listOf(repository),
+            groups = listOf(GroupConfig("g", "G", services = listOf(service))),
+        )
 
         store.save(expected)
 
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, expected.schemaVersion)
         assertEquals(expected, store.load())
         val json = Files.readString(paths.config)
+        // The Chinese display name changes must not rename the persisted switch or fields.
+        assertTrue("\"tagEnabled\"" in json)
         assertTrue("\"tagTargetRef\"" in json)
+        assertTrue("\"tagMessagePrefix\"" in json)
         assertTrue("\"schemaVersion\": \"$CURRENT_APP_CONFIG_SCHEMA_VERSION\"" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
@@ -95,15 +101,6 @@ class ConfigurationInteractionPolicyTest {
         assertTrue(TagNavigationPolicy.isVisible(childrenOff.copy(groups = listOf(childrenOff.groups.single().copy(
             services = listOf(standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }), clone.copy(modules = clone.modules.map { it.copy(tagEnabled = true) })),
         )))))
-    }
-
-    @Test
-    fun `production tag navigation is enabled by default and follows the global setting`() {
-        val config = AppConfig()
-
-        assertTrue(config.productionTagBuildEnabled)
-        assertTrue(ProductionTagNavigationPolicy.isVisible(config))
-        assertFalse(ProductionTagNavigationPolicy.isVisible(config.copy(productionTagBuildEnabled = false)))
     }
 
     @Test

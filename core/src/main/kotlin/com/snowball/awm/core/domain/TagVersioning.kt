@@ -12,7 +12,7 @@ object TagVersioning {
     private val releasePattern = Regex("""^(\d+)\.(\d+)\.(\d+)$""")
 
     fun next(current: String): String {
-        require(validPattern.matches(current)) { "不支持的 Tag 格式：$current" }
+        require(validPattern.matches(current)) { "不支持的测试Tag格式：$current" }
         betaPattern.matchEntire(current)?.let { match ->
             val (major, minor, patch, beta) = match.destructured
             return "$major.$minor.$patch.beta-${beta.toLong() + 1}"
@@ -25,7 +25,7 @@ object TagVersioning {
             val (major, minor, patch) = match.destructured
             return "$major.$minor.${patch.toLong() + 1}.beta-1"
         }
-        error("无法计算下一个 Tag：$current")
+        error("无法计算下一个测试Tag：$current")
     }
 
     fun latest(tags: List<VersionTag>): String? {

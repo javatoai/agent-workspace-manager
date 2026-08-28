@@ -19,7 +19,7 @@ class AgentOperationServiceTest {
             val paths = ApplicationPaths(root.resolve("awm-home"))
             Files.createDirectories(paths.home)
             val original = """
-                {"schemaVersion":"$CURRENT_APP_CONFIG_SCHEMA_VERSION","taskRoot":"D:/tasks","requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"研发","productionTagBuildEnabled":true}
+                {"schemaVersion":"$CURRENT_APP_CONFIG_SCHEMA_VERSION","taskRoot":"D:/tasks","requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"研发"}
             """.trimIndent()
             Files.writeString(paths.config, original)
             val configurations = AgentCompatibleConfigurationRepository(paths)

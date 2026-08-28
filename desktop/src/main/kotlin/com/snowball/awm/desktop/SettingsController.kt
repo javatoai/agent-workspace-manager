@@ -22,12 +22,15 @@ import com.snowball.awm.core.GitCommandSource
 import com.snowball.awm.core.GitExecutable
 import com.snowball.awm.core.GenbuCommandSource
 import com.snowball.awm.core.GenbuExecutable
-import com.snowball.awm.core.GenbuDetectionAuditEvent
 import com.snowball.awm.core.normalizeGenbuExecutablePath
 import com.snowball.awm.core.normalizeGitExecutablePath
 import com.snowball.awm.core.MeegleProjectSummary
 import com.snowball.awm.core.LocalGitEnvironmentInspector
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
+import com.snowball.awm.core.CommandVersionProbe
+import com.snowball.awm.core.CommandVersionStatus
+import com.snowball.awm.core.CommandRunner
+import com.snowball.awm.core.ProcessCommandRunner
 import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RepositoryRemoteCatalog
 import com.snowball.awm.core.GitRepositoryRemoteCatalog
@@ -85,7 +88,12 @@ sealed interface LocalGitSettingsState {
 sealed interface GenbuSettingsState {
     data object Idle : GenbuSettingsState
     data object Loading : GenbuSettingsState
-    data class Loaded(val command: String, val source: GenbuCommandSource, val detectedAt: String) : GenbuSettingsState
+    data class Loaded(
+        val command: String,
+        val source: GenbuCommandSource,
+        val detectedAt: String,
+        val version: CommandVersionStatus? = null,
+    ) : GenbuSettingsState
     data class Failed(val message: String) : GenbuSettingsState
 }
 
@@ -124,6 +132,7 @@ class SettingsController internal constructor(
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
     private val gitExecutable: GitExecutable = GitExecutable.pathFallback(),
     private val genbuExecutable: GenbuExecutable = GenbuExecutable.pathFallback(),
+    private val cliVersionRunner: CommandRunner = ProcessCommandRunner(),
     private val localGitInspector: LocalGitEnvironmentInspector,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -211,7 +220,7 @@ class SettingsController internal constructor(
             autoSave?.let {
                 applyConfig(it.config)
                 if (it.savedDetectedPath) {
-                    setSaveState("production-tag", SettingsSaveState.SAVED)
+                    setSaveState("genbu", SettingsSaveState.SAVED)
                     showStatus("已自动检测并保存 Genbu 命令路径")
                 }
             }
@@ -219,37 +228,24 @@ class SettingsController internal constructor(
         }
     }
 
-    fun updateProductionTagSettings(
-        enabled: Boolean,
+    fun updateGenbuExecutablePath(
         rawGenbuPath: String,
         onFailure: (Throwable) -> Unit = {},
     ): Boolean = mutate(
-        "正在保存生产 Tag 设置…",
-        "生产 Tag 设置已保存",
+        "正在保存 Genbu 路径…",
+        "Genbu 路径已保存",
         onFailure,
-        "production-tag",
+        "genbu",
         settingsOperations,
         onCompleted = { refreshGenbu(force = true) },
     ) { config ->
         val normalized = normalizeGenbuExecutablePath(rawGenbuPath)
         config.copy(
-            productionTagBuildEnabled = enabled,
             genbuExecutablePath = normalized,
             genbuExecutableAutoDetected = config.genbuExecutableAutoDetected &&
                 normalized == config.genbuExecutablePath,
         )
     }
-
-    fun updateProductionTagEnabled(
-        enabled: Boolean,
-        onFailure: (Throwable) -> Unit = {},
-    ): Boolean = mutate(
-        "正在保存生产 Tag 开关…",
-        "生产 Tag 开关已保存",
-        onFailure,
-        "production-tag",
-        settingsOperations,
-    ) { config -> config.copy(productionTagBuildEnabled = enabled) }
 
     fun refreshGenbu(force: Boolean = false) {
         if (!force && genbu is GenbuSettingsState.Loading) return
@@ -270,59 +266,33 @@ class SettingsController internal constructor(
                         val saved = autoSaveResult.getOrNull()?.config?.genbuExecutablePath
                         val command = saved ?: genbuExecutable.probe()
                         val source = if (saved != null) GenbuCommandSource.PROBED else genbuExecutable.source()
-                        check(source != GenbuCommandSource.PATH_FALLBACK) {
-                            "未自动检测到 Genbu，请手动选择 genbu 可执行文件"
-                        }
-                        command to source
+                        Triple(command, source, readCliVersion(command))
                     }
                 }
             }
             autoSave?.let {
                 applyConfig(it.config)
                 if (it.savedDetectedPath) {
-                    setSaveState("production-tag", SettingsSaveState.SAVED)
+                    setSaveState("genbu", SettingsSaveState.SAVED)
                     showStatus("已自动检测并保存 Genbu 命令路径")
                 }
             }
             val detectedAt = AwmTime.format(java.time.Instant.now())
             val resolved = result.fold(
-                onSuccess = { (command, source) -> GenbuSettingsState.Loaded(
+                onSuccess = { (command, source, version) -> GenbuSettingsState.Loaded(
                     command,
                     if (session.config.genbuExecutableAutoDetected) GenbuCommandSource.PROBED else source,
                     detectedAt,
+                    version,
                 ) },
                 onFailure = { GenbuSettingsState.Failed(it.message ?: "检测 Genbu 失败") },
             )
-            val audit = when (resolved) {
-                is GenbuSettingsState.Loaded -> GenbuDetectionAuditEvent(
-                    detectedAt = detectedAt,
-                    status = "LOADED",
-                    command = resolved.command,
-                    source = resolved.source.name,
-                )
-                is GenbuSettingsState.Failed -> GenbuDetectionAuditEvent(
-                    detectedAt = detectedAt,
-                    status = "FAILED",
-                    message = resolved.message,
-                )
-                else -> error("Genbu 检测结束状态不合法")
-            }
-            val auditedConfig = try {
-                withContext(ioDispatcher) {
-                    configStore.update { current ->
-                        current.copy(genbuDetectionAudit = (current.genbuDetectionAudit + audit).takeLast(100))
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                genbu = GenbuSettingsState.Failed("Genbu 检测结果无法写入审计：${error.message ?: "未知错误"}")
-                return@launch
-            }
-            applyConfig(auditedConfig)
             genbu = resolved
         }
     }
+
+    private fun readCliVersion(command: String): CommandVersionStatus =
+        CommandVersionProbe.probe(command, cliVersionRunner)
 
     private fun autoSaveGenbuExecutablePath(shouldAutoDetect: Boolean, existingPath: String?): GenbuExecutableAutoSave? {
         if (!shouldAutoDetect) return null
@@ -494,8 +464,8 @@ class SettingsController internal constructor(
         groups.deleteGroup(groupId)
     }
     fun setGroupTagEnabled(groupId: String, enabled: Boolean) = mutateWithService(
-        "正在更新组 Tag 开关…",
-        "组 Tag 开关已更新",
+        "正在更新组测试Tag开关…",
+        "组测试Tag开关已更新",
         saveKey = "groups",
         runner = settingsOperations,
     ) {

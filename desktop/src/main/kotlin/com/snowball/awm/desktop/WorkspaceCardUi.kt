@@ -398,8 +398,8 @@ private fun WorkspaceCardActions(
         )
         if (controller.canBuildTag(task, workspace)) {
             IconActionGroup {
-                ActionIconButton("构建 Tag", { controller.buildTag(task, workspace) }, Modifier.size(34.dp), enabled = !controller.busy, loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true && controller.activeOperation?.contains("Tag") == true) {
-                    Icon(Icons.Outlined.Sell, "Tag", Modifier.size(18.dp))
+                ActionIconButton("构建测试Tag", { controller.buildTag(task, workspace) }, Modifier.size(34.dp), enabled = !controller.busy, loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true && controller.activeOperation?.contains("Tag") == true) {
+                    Icon(Icons.Outlined.Sell, "测试Tag", Modifier.size(18.dp))
                 }
             }
         }

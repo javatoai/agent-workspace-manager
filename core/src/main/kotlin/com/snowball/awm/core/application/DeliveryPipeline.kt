@@ -58,8 +58,8 @@ class GitTagDeliveryAdapter(
 ) : DeliveryPipelineAdapter {
     override val descriptor = DeliveryPipelineDescriptor(
         id = ID,
-        displayName = "Tag",
-        historyDisplayName = "Tag 构建历史",
+        displayName = "测试Tag",
+        historyDisplayName = "Tag构建历史",
     )
 
     override fun execute(target: DeliveryTarget): DeliveryExecution {

@@ -6,6 +6,14 @@ import kotlin.test.assertNull
 
 class DeliveryPipelineRegistryTest {
     @Test
+    fun `built in tag pipeline is presented as test tag`() {
+        val descriptor = GitTagDeliveryAdapter().descriptor
+
+        assertEquals("测试Tag", descriptor.displayName)
+        assertEquals("Tag构建历史", descriptor.historyDisplayName)
+    }
+
+    @Test
     fun `registry exposes injected adapters without product-specific branching`() {
         val fake = object : DeliveryPipelineAdapter {
             override val descriptor = DeliveryPipelineDescriptor("preview", "预览环境", "预览历史")

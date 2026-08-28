@@ -203,7 +203,7 @@ class TagBuildService(
         taskDirectory = taskDirectory,
         operationId = operationId,
         retryableStates = setOf(TagOperationState.CONFLICT),
-        invalidStateMessage = "只有 CONFLICT 操作可以重试",
+        invalidStateMessage = "只有${TagOperationState.CONFLICT.userFacingLabel()}的测试Tag操作可以重试",
     )
 
     /**
@@ -220,7 +220,7 @@ class TagBuildService(
         taskDirectory = taskDirectory,
         operationId = operationId,
         retryableStates = interruptedRetryableTagStates,
-        invalidStateMessage = "只有构建中断的 Tag 操作可以重试",
+        invalidStateMessage = "只有构建中断的测试Tag操作可以重试",
     )
 
     private fun resumeExisting(
@@ -308,7 +308,7 @@ class TagBuildService(
         operations.save(taskDirectory, operation)
         events.info(
             event = "tag.build.started",
-            message = "开始 Tag 构建",
+            message = "开始Tag构建",
             metadata = mapOf(
                 "operationId" to operation.operationId,
                 "folderName" to operation.folderName,
@@ -394,7 +394,7 @@ class TagBuildService(
                         tag = TagVersioning.next(tag)
                     }
                 }
-                check(pushed) { "Tag 推送未完成" }
+                check(pushed) { "测试Tag推送未完成" }
                 operation = transition(taskDirectory, operation, TagOperationState.TAG_PUSHED)
                 operation = transition(
                     taskDirectory,
@@ -435,16 +435,18 @@ class TagBuildService(
         operationId: String,
     ): TagOperation = taskLock.withLock(taskDirectory) {
         var operation = operations.load(taskDirectory, operationId)
-        require(operation.state == TagOperationState.PARTIAL) { "只有 PARTIAL 操作可以恢复" }
+        require(operation.state == TagOperationState.PARTIAL) {
+            "只有${TagOperationState.PARTIAL.userFacingLabel()}的测试Tag操作可以恢复"
+        }
         val manifest = manifests.load(taskDirectory)
         val target = TagPolicy.resolve(config, manifest, "${operation.groupServiceId}:${operation.moduleId}")
         val service = target
         val workspace = target.workspace
         val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
         val repository = validated.repository
-        val tag = operation.tag ?: throw IllegalStateException("操作没有可恢复的本地 Tag")
+        val tag = operation.tag ?: throw IllegalStateException("操作没有可恢复的本地测试Tag")
         val tagCommit = operation.targetSha ?: operation.sourceSha
-            ?: throw IllegalStateException("操作没有可恢复的 Tag 提交")
+            ?: throw IllegalStateException("操作没有可恢复的测试Tag提交")
 
         withRepositoryLock(repository) {
             try {
@@ -553,16 +555,16 @@ class TagBuildService(
     private fun requireTagBranchesAllowed(config: AppConfig, service: EffectiveTagTarget, preview: TagPreflight) {
         val policy = GitWritePolicy(config.blockedGitWriteBranches)
         if (preview.sourceSync.pushRequired || service.mode == TagBuildMode.CURRENT_BRANCH) {
-            policy.requireAllowed(preview.sourceBranch, "Tag 流程推送源分支")
+            policy.requireAllowed(preview.sourceBranch, "测试Tag流程推送源分支")
         }
         if (service.mode == TagBuildMode.MERGE_TO_TARGET_BRANCH && preview.mergeMode != MergeMode.ALREADY_MERGED) {
-            policy.requireAllowed(requireNotNull(service.targetBranch), "Tag 流程合并并推送目标分支")
+            policy.requireAllowed(requireNotNull(service.targetBranch), "测试Tag流程合并并推送目标分支")
         }
     }
 
     private fun resolveWorkspace(manifest: TaskManifest, selection: String): ServiceWorkspace? {
         val matches = manifest.services.filter { it.selectionKey == selection || it.repositoryId == selection }
-        if (matches.size > 1) throw IllegalArgumentException("Tag 目标不唯一，请选择具体模块：$selection")
+        if (matches.size > 1) throw IllegalArgumentException("测试Tag目标不唯一，请选择具体模块：$selection")
         return matches.singleOrNull()
     }
 
@@ -709,7 +711,7 @@ class TagBuildService(
         }.toList()
         val latest = TagVersioning.latest(tags)
         if (latest != null) return TagVersioning.next(latest)
-        throw IllegalStateException("仓库没有可用的历史 Tag，无法计算下一版本；请先在仓库创建并推送一个符合版本规则的 Tag")
+        throw IllegalStateException("仓库没有可用的历史测试Tag，无法计算下一版本；请先在仓库创建并推送一个符合版本规则的测试Tag")
     }
 
     private fun createOrValidateLocalTag(
@@ -720,7 +722,7 @@ class TagBuildService(
     ) {
         val existing = git.run(repository, "rev-parse", "--verify", "refs/tags/$tag^{commit}", check = false)
         if (existing.succeeded) {
-            require(existing.stdout.trim() == commit) { "本地 Tag $tag 已指向其他提交" }
+            require(existing.stdout.trim() == commit) { "本地测试Tag $tag 已指向其他提交" }
             return
         }
         git.run(repository, "tag", "-a", tag, commit, "-m", message)
@@ -741,7 +743,7 @@ class TagBuildService(
                 throw TagCollisionException(tag, remoteAfter, commit)
             }
             if (remoteAfter == commit) return
-            throw GitException("推送 Tag 失败", push)
+            throw GitException("推送测试Tag失败", push)
         }
     }
 
@@ -831,14 +833,14 @@ class TagBuildService(
         if (operation.state == TagOperationState.SUCCESS) {
             events.info(
                 event = "tag.build.completed",
-                message = "Tag 构建成功",
+                message = "Tag构建成功",
                 metadata = metadata,
                 clock = clock,
             )
         } else {
             events.error(
                 event = "tag.build.completed",
-                message = operation.message ?: "Tag 构建未成功",
+                message = operation.message ?: "Tag构建未成功",
                 metadata = metadata,
                 clock = clock,
             )
@@ -864,4 +866,4 @@ class TagCollisionException(
     tag: String,
     remoteCommit: String,
     expectedCommit: String,
-) : RuntimeException("远端 Tag $tag 已指向 $remoteCommit，预期为 $expectedCommit")
+) : RuntimeException("远端测试Tag $tag 已指向 $remoteCommit，预期为 $expectedCommit")

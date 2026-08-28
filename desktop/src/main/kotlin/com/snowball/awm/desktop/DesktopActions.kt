@@ -48,6 +48,22 @@ class DesktopActions internal constructor(
     fun reveal(path: Path) = attempt { integration.reveal(path) }
     fun openDirectory(path: Path) = attempt { integration.openDirectory(path) }
     fun terminal(path: Path) = attempt { integration.openTerminal(path, config().terminalExecutable) }
+    /** Copies the command path exactly as it is resolved by the CLI settings. */
+    fun copyCliCommandPath(command: String) = attempt {
+        require(command.isNotBlank()) { "CLI 命令路径不能为空" }
+        integration.copyText(command)
+    }.onSuccess { onStatus("命令路径已复制") }
+
+    /**
+     * Opens the system terminal, changes to the CLI's directory, and runs the
+     * CLI without adding any arguments.  This intentionally bypasses the
+     * user-configured terminal because the system-terminal adapter can pass a
+     * resolved command path safely.
+     */
+    fun runCliInTerminal(command: String) = attempt {
+        require(command.isNotBlank()) { "CLI 命令路径不能为空" }
+        integration.openCliInSystemTerminal(command)
+    }.onSuccess { onStatus("CLI 终端已打开") }
     fun openUrl(url: String) = attempt { integration.openUrl(url) }
 
     fun copy(text: String, message: String = "已复制") = attempt {

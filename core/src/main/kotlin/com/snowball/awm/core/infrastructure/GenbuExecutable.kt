@@ -18,6 +18,12 @@ fun interface GenbuExecutable {
 
     fun source(): GenbuCommandSource = GenbuCommandSource.PATH_FALLBACK
 
+    /** Best-effort local --version check for the currently resolved command. */
+    fun version(
+        runner: CommandRunner = ProcessCommandRunner(),
+        timeout: Duration = Duration.ofSeconds(10),
+    ): CommandVersionStatus = CommandVersionProbe.probe(current(), runner, timeout)
+
     companion object {
         fun pathFallback(isWindows: Boolean = defaultGenbuIsWindows()): GenbuExecutable =
             GenbuExecutable { if (isWindows) "genbu.exe" else "genbu" }

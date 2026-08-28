@@ -8,6 +8,7 @@ import com.snowball.awm.core.TagWorkspaceCheck
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.RequirementParticipants
 import com.snowball.awm.core.RequirementPerson
+import com.snowball.awm.core.userFacingLabel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -50,7 +51,7 @@ class TagPresentationTest {
         )
 
         assertEquals(
-            "请将 feature/task-42 合入 upstream/uat，解决冲突后提交并推送 upstream/uat，再点击“已解决，重新构建 Tag”。",
+            "请将 feature/task-42 合入 upstream/uat，解决冲突后提交并推送 upstream/uat，再点击“已解决，重新构建测试Tag”。",
             tagConflictGuidance(conflict),
         )
     }
@@ -85,7 +86,7 @@ class TagPresentationTest {
             "仍有未提交改动：未暂存：src/A.kt；未跟踪：.idea/workspace.xml",
             tagWorkspaceCheckSummary(TagWorkspaceCheck(listOf("未暂存：src/A.kt", "未跟踪：.idea/workspace.xml"))),
         )
-        assertEquals("工作区已干净，可以重新构建 Tag", tagWorkspaceCheckSummary(TagWorkspaceCheck(emptyList())))
+        assertEquals("工作区已干净，可以重新构建测试Tag", tagWorkspaceCheckSummary(TagWorkspaceCheck(emptyList())))
     }
 
     @Test
@@ -193,8 +194,18 @@ class TagPresentationTest {
             ),
         )
 
-        assertEquals("Tag 发版信息已复制，发给张三、李四", tagAnnouncementCopyMessage(metadata))
-        assertEquals("Tag 发版信息已复制", tagAnnouncementCopyMessage(null))
+        assertEquals("测试Tag发版信息已复制，发给张三、李四", tagAnnouncementCopyMessage(metadata))
+        assertEquals("测试Tag发版信息已复制", tagAnnouncementCopyMessage(null))
+    }
+
+    @Test
+    fun `copying a tag operation record uses its Chinese state label`() {
+        val copy = tagOperationRecordCopyText(
+            operation(TagOperationState.LOCAL_TAG_CREATED).copy(tag = null),
+        )
+
+        assertEquals("服务名：operation-center\n状态：本地Tag已创建\n说明：合并存在冲突", copy)
+        assertEquals("本地Tag已创建", TagOperationState.LOCAL_TAG_CREATED.userFacingLabel())
     }
 
     private fun operation(state: TagOperationState) = TagOperation(

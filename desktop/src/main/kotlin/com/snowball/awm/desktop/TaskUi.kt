@@ -162,7 +162,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                 }
                 if (tagWorkspaces.isNotEmpty()) {
                     IconActionGroup {
-                        ActionIconButton("批量 Tag", { showBatchTag = true }, Modifier.size(34.dp), enabled = !controller.busy, loading = tagOperationLoading) { Icon(Icons.Outlined.Sell, "批量 Tag", Modifier.size(18.dp)) }
+                        ActionIconButton("批量测试Tag", { showBatchTag = true }, Modifier.size(34.dp), enabled = !controller.busy, loading = tagOperationLoading) { Icon(Icons.Outlined.Sell, "批量测试Tag", Modifier.size(18.dp)) }
                     }
                 }
                 GitActionIconGroup(

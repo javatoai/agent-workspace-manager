@@ -432,7 +432,7 @@ internal fun AddTaskModuleDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (module.source == TaskModuleSource.TEMPORARY) Text("临时模块默认关闭 Tag；添加后行为会写入任务快照。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (module.source == TaskModuleSource.TEMPORARY) Text("临时模块默认关闭测试Tag；添加后行为会写入任务快照。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = {

@@ -319,7 +319,7 @@ Builder: ${System.getProperty("user.name")}
         val noTagError = assertFailsWith<IllegalStateException> {
             builder.preflight(config, taskDirectory, repositoryInfo.id)
         }
-        assertTrue(noTagError.message.orEmpty().contains("仓库没有可用的历史 Tag"))
+        assertTrue(noTagError.message.orEmpty().contains("仓库没有可用的历史测试Tag"))
 
         createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
         GitTestSupport.run(seed, "push", "origin", "--tags")

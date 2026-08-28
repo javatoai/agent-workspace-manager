@@ -28,6 +28,12 @@ fun interface MeegleExecutable {
 
     fun source(): MeegleCommandSource = MeegleCommandSource.PATH_FALLBACK
 
+    /** Best-effort local --version check for the currently resolved command. */
+    fun version(
+        runner: CommandRunner = ProcessCommandRunner(),
+        timeout: Duration = Duration.ofSeconds(10),
+    ): CommandVersionStatus = CommandVersionProbe.probe(current(), runner, timeout, environment())
+
     companion object {
         /** The historical behavior: rely on the process PATH with a bare command. */
         fun pathFallback(isWindows: Boolean = defaultIsWindows()): MeegleExecutable =

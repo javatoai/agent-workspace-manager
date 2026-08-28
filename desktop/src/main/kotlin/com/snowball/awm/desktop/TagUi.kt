@@ -43,6 +43,7 @@ import com.snowball.awm.core.TagOperation
 import com.snowball.awm.core.TagOperationState
 import com.snowball.awm.core.TagHistoryItem
 import com.snowball.awm.core.TagWorkspaceCheck
+import com.snowball.awm.core.userFacingLabel
 
 @Composable
 internal fun TagScreen(controller: DesktopApplication) {
@@ -61,8 +62,8 @@ internal fun TagScreen(controller: DesktopApplication) {
     LaunchedEffect(query, onlyProblems) { selectedOperationIds = emptySet() }
     if (showDeleteSelectedConfirmation) {
         ConfirmDialog(
-            title = "删除 ${selectedOperationIds.size} 条 Tag 构建记录",
-            message = "将永久删除选中的本地 Tag 构建记录及历史汇总。不会删除 Git Tag、代码、任务或需求资料目录。",
+            title = "删除 ${selectedOperationIds.size} 条Tag构建记录",
+            message = "将永久删除选中的本地Tag构建记录及历史汇总。不会删除 Git Tag、代码、任务或需求资料目录。",
             confirmLabel = "删除所选",
             destructive = true,
             enabled = !controller.busy,
@@ -90,7 +91,7 @@ internal fun TagScreen(controller: DesktopApplication) {
             }
         }
         if (controller.tagHistory.isEmpty()) {
-            EmptyState("还没有构建记录", "进入研发任务，在对应工作区点击“Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS }
+            EmptyState("还没有构建记录", "进入研发任务，在对应工作区点击“测试Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS }
             return@Column
         }
         Row(
@@ -103,7 +104,7 @@ internal fun TagScreen(controller: DesktopApplication) {
                 onValueChange = { query = it },
                 modifier = Modifier.weight(1f),
                 label = { Text("筛选构建记录") },
-                placeholder = { Text("按服务、任务、Tag 或分支筛选") },
+                placeholder = { Text("按服务、任务、测试Tag或分支筛选") },
                 singleLine = true,
             )
             FilterChip(
@@ -243,21 +244,21 @@ private fun TagHistoryGroupCard(
                 Icon(Icons.Outlined.Sell, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(11.dp))
                 Text(
-                    "${group.folderName} · ${if (isBatch) "批量 Tag" else "Tag"}",
+                    "${group.folderName} · ${if (isBatch) "批量测试Tag" else "测试Tag"}",
                     Modifier.weight(1f),
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(8.dp))
-                StatusPill(groupTagState(group.operations).name)
+                StatusPill(groupTagState(group.operations).userFacingLabel())
                 ActionIconButton(
-                    "复制 Tag 发版信息",
+                    "复制测试Tag发版信息",
                     onClick = { controller.copyTagHistoryGroupAnnouncement(group) },
                     modifier = Modifier.size(30.dp),
                     loading = copyingAnnouncement,
                 ) {
-                    Icon(Icons.Outlined.ContentCopy, "复制 Tag 发版信息", Modifier.size(16.dp))
+                    Icon(Icons.Outlined.ContentCopy, "复制测试Tag发版信息", Modifier.size(16.dp))
                 }
             }
             Text(
@@ -317,6 +318,13 @@ internal fun tagOperationIsRetryableInterrupted(operation: TagOperation): Boolea
     TagOperationState.SOURCE_BRANCH_PUSHED,
 )
 
+internal fun tagOperationRecordCopyText(operation: TagOperation): String =
+    operation.tag?.let { "${operation.serviceName} · $it" } ?: buildString {
+        append("服务名："); append(operation.serviceName); append('\n')
+        append("状态："); append(operation.state.userFacingLabel())
+        operation.message?.takeIf(String::isNotBlank)?.let { append('\n'); append("说明："); append(it) }
+    }
+
 @Composable
 private fun TagHistoryRow(
     controller: DesktopApplication,
@@ -328,12 +336,7 @@ private fun TagHistoryRow(
 ) {
     val isProblem = tagOperationIsProblem(operation)
     val copyRecord: () -> Unit = {
-        val copy = operation.tag?.let { "${operation.serviceName} · $it" } ?: buildString {
-            append("服务名："); append(operation.serviceName); append('\n')
-            append("状态："); append(operation.state.name)
-            operation.message?.takeIf(String::isNotBlank)?.let { append('\n'); append("说明："); append(it) }
-        }
-        controller.copyText(copy, "构建记录已复制")
+        controller.copyText(tagOperationRecordCopyText(operation), "构建记录已复制")
     }
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -348,20 +351,20 @@ private fun TagHistoryRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "${operation.serviceName} · ${operation.tag ?: "尚未生成 Tag"}",
+                    "${operation.serviceName} · ${operation.tag ?: "尚未生成测试Tag"}",
                     Modifier.weight(1f),
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(8.dp))
-                StatusPill(operation.state.name)
+                StatusPill(operation.state.userFacingLabel())
                 genbuTagStatusLabels(operation, controller.isGenbuProbeEnabled(operation)).forEach { label ->
                     Spacer(Modifier.width(4.dp))
                     StatusPill(label)
                 }
                 Spacer(Modifier.width(2.dp))
-                ActionIconButton("复制 Tag 构建记录", onClick = copyRecord, modifier = Modifier.size(30.dp)) {
+                ActionIconButton("复制Tag构建记录", onClick = copyRecord, modifier = Modifier.size(30.dp)) {
                     Icon(Icons.Outlined.ContentCopy, "复制构建记录", Modifier.size(16.dp))
                 }
             }
@@ -404,7 +407,7 @@ private fun TagHistoryRow(
             }
             if (operation.genbuStatus.stoppedByNewerRelease) {
                 Text(
-                    "后续 Tag 已发布，停止探测",
+                    "后续测试Tag已发布，停止探测",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -418,7 +421,7 @@ private fun TagHistoryRow(
 private fun TagInterruptedActions(controller: DesktopApplication, operation: TagOperation) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            "上次构建在源分支推送后被中断，尚未合并目标分支或创建 Tag。",
+            "上次Tag构建在源分支推送后被中断，尚未合并目标分支或创建测试Tag。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
@@ -428,7 +431,7 @@ private fun TagInterruptedActions(controller: DesktopApplication, operation: Tag
         ) {
             Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
             Spacer(Modifier.width(5.dp))
-            Text("重新构建 Tag")
+            Text("重新构建测试Tag")
         }
     }
 }
@@ -477,7 +480,7 @@ private fun TagConflictActions(
             ) {
                 Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
                 Spacer(Modifier.width(5.dp))
-                Text("已解决，重新构建 Tag")
+                Text("已解决，重新构建测试Tag")
             }
         }
         TagWorkspaceCheckResult(controller.conflictWorkspaceCheck(operation))
@@ -513,7 +516,7 @@ private fun TagWorkspaceCheckResult(check: TagWorkspaceCheck?) {
 
 internal fun tagConflictGuidance(operation: TagOperation): String {
     val target = operation.targetBranch?.let { "${operation.remote}/$it" } ?: "目标分支"
-    return "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再点击“已解决，重新构建 Tag”。"
+    return "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再点击“已解决，重新构建测试Tag”。"
 }
 
 internal fun tagConflictFilesSummary(operation: TagOperation): String =
@@ -526,7 +529,7 @@ internal fun tagOperationCanInspectWorkspace(operation: TagOperation): Boolean =
         (operation.state == TagOperationState.FAILED && operation.message.orEmpty().contains("特性工作区存在未提交改动"))
 
 internal fun tagWorkspaceCheckSummary(check: TagWorkspaceCheck): String =
-    if (check.clean) "工作区已干净，可以重新构建 Tag"
+    if (check.clean) "工作区已干净，可以重新构建测试Tag"
     else check.changes.joinToString("；", prefix = "仍有未提交改动：")
 
 internal fun genbuTagStatusLabels(operation: TagOperation, probeEnabled: Boolean = false): List<String> = buildList {
