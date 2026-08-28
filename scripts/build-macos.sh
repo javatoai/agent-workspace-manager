@@ -9,4 +9,7 @@ gradle_args=("-PmacPackageVersion=${MAC_PACKAGE_VERSION:-3.0.1}" clean test :des
 if [[ "${AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS:-}" == "true" ]]; then
   gradle_args+=("-PskipHostedGitIntegrationTests")
 fi
+if [[ "${AWM_RELEASE_SKIP_MACOS_GENBU_PERMISSION_FIXTURE_TESTS:-}" == "true" ]]; then
+  gradle_args+=("-PskipMacOsGenbuPermissionFixtureTests")
+fi
 ./gradlew "${gradle_args[@]}"

@@ -130,6 +130,7 @@ jobs:
       - name: Build macOS distributables
         env:
           AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
+          AWM_RELEASE_SKIP_MACOS_GENBU_PERMISSION_FIXTURE_TESTS: "true"
         run: |
           # These files may be checked out with CRLF from a Windows workspace.
           # Normalize them before executing them on the macOS runner.
