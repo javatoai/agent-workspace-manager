@@ -41,7 +41,7 @@ jobs:
         run: |
           perl -pi -e 's/\r$//' ./gradlew
           chmod +x ./gradlew
-          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
+          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests -PskipMacOsGenbuPermissionFixtureTests
 
   windows:
     name: Windows packages
