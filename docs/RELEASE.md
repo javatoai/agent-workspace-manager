@@ -5,7 +5,7 @@
 ## 分支与标签
 
 - `master`：默认分支，持续集成和 `continuous` 预发布的来源；
-- `vX.Y.Z`：正式版本标签，例如 `v0.3.0`；
+- `vX.Y.Z`：正式版本标签，例如 `v1.0.0`；
 - `codex/feature-*`：功能开发分支，合并前完成测试与审查。
 
 正式发布应在 `master` 已通过本地验证后创建 annotated tag。不要移动既有版本标签；需要修复时发布新的补丁版本。
@@ -37,7 +37,7 @@ desktop/build/compose/binaries/main/msi/
 macOS 必须在 macOS 主机上构建 DMG：
 
 ```bash
-MAC_PACKAGE_VERSION=0.3.0 ./scripts/build-macos.sh
+./scripts/build-macos.sh
 ```
 
 DMG 产物位于 `desktop/build/compose/binaries/main/dmg/`。不要在 Windows 上声称已验证 macOS DMG。

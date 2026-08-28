@@ -50,7 +50,7 @@ abstract class CreateJlinkRuntime : DefaultTask() {
     }
 }
 
-val macPackageVersion = providers.gradleProperty("macPackageVersion").orElse("3.0.1")
+val macPackageVersion = version.toString()
 val portableCliVersion = layout.buildDirectory.file("generated/portable-cli/VERSION")
 val portableCliVersionText = version.toString()
 val portableCliRuntime = layout.buildDirectory.dir("generated/portable-cli-runtime")
@@ -143,10 +143,8 @@ compose.desktop {
             appResourcesRootDir.set(layout.buildDirectory.dir("app-resources"))
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Dmg)
             packageName = "Agent Workspace Manager"
-            // macOS jpackage rejects versions whose first component is zero.
-            // CI overrides this with a compatible internal app version while the
-            // project and release version remain 0.12.0.
-            packageVersion = macPackageVersion.get()
+            // Keep native package metadata aligned with the Gradle product version.
+            packageVersion = macPackageVersion
             description = "Task-level Agent development workspace orchestrator"
             vendor = "Snowball Technology"
 

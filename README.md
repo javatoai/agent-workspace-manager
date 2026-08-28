@@ -4,7 +4,7 @@ Agent Workspace Manager（AWM）是一个桌面工具，用来把“一项需求
 
 它适合需要同时修改多个服务、希望使用 Git Worktree 隔离任务、并且会配合 Codex、Cursor 等 Agent 工具开发的人或团队。创建任务后，AWM 会按你选择的服务建立独立工作区、生成任务说明、展示 Git 改动与推送状态，并在需要时构建 Tag。
 
-当前版本：**0.12.0**
+当前版本：**1.0.0**
 
 ## 适合什么场景
 
@@ -76,7 +76,7 @@ macOS/Linux 绿色包同样内置 `resources/cli/bin/awm` 与相邻的 `resource
 先确认 `awm --help` 在 Codex 新开的终端中可用，再运行以下两条命令安装与当前发布版本绑定的插件：
 
 ```powershell
-codex plugin marketplace add https://github.com/javatoai/agent-workspace-manager.git --ref v0.12.0
+codex plugin marketplace add https://github.com/javatoai/agent-workspace-manager.git --ref v1.0.0
 codex plugin add awm-codex@agent-workspace-manager
 ```
 
@@ -97,7 +97,7 @@ codex plugin add awm-codex@agent-workspace-manager
 
 每个任务目录包含严格版本的 `agent-workspace.json`、最终合成的 `AGENTS.md`、Tag 构建历史以及服务 Worktree 或独立克隆。
 
-`0.12.0` 使用字符串 schema。仅相同主次版本的 PATCH 可兼容读取；主版本或次版本不同则拒绝读取，且不会迁移或改写旧数据。`0.11.x` 及更早数据不会读取、迁移或删除。升级时需手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `0.12.0`，并在设置页重新保存需求资料根目录与资料子目录。
+`1.0.0` 使用字符串 schema。仅相同主次版本的 PATCH 可兼容读取；主版本或次版本不同则拒绝读取，且不会迁移或改写旧数据。`0.12.x` 及更早数据不会读取、迁移或删除。升级时需先备份数据，手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `1.0.0`，并在设置页重新保存需求资料根目录与资料子目录。
 
 需求资料统一使用设置页填写的 `requirementMaterialsRoot` 和 `requirementMaterialsSubdirectory`：`<资料根>/<Sprint>/<需求编号>-<任务文件夹名>/<资料子目录>`。桌面端创建或复用资料目录；`awm agent` 在同一目录的 `write_root` 内补写过程文档，Sprint 总览保留在资料根的 Sprint 层。旧的独立过程文档目录不会自动搬迁。
 

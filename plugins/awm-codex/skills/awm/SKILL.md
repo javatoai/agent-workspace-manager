@@ -53,8 +53,8 @@ request, interpreting a conflict, or handling an executor failure.
   `requirementMaterialsSubdirectory`. Agent process documents are written to
   the plan's `write_root` inside that same directory; the task folder name,
   not the request title, determines the requirement directory name.
-- Never use the removed `requirementDocumentationRoot` field. A 0.12.x install
-  strictly rejects 0.11.x and earlier config/task schemas and does not migrate
+- Never use the removed `requirementDocumentationRoot` field. A 1.0.x install
+  strictly rejects 0.12.x and earlier config/task schemas and does not migrate
   old standalone documentation directories.
 - The generated task `AGENTS.md` requires future coding agents to read the
   handoff before performing side-effecting work.

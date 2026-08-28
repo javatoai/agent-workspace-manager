@@ -333,15 +333,26 @@ class ConfigStoreTest {
         Files.createDirectories(paths.home)
         Files.writeString(
             paths.config,
-            """{"schemaVersion":"0.12.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
+            """{"schemaVersion":"1.0.9","groups":[{"id":"default","name":"默认组","services":[]}]}""",
         )
 
         val store = ConfigStore(paths)
         val compatible = store.load()
-        assertEquals("0.12.9", compatible.schemaVersion)
+        assertEquals("1.0.9", compatible.schemaVersion)
 
         store.save(compatible)
         assertEquals(CURRENT_APP_CONFIG_SCHEMA_VERSION, store.load().schemaVersion)
+    }
+
+    @Test
+    fun `0 12 config is rejected without being rewritten`() {
+        val paths = ApplicationPaths(temporary.resolve("legacy-0-12"))
+        Files.createDirectories(paths.home)
+        val legacy = """{"schemaVersion":"0.12.9","groups":[{"id":"default","name":"默认组","services":[]}]}"""
+        Files.writeString(paths.config, legacy)
+
+        assertThrows(UnsupportedConfigVersionException::class.java) { ConfigStore(paths).load() }
+        assertEquals(legacy, Files.readString(paths.config))
     }
 
     @Test

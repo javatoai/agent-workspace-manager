@@ -48,7 +48,7 @@ Sprint resolution, process-document layout, and branch reuse handling.
   The requirement directory name always uses the task folder name; a request's
   `requirementTitle` is a Markdown title only.
 - Do not use or recreate the removed `requirementDocumentationRoot` field. A
-  0.12.x install strictly rejects 0.11.x and earlier config/task schemas and
+  1.0.x install strictly rejects 0.12.x and earlier config/task schemas and
   does not migrate old standalone documentation directories.
 - A manually created desktop task has no mandatory `.awm/HANDOFF.md` and does
   not automatically create process documents; it only creates the configured

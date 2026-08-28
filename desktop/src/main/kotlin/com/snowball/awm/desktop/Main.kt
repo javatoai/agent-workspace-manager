@@ -122,6 +122,7 @@ import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.TaskNaming
+import com.snowball.awm.core.CURRENT_PRODUCT_VERSION
 import com.snowball.awm.core.RequirementDraftState
 import com.snowball.awm.core.WorkspaceToolLaunchStatus
 import com.snowball.awm.core.ThemePreference
@@ -173,7 +174,7 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "Agent Workspace Manager 0.12.0",
+            title = "Agent Workspace Manager $CURRENT_PRODUCT_VERSION",
             state = state,
             icon = painterResource(Res.drawable.app_icon),
         ) {

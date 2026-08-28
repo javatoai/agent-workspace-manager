@@ -14,6 +14,7 @@ import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.BatchRepositoryAddResult
 import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.ConfigStore
+import com.snowball.awm.core.CURRENT_PRODUCT_VERSION
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
 import com.snowball.awm.core.ConfiguredGitExecutable
@@ -1058,7 +1059,7 @@ class DesktopApplication(
         }
         val messages = buildList {
             if (scan.unsupportedDirectories.isNotEmpty()) {
-                add("已忽略 ${scan.unsupportedDirectories.size} 个与当前 AWM 0.12.0 不兼容的任务目录")
+                add("已忽略 ${scan.unsupportedDirectories.size} 个与当前 AWM $CURRENT_PRODUCT_VERSION 不兼容的任务目录")
             }
             if (scan.failures.isNotEmpty()) {
                 add(

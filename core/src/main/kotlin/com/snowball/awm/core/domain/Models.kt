@@ -7,8 +7,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "0.12.0"
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "0.12.0"
+const val CURRENT_PRODUCT_VERSION = "1.0.0"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 
@@ -213,7 +214,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 0.12.x is intentionally strict and does not migrate earlier schemas. */
+/** Version 1.0.x is intentionally strict and does not migrate earlier schemas. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
