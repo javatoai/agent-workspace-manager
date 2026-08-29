@@ -377,6 +377,12 @@ class TaskApplicationService(
         if (normalizedInput.isEmpty()) {
             return ResolvedRequirementMaterials(null, RequirementMaterialsDirectory())
         }
+        if (!config.requirementMaterialsConfigured) {
+            return ResolvedRequirementMaterials(
+                requirementId = requirementMaterials.parseRequirementId(normalizedInput),
+                directory = RequirementMaterialsDirectory(),
+            )
+        }
         return when (
             val result = requirementMaterials.ensure(
                 requirementInput = normalizedInput,

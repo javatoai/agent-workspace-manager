@@ -4,11 +4,15 @@ import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.RequirementMetadata
 import com.snowball.awm.core.RequirementMetadataProvider
+import com.snowball.awm.core.RequirementMaterialsRequest
+import com.snowball.awm.core.RequirementMaterialsResult
 import com.snowball.awm.core.RequirementParticipants
 import com.snowball.awm.core.RequirementPerson
 import com.snowball.awm.core.TaskManifest
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -18,6 +22,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Test
 import java.time.Clock
 import java.time.Instant
@@ -131,6 +136,131 @@ class RequirementControllerTest {
         assertEquals(listOf("测试同事"), first?.participants?.qcOwners?.map { it.name })
         assertEquals(first, second)
         assertEquals(1, calls.get())
+    }
+
+    @Test
+    fun `materials preview stays hidden when configuration or inputs are incomplete`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        var calls = 0
+        val session = AppSessionStore(AppConfig(), emptyList())
+        val controller = RequirementController(
+            session = session,
+            scope = this,
+            coordinator = RequirementMetadataCoordinator(
+                provider = RequirementMetadataProvider { null },
+                scope = this,
+                ioDispatcher = dispatcher,
+            ),
+            ioDispatcher = dispatcher,
+            materialPreviewer = suspend {
+                calls++
+                RequirementMaterialsResult.Failed("1", "should not be called")
+            },
+        )
+
+        controller.requestMaterialsPreview("1", "任务")
+        advanceUntilIdle()
+
+        assertIs<RequirementMaterialsPreviewState.Hidden>(controller.materialsPreviewState)
+        assertEquals(0, calls)
+
+        session.config = session.config.copy(requirementMaterialsRoot = "C:/materials")
+        controller.requestMaterialsPreview("1", "任务")
+        advanceUntilIdle()
+
+        assertIs<RequirementMaterialsPreviewState.Hidden>(controller.materialsPreviewState)
+        assertEquals(0, calls)
+
+        val configured = session.config.copy(
+            requirementMaterialsRoot = "C:/materials",
+            requirementMaterialsSubdirectory = "研发",
+        )
+        session.config = configured
+        controller.requestMaterialsPreview("not-a-requirement", "任务")
+        advanceUntilIdle()
+
+        assertIs<RequirementMaterialsPreviewState.Hidden>(controller.materialsPreviewState)
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun `materials preview exposes a non blocking failure`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val session = AppSessionStore(
+            AppConfig(
+                requirementMaterialsRoot = "C:/materials",
+                requirementMaterialsSubdirectory = "研发",
+            ),
+            emptyList(),
+        )
+        val controller = RequirementController(
+            session = session,
+            scope = this,
+            coordinator = RequirementMetadataCoordinator(
+                provider = RequirementMetadataProvider { null },
+                scope = this,
+                ioDispatcher = dispatcher,
+            ),
+            ioDispatcher = dispatcher,
+            materialPreviewer = {
+                RequirementMaterialsResult.Failed("1", "需求没有关联当前进行中的 Sprint")
+            },
+        )
+
+        controller.requestMaterialsPreview("1", "任务")
+        advanceUntilIdle()
+
+        val failed = assertIs<RequirementMaterialsPreviewState.Failed>(controller.materialsPreviewState)
+        assertEquals("1", failed.requirementId)
+        assertEquals("需求没有关联当前进行中的 Sprint", failed.reason)
+    }
+
+    @Test
+    fun `materials preview discards a late result for an older input`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val session = AppSessionStore(
+            AppConfig(
+                requirementMaterialsRoot = "C:/materials",
+                requirementMaterialsSubdirectory = "研发",
+            ),
+            emptyList(),
+        )
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val controller = RequirementController(
+            session = session,
+            scope = this,
+            coordinator = RequirementMetadataCoordinator(
+                provider = RequirementMetadataProvider { null },
+                scope = this,
+                ioDispatcher = dispatcher,
+            ),
+            ioDispatcher = dispatcher,
+            materialPreviewer = suspend { request: RequirementMaterialsRequest ->
+                if (request.requirementInput == "1") {
+                    firstStarted.complete(Unit)
+                    withContext(NonCancellable) { releaseFirst.await() }
+                }
+                RequirementMaterialsResult.Ready(
+                    requirementId = request.requirementInput,
+                    requirementPath = java.nio.file.Path.of("C:/materials/${request.requirementInput}"),
+                    writeRoot = java.nio.file.Path.of("C:/materials/${request.requirementInput}/研发"),
+                    status = RequirementMaterialsResult.Ready.Status.CREATED,
+                )
+            },
+        )
+
+        controller.requestMaterialsPreview("1", "任务一")
+        advanceUntilIdle()
+        firstStarted.await()
+        controller.requestMaterialsPreview("2", "任务二")
+        advanceUntilIdle()
+
+        assertIs<RequirementMaterialsPreviewState.Ready>(controller.materialsPreviewState)
+        assertEquals("2", (controller.materialsPreviewState as RequirementMaterialsPreviewState.Ready).requirementId)
+        releaseFirst.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("2", (controller.materialsPreviewState as RequirementMaterialsPreviewState.Ready).requirementId)
     }
 
     @Test

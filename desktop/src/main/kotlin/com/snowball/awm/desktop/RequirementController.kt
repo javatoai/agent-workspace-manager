@@ -11,10 +11,15 @@ import com.snowball.awm.core.MeegleRequirementLinkSource
 import com.snowball.awm.core.RequirementLinkCandidate
 import com.snowball.awm.core.RequirementLinkFailure
 import com.snowball.awm.core.RequirementLinkFailureLog
+import com.snowball.awm.core.RequirementMaterialsRequest
+import com.snowball.awm.core.RequirementMaterialsResult
+import com.snowball.awm.core.RequirementMaterialsService
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.TaskNaming
 import com.snowball.awm.core.fetch
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -24,6 +29,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import java.time.Clock
 import java.time.Duration
 
@@ -41,6 +47,21 @@ internal sealed interface RequirementFetchResult {
     data object Failure : RequirementFetchResult
 }
 private data class RequirementCacheEntry(val result: RequirementFetchResult, val expiresAtMillis: Long)
+
+/** The non-blocking state of the optional requirement materials directory preview. */
+sealed interface RequirementMaterialsPreviewState {
+    data object Hidden : RequirementMaterialsPreviewState
+    data object Loading : RequirementMaterialsPreviewState
+    data class Ready(
+        val requirementId: String,
+        val path: String,
+        val status: RequirementMaterialsResult.Ready.Status,
+    ) : RequirementMaterialsPreviewState
+    data class Failed(
+        val requirementId: String?,
+        val reason: String,
+    ) : RequirementMaterialsPreviewState
+}
 
 /**
  * Deduplicates local Meegle calls and bounds concurrency. Failures intentionally
@@ -99,6 +120,8 @@ class RequirementController internal constructor(
     private val linkSource: MeegleRequirementLinkSource? = null,
     private val failureLog: RequirementLinkFailureLog? = null,
     private val ioDispatcher: CoroutineDispatcher? = null,
+    private val requirementMaterials: RequirementMaterialsService = RequirementMaterialsService(),
+    private val materialPreviewer: (suspend (RequirementMaterialsRequest) -> RequirementMaterialsResult)? = null,
 ) {
     var states by mutableStateOf<Map<String, RequirementUiState>>(emptyMap())
         private set
@@ -109,6 +132,10 @@ class RequirementController internal constructor(
         private set
     var candidatesLoading by mutableStateOf(false)
         private set
+    var materialsPreviewState by mutableStateOf<RequirementMaterialsPreviewState>(RequirementMaterialsPreviewState.Hidden)
+        private set
+    private var materialsPreviewJob: Job? = null
+    private var materialsPreviewGeneration = 0L
 
     fun stateFor(task: TaskManifest): RequirementUiState =
         states[task.taskDirectoryName] ?: RequirementUiState.NotLoaded
@@ -181,6 +208,47 @@ class RequirementController internal constructor(
         }
     }
 
+    /** Starts an optional, read-only materials-directory preview away from Compose's main thread. */
+    fun requestMaterialsPreview(requirementInput: String, folderName: String) {
+        val generation = ++materialsPreviewGeneration
+        materialsPreviewJob?.cancel()
+        val config = session.config
+        val input = requirementInput.trim()
+        val nameError = folderName.takeUnless(String::isBlank)?.let(TaskNaming::directoryNameValidationError)
+        val inputsReady = input.isNotBlank() && folderName.isNotBlank() && nameError == null &&
+            requirementMaterials.parseRequirementId(input) != null
+        if (!config.requirementMaterialsConfigured || !inputsReady) {
+            materialsPreviewState = RequirementMaterialsPreviewState.Hidden
+            return
+        }
+
+        val request = RequirementMaterialsRequest(
+            requirementInput = input,
+            folderName = folderName,
+            materialsRoot = config.requirementMaterialsRoot,
+            subdirectoryName = config.requirementMaterialsSubdirectory,
+            projects = config.meegleProjects,
+        )
+        materialsPreviewState = RequirementMaterialsPreviewState.Loading
+        val preview = materialPreviewer ?: { value: RequirementMaterialsRequest -> requirementMaterials.preview(value) }
+        materialsPreviewJob = scope.launch {
+            val outcome = runCatching {
+                delay(250)
+                withContext(ioDispatcher ?: Dispatchers.IO) { preview(request) }
+            }
+            if (generation != materialsPreviewGeneration) return@launch
+            materialsPreviewState = outcome.fold(
+                onSuccess = ::toMaterialsPreviewState,
+                onFailure = { error ->
+                    RequirementMaterialsPreviewState.Failed(
+                        requirementId = requirementMaterials.parseRequirementId(input),
+                        reason = "需求资料目录预检失败：${error.message ?: error::class.simpleName}",
+                    )
+                },
+            )
+        }
+    }
+
     /** Runs once when the create dialog opens; failures remain non-blocking. */
     fun loadCandidates() {
         val source = linkSource ?: return
@@ -210,6 +278,7 @@ class RequirementController internal constructor(
         generations.keys.forEach { generations[it] = (generations[it] ?: 0L) + 1L }
         states = emptyMap()
         candidates = emptyList()
+        clearMaterialsPreview()
         scope.launch { coordinator.clear() }
     }
 
@@ -221,6 +290,26 @@ class RequirementController internal constructor(
 
     fun close() {
         draftJob?.cancel()
+        clearMaterialsPreview()
+    }
+
+    fun clearMaterialsPreview() {
+        materialsPreviewGeneration++
+        materialsPreviewJob?.cancel()
+        materialsPreviewJob = null
+        materialsPreviewState = RequirementMaterialsPreviewState.Hidden
+    }
+
+    private fun toMaterialsPreviewState(result: RequirementMaterialsResult): RequirementMaterialsPreviewState = when (result) {
+        is RequirementMaterialsResult.Ready -> RequirementMaterialsPreviewState.Ready(
+            requirementId = result.requirementId,
+            path = result.writeRoot.toAbsolutePath().normalize().toString(),
+            status = result.status,
+        )
+        is RequirementMaterialsResult.Failed -> RequirementMaterialsPreviewState.Failed(
+            requirementId = result.requirementId,
+            reason = result.reason,
+        )
     }
 
     private fun projectKey(workItem: FeishuWorkItemLink, config: AppConfig): String? =

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -57,6 +58,9 @@ import com.snowball.awm.core.BranchPrefixResolver
 import com.snowball.awm.core.BranchReuseConflict
 import com.snowball.awm.core.BranchReuseKey
 import com.snowball.awm.core.ModuleBaseOverride
+import com.snowball.awm.core.RequirementMaterialsDirectory
+import com.snowball.awm.core.RequirementMaterialsResult
+import com.snowball.awm.core.RequirementMaterialsStatus
 import com.snowball.awm.core.RequirementDraftState
 import com.snowball.awm.core.TaskModuleSource
 import com.snowball.awm.core.TaskNaming
@@ -114,6 +118,13 @@ internal fun CreateTaskDialog(
     val taskNameError = draft.taskName.takeUnless(String::isBlank)
         ?.let(TaskNaming::directoryNameValidationError)
     val unresolvedBranch = BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch)
+    val materialsPreview = controller.requirementMaterialsPreviewState
+    val materialsDirectory = (materialsPreview as? RequirementMaterialsPreviewState.Ready)?.let {
+        RequirementMaterialsDirectory(
+            status = RequirementMaterialsStatus.READY,
+            writeRoot = it.path,
+        )
+    } ?: RequirementMaterialsDirectory()
     val hasDraftChanges = draft.requirementLink.isNotBlank() || draft.taskName.isNotBlank() ||
         draft.branchEdited || notes.isNotBlank() || selected.isNotEmpty() || groupId != initialGroup.id ||
         selectedToolIds != initialGroup.defaultWorkspaceToolIds.toSet()
@@ -126,6 +137,7 @@ internal fun CreateTaskDialog(
         draft.requirementLink,
         notes,
         moduleDraftsByService.toMap(),
+        materialsDirectory,
     ) {
         controller.previewAgents(
             draft.taskName,
@@ -135,6 +147,7 @@ internal fun CreateTaskDialog(
             draft.requirementLink,
             notes,
             effectiveSelections(),
+            materialsDirectory,
         )
     }
     LaunchedEffect(draft.requirementLink) {
@@ -143,10 +156,20 @@ internal fun CreateTaskDialog(
             updateDraft(draft.applyMetadata(requestedLink, metadata))
         }
     }
+    LaunchedEffect(
+        draft.requirementLink,
+        draft.taskName,
+        controller.config.requirementMaterialsRoot,
+        controller.config.requirementMaterialsSubdirectory,
+        controller.config.meegleProjects,
+    ) {
+        controller.requestRequirementMaterialsPreview(draft.requirementLink, draft.taskName)
+    }
     LaunchedEffect(Unit) { controller.requirementController.loadCandidates() }
     DisposableEffect(Unit) {
         onDispose {
             controller.cancelRemoteBranchLoads()
+            controller.requirementController.clearMaterialsPreview()
         }
     }
     Dialog(onDismissRequest = requestDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -260,6 +283,30 @@ internal fun CreateTaskDialog(
                             supportingText = { taskNameError?.let { Text(it) } },
                             singleLine = true,
                         )
+                        when (val state = materialsPreview) {
+                            RequirementMaterialsPreviewState.Hidden -> Unit
+                            RequirementMaterialsPreviewState.Loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("正在预检需求资料目录…", style = MaterialTheme.typography.bodySmall)
+                            }
+                            is RequirementMaterialsPreviewState.Ready -> {
+                                val status = if (state.status == RequirementMaterialsResult.Ready.Status.REUSED) {
+                                    "将复用"
+                                } else {
+                                    "预计新建"
+                                }
+                                Text("需求资料目录：$status", style = MaterialTheme.typography.bodySmall)
+                                SelectionContainer {
+                                    Text(state.path, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            is RequirementMaterialsPreviewState.Failed -> Text(
+                                "需求资料目录预检失败（不影响创建）：${state.reason}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         OutlinedTextField(
                             value = draft.branch,
                             onValueChange = { updateDraft(draft.editBranch(it)) },

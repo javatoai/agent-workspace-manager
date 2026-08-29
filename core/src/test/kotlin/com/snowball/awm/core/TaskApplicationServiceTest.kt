@@ -108,11 +108,8 @@ class TaskApplicationServiceTest {
     }
 
     @Test
-    fun `materials directory failure does not block creation and retry persists a reused directory`() {
+    fun `unconfigured materials directory is not requested during creation`() {
         val taskRoot = Files.createTempDirectory("task-materials-")
-        val materialsRoot = Files.createTempDirectory("requirement-materials-")
-        val existingRequirement = materialsRoot.resolve("Sprint A").resolve("7035269559-existing")
-        Files.createDirectories(existingRequirement)
         val provisioner = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
         val documents = RecordingAgentDocuments()
         val manifests = ManifestStore()
@@ -137,12 +134,40 @@ class TaskApplicationServiceTest {
         )
 
         assertEquals("7035269559", created.requirementId)
-        assertEquals(RequirementMaterialsStatus.FAILED, created.requirementMaterials.status)
-        assertTrue(created.requirementMaterials.failureReason.orEmpty().contains("资料根路径"))
+        assertEquals(RequirementMaterialsStatus.NOT_REQUESTED, created.requirementMaterials.status)
+        assertEquals(null, created.requirementMaterials.writeRoot)
+        assertEquals(null, created.requirementMaterials.failureReason)
         assertTrue(Files.exists(taskRoot.resolve("支付优化").resolve(ManifestStore.FILE_NAME)))
+    }
+
+    @Test
+    fun `a not requested materials directory can be resolved after settings are configured`() {
+        val taskRoot = Files.createTempDirectory("task-materials-retry-")
+        val materialsRoot = Files.createTempDirectory("requirement-materials-")
+        val existingRequirement = materialsRoot.resolve("Sprint A").resolve("7035269559-existing")
+        Files.createDirectories(existingRequirement)
+        val manifests = ManifestStore()
+        val application = TaskApplicationService(
+            manifests = manifests,
+            provisioning = WorkspaceProvisioningService(listOf(RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE))),
+            agentDocuments = RecordingAgentDocuments(),
+            requirementMaterials = RequirementMaterialsService(),
+            operationLock = NoOpTaskOperationLock,
+        )
+
+        application.create(
+            taskConfig(taskRoot),
+            CreateGroupedTaskRequest(
+                folderName = "支付优化",
+                featureBranch = "feature/7035269559",
+                groupId = "alpha",
+                serviceIds = listOf("standard"),
+                requirementLink = "7035269559",
+            ),
+        )
 
         val retried = application.retryRequirementMaterials(
-            unconfigured.copy(
+            taskConfig(taskRoot).copy(
                 requirementMaterialsRoot = materialsRoot.toString(),
                 requirementMaterialsSubdirectory = "研发资料",
             ),
@@ -153,7 +178,6 @@ class TaskApplicationServiceTest {
         assertEquals(existingRequirement.resolve("研发资料").toString(), retried.requirementMaterials.writeRoot)
         assertTrue(Files.isDirectory(existingRequirement.resolve("研发资料")))
         assertEquals(retried.requirementMaterials, manifests.load(taskRoot.resolve("支付优化")).requirementMaterials)
-        assertEquals(retried.requirementMaterials, documents.lastManifest?.requirementMaterials)
     }
 
     @Test

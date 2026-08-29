@@ -58,6 +58,7 @@ import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RepositoryRemoteCatalog
 import com.snowball.awm.core.RequirementMetadataProvider
 import com.snowball.awm.core.RequirementMetadata
+import com.snowball.awm.core.RequirementMaterialsDirectory
 import com.snowball.awm.core.RequirementMaterialsService
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagBuildService
@@ -187,6 +188,8 @@ class DesktopApplication(
     private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, git = gitClient, meegleExecutable = meegleExecutable),
     private val configStore: ConfigStore = ConfigStore(paths),
     private val manifests: ManifestStore = ManifestStore(),
+    private val requirementMaterialsService: RequirementMaterialsService =
+        RequirementMaterialsService(meegleExecutable = meegleExecutable),
     private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(gitClient),
     private val groupConfigurations: GroupConfigurationService =
         GroupConfigurationService(configStore, repositoryInspector),
@@ -213,7 +216,7 @@ class DesktopApplication(
         manifests = manifests,
         provisioning = provisioning,
         agentDocuments = agentDocuments,
-        requirementMaterials = RequirementMaterialsService(meegleExecutable = meegleExecutable),
+        requirementMaterials = requirementMaterialsService,
         lifecycle = GitWorkspaceLifecycle(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
         operationLock = operationLock,
         branchValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
@@ -315,6 +318,7 @@ class DesktopApplication(
         linkSource = requirementLinkSource,
         failureLog = requirementLinkFailures,
         ioDispatcher = ioDispatcher,
+        requirementMaterials = requirementMaterialsService,
     )
     val desktopActions = DesktopActions(
         integration = desktopIntegration,
@@ -688,6 +692,10 @@ class DesktopApplication(
     fun readGroupAgents(groupId: String): String = agentInstructionsController.readGroup(groupId)
     fun saveGroupAgents(groupId: String, content: String) = agentInstructionsController.saveGroup(groupId, content)
     fun markGroupAgentsEdited(groupId: String, content: String) = agentInstructionsController.markGroupEdited(groupId, content)
+    val requirementMaterialsPreviewState: RequirementMaterialsPreviewState
+        get() = requirementController.materialsPreviewState
+    fun requestRequirementMaterialsPreview(requirementInput: String, folderName: String) =
+        requirementController.requestMaterialsPreview(requirementInput, folderName)
     fun previewAgents(
         folderName: String,
         branch: String,
@@ -696,6 +704,7 @@ class DesktopApplication(
         requirementLink: String,
         notes: String,
         serviceSelections: List<TaskServiceSelection> = emptyList(),
+        requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
     ): String = agentInstructionsController.preview(
         folderName,
         branch,
@@ -704,6 +713,7 @@ class DesktopApplication(
         requirementLink,
         notes,
         serviceSelections,
+        requirementMaterials,
     )
     fun previewTaskAgents(task: TaskManifest, notes: String): String = agentInstructionsController.previewTask(task, notes)
     fun createTask(
@@ -1087,7 +1097,9 @@ class DesktopApplication(
     }
 
     private fun applyConfig(updated: AppConfig) {
-        val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects
+        val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects ||
+            config.requirementMaterialsRoot != updated.requirementMaterialsRoot ||
+            config.requirementMaterialsSubdirectory != updated.requirementMaterialsSubdirectory
         config = updated
         configurationLoadError = null
         if (navigation == NavigationItem.TAG && !TagNavigationPolicy.isVisible(updated)) {

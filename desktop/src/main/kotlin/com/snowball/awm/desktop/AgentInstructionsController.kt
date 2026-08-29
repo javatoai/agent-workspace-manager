@@ -19,6 +19,7 @@ import com.snowball.awm.core.TaskServiceSelection
 import com.snowball.awm.core.TaskModuleSelection
 import com.snowball.awm.core.RemoteBranchRef
 import com.snowball.awm.core.RepositoryConfig
+import com.snowball.awm.core.RequirementMaterialsDirectory
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskApplicationService
 import com.snowball.awm.core.TaskBranchNaming
@@ -174,6 +175,7 @@ class AgentInstructionsController internal constructor(
         requirementLink: String,
         notes: String,
         serviceSelections: List<TaskServiceSelection> = emptyList(),
+        requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
     ): String {
         val config = session.config
         val root = config.taskRoot?.let(Path::of) ?: paths.temp
@@ -218,6 +220,7 @@ class AgentInstructionsController internal constructor(
             requirementLink = requirementLink.trim(),
             createdAt = now,
             updatedAt = now,
+            requirementMaterials = requirementMaterials,
             services = workspaces,
             groupId = groupId,
         )

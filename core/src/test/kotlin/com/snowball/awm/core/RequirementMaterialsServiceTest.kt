@@ -1,6 +1,7 @@
 package com.snowball.awm.core
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledOnOs
@@ -13,6 +14,76 @@ import java.time.Duration
 class RequirementMaterialsServiceTest {
     @TempDir
     lateinit var root: Path
+
+    @Test
+    fun `preview reuses the only matching directory without creating subdirectory or lock`() {
+        val existing = Files.createDirectories(root.resolve("Sprint-8").resolve("123-existing"))
+        val runner = RecordingRunner { error("CLI must not be called for a reused directory") }
+
+        val result = service(runner).preview(
+            RequirementMaterialsRequest("123", "新名称", root.toString(), "研发", projects()),
+        )
+
+        val ready = result as RequirementMaterialsResult.Ready
+        assertEquals(RequirementMaterialsResult.Ready.Status.REUSED, ready.status)
+        assertEquals(existing.resolve("研发"), ready.writeRoot)
+        assertFalse(Files.exists(ready.writeRoot))
+        assertFalse(Files.exists(root.resolve(".awm-requirement-materials.lock")))
+        assertEquals(0, runner.commands.size)
+    }
+
+    @Test
+    fun `preview rejects a reused directory whose process manifest belongs to another requirement`() {
+        val existing = Files.createDirectories(root.resolve("Sprint-8").resolve("123-existing"))
+        Files.createDirectories(existing.resolve("研发")).resolve(".awm-requirement.json").toFile().writeText(
+            """{"identity":{"space":"obt","kind":"userstory","workItemId":"999"}}""",
+        )
+        val runner = RecordingRunner { error("CLI must not be called after an identity mismatch") }
+
+        val result = service(runner).preview(
+            RequirementMaterialsRequest("123", "task", root.toString(), "研发", projects()),
+        )
+
+        assertTrue(result is RequirementMaterialsResult.Failed)
+        assertTrue((result as RequirementMaterialsResult.Failed).reason.contains("需求编号不一致"))
+        assertFalse(Files.exists(root.resolve(".awm-requirement-materials.lock")))
+        assertEquals(0, runner.commands.size)
+    }
+
+    @Test
+    fun `preview resolves a new sprint directory without creating any directory or lock`() {
+        val runner = RecordingRunner { command ->
+            when {
+                command.contains("meta-fields") -> CommandResult(0, """{"list":[{"field_name":"Sprint","field_key":"field_sprint"}]}""", "")
+                command.contains("--fields") -> CommandResult(
+                    0,
+                    """{"work_item_fields":[{"key":"field_sprint","value":[{"id":"sprint-1"}]}]}""",
+                    "",
+                )
+                command.contains("workitem") && command.contains("get") -> CommandResult(
+                    0,
+                    """{"work_item_id":"123","work_item_attribute":{"work_item_type":{"key":"User Story"}}}""",
+                    "",
+                )
+                command.contains("query") -> CommandResult(
+                    0,
+                    """{"data":{"1":[{"moql_field_list":[{"key":"work_item_id","value":{"long_value":"sprint-1"}},{"key":"name","value":{"string_value":"Sprint 8"}},{"key":"work_item_status","value":{"key_label_value_list":[{"key":"in_progress","label":"进行中"}]}},{"key":"archiving_status","value":{"bool_value":false}}]}]}}""",
+                    "",
+                )
+                else -> error("unexpected command: $command")
+            }
+        }
+
+        val result = service(runner).preview(
+            RequirementMaterialsRequest("123", "task", root.toString(), "研发", projects()),
+        )
+
+        val ready = result as RequirementMaterialsResult.Ready
+        assertEquals(RequirementMaterialsResult.Ready.Status.CREATED, ready.status)
+        assertEquals(root.resolve("Sprint 8").resolve("123-task").resolve("研发"), ready.writeRoot)
+        assertFalse(Files.exists(root.resolve("Sprint 8")))
+        assertFalse(Files.exists(root.resolve(".awm-requirement-materials.lock")))
+    }
 
     @Test
     fun `reuses the only matching directory and creates requested subdirectory`() {

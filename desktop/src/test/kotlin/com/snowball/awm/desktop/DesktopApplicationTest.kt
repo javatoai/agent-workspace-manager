@@ -16,6 +16,8 @@ import com.snowball.awm.core.MeegleCliService
 import com.snowball.awm.core.MeegleCliStatus
 import com.snowball.awm.core.MeegleCommandSource
 import com.snowball.awm.core.RepositoryConfig
+import com.snowball.awm.core.RequirementMaterialsDirectory
+import com.snowball.awm.core.RequirementMaterialsStatus
 import com.snowball.awm.core.RepositoryInspector
 import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.GroupServiceConfig
@@ -460,8 +462,46 @@ class DesktopApplicationTest {
 
             assertContains(preview, "REQ-123 raw requirement")
             assertContains(preview, root.resolve("tasks").resolve("支付 订单优化").toString())
-            assertContains(preview, "已关联需求，资料目录将在创建任务时创建或复用")
-            assertFalse(preview.contains("未关联需求，未创建资料目录"))
+            assertFalse(preview.contains("## 需求资料目录"))
+        } finally {
+            controller.close()
+        }
+    }
+
+    @Test
+    fun `agents preview includes a ready materials path when supplied`() {
+        val root = Files.createTempDirectory("awm-preview-materials")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(
+            AppConfig(
+                taskRoot = root.resolve("tasks").toString(),
+                repositories = listOf(
+                    RepositoryConfig("repo", "Service", root.resolve("service").toString(), root.resolve("service/.git").toString()),
+                ),
+                groups = listOf(
+                    GroupConfig("g", "G", services = listOf(GroupServiceConfig.standard("service", "repo", "Service"))),
+                ),
+            ),
+        )
+        val controller = DesktopApplication(paths = paths, configStore = store)
+        try {
+            val materialsPath = root.resolve("materials").resolve("sprint-1").resolve("1-task").resolve("研发")
+            val preview = controller.previewAgents(
+                folderName = "任务",
+                branch = "feature/task",
+                groupId = "g",
+                serviceIds = setOf("service"),
+                requirementLink = "1",
+                notes = "",
+                requirementMaterials = RequirementMaterialsDirectory(
+                    status = RequirementMaterialsStatus.READY,
+                    writeRoot = materialsPath.toString(),
+                ),
+            )
+
+            assertContains(preview, "## 需求资料目录")
+            assertContains(preview, materialsPath.toAbsolutePath().normalize().toString())
         } finally {
             controller.close()
         }

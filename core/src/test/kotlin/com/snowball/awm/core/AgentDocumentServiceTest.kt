@@ -123,6 +123,18 @@ class AgentDocumentServiceTest {
         assertFalse("READY" in rendered)
     }
 
+    @Test
+    fun `generated document omits materials section when materials are not requested`() {
+        val rendered = AgentsMdWriter.render(
+            temporary.resolve("tasks").resolve("task"),
+            manifest().copy(requirementMaterials = RequirementMaterialsDirectory()),
+            emptyList(),
+            "",
+        )
+
+        assertFalse("## 需求资料目录" in rendered)
+    }
+
     private fun manifest(groupId: String = DEFAULT_GROUP_ID) = TaskManifest(
         folderName = "OBT-123",
         taskDirectoryName = "OBT-123",

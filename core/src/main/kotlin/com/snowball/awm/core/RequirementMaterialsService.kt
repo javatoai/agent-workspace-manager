@@ -82,69 +82,165 @@ class RequirementMaterialsService(
         ),
     )
 
+    /**
+     * Resolves the directory that [ensure] would use without creating directories,
+     * lock files, or any other filesystem state.
+     */
+    fun preview(
+        requirementInput: String,
+        folderName: String,
+        materialsRoot: String?,
+        subdirectoryName: String?,
+        projects: List<MeegleProjectConfig>,
+    ): RequirementMaterialsResult = preview(
+        RequirementMaterialsRequest(
+            requirementInput = requirementInput,
+            folderName = folderName,
+            materialsRoot = materialsRoot,
+            subdirectoryName = subdirectoryName,
+            projects = projects,
+        ),
+    )
+
+    @Synchronized
+    fun preview(request: RequirementMaterialsRequest): RequirementMaterialsResult {
+        lastFailure = null
+        return when (val validation = validateRequest(request)) {
+            is RequestValidation.Invalid -> RequirementMaterialsResult.Failed(
+                validation.requirementId,
+                validation.reason,
+            )
+            is RequestValidation.Valid -> runCatching {
+                resolveValidated(validation.request)
+            }.getOrElse { error ->
+                RequirementMaterialsResult.Failed(
+                    validation.request.parsed.id,
+                    "需求资料目录预检失败：${error.message ?: error::class.simpleName}",
+                )
+            }
+        }
+    }
+
     @Synchronized
     fun ensure(request: RequirementMaterialsRequest): RequirementMaterialsResult {
         lastFailure = null
-        val parsed = parseRequirementInput(request.requirementInput)
-            ?: return RequirementMaterialsResult.Failed(null, "需求输入必须是数字需求编号或 Meegle 详情链接")
-        val requirementId = parsed.id
-
-        return try {
-            val root = validateRoot(request.materialsRoot)
-                ?: return RequirementMaterialsResult.Failed(requirementId, "资料根路径不能为空")
-            val subdirectory = validateSegment(request.subdirectoryName, "资料子目录名", 100)
-                ?: return RequirementMaterialsResult.Failed(requirementId, "资料子目录名不能为空")
-            val folder = validateSegment(request.folderName, "需求文件夹名称", 80)
-                ?: return RequirementMaterialsResult.Failed(requirementId, "需求文件夹名称不能为空")
-
-            FileLocking.withExclusiveLock(
-                root.resolve(LOCK_FILE),
-                "需求资料目录正在被另一个 AWM 操作修改：$root",
-            ) {
-                val existing = findRequirementDirectories(root, requirementId)
-                if (existing.size > 1) {
-                    return@withExclusiveLock RequirementMaterialsResult.Failed(
-                        requirementId,
-                        "同一需求编号匹配到多个需求目录，未自动选择",
-                        existing,
-                    )
+        return when (val validation = validateRequest(request)) {
+            is RequestValidation.Invalid -> RequirementMaterialsResult.Failed(
+                validation.requirementId,
+                validation.reason,
+            )
+            is RequestValidation.Valid -> try {
+                val validated = validation.request
+                val planned = FileLocking.withExclusiveLock(
+                    validated.root.resolve(LOCK_FILE),
+                    "需求资料目录正在被另一个 AWM 操作修改：${validated.root}",
+                ) {
+                    resolveValidated(validated).let { result ->
+                        if (result is RequirementMaterialsResult.Ready) {
+                            result.copy(
+                                writeRoot = ensureDirectory(validated.root, result.writeRoot),
+                            )
+                        } else {
+                            result
+                        }
+                    }
                 }
-                if (existing.singleOrNull() != null) {
-                    val context = resolveExistingRequirementDirectory(
-                        root = root,
-                        id = requirementId,
-                        subdirectory = subdirectory,
-                        requirementInput = request.requirementInput,
-                    ) ?: error("需求资料目录复用判定丢失")
-                    val writeRoot = ensureDirectory(root, context.writeRoot)
-                    return@withExclusiveLock RequirementMaterialsResult.Ready(
-                        requirementId = requirementId,
-                        requirementPath = context.requirementDirectory,
-                        writeRoot = writeRoot,
-                        status = RequirementMaterialsResult.Ready.Status.REUSED,
-                    )
-                }
-
-                val project = resolveProject(parsed, requirementId, request.projects)
-                    ?: return@withExclusiveLock RequirementMaterialsResult.Failed(
-                        requirementId,
-                        lastFailure ?: if (request.projects.isEmpty()) "未配置 Meegle 项目" else "未能唯一匹配需求所属的 Meegle 项目",
-                    )
-                val sprint = resolveActiveSprint(project, requirementId)
-                    ?: return@withExclusiveLock RequirementMaterialsResult.Failed(requirementId, lastFailure ?: "需求没有关联当前进行中的 Sprint")
-
-                val requirementPath = buildRequirementDirectory(root, sprint.name, requirementId, folder)
-                val writeRoot = ensureDirectory(root, requirementPath.resolve(subdirectory))
-                RequirementMaterialsResult.Ready(
-                    requirementId = requirementId,
-                    requirementPath = requirementPath,
-                    writeRoot = writeRoot,
-                    status = RequirementMaterialsResult.Ready.Status.CREATED,
+                planned
+            } catch (error: Exception) {
+                RequirementMaterialsResult.Failed(
+                    validation.request.parsed.id,
+                    "需求资料目录创建失败：${error.message ?: error::class.simpleName}",
                 )
             }
-        } catch (error: Exception) {
-            RequirementMaterialsResult.Failed(requirementId, "需求资料目录创建失败：${error.message ?: error::class.simpleName}")
         }
+    }
+
+    private sealed interface RequestValidation {
+        data class Valid(val request: ValidatedRequirementMaterialsRequest) : RequestValidation
+
+        data class Invalid(val requirementId: String?, val reason: String) : RequestValidation
+    }
+
+    private data class ValidatedRequirementMaterialsRequest(
+        val parsed: ParsedRequirement,
+        val requirementInput: String,
+        val root: Path,
+        val subdirectory: String,
+        val folder: String,
+        val projects: List<MeegleProjectConfig>,
+    )
+
+    private fun validateRequest(request: RequirementMaterialsRequest): RequestValidation {
+        val parsed = parseRequirementInput(request.requirementInput)
+            ?: return RequestValidation.Invalid(null, "需求输入必须是数字需求编号或 Meegle 详情链接")
+        val requirementId = parsed.id
+        return try {
+            val root = validateRoot(request.materialsRoot)
+                ?: return RequestValidation.Invalid(requirementId, "资料根路径不能为空")
+            val subdirectory = validateSegment(request.subdirectoryName, "资料子目录名", 100)
+                ?: return RequestValidation.Invalid(requirementId, "资料子目录名不能为空")
+            val folder = validateSegment(request.folderName, "需求文件夹名称", 80)
+                ?: return RequestValidation.Invalid(requirementId, "需求文件夹名称不能为空")
+            RequestValidation.Valid(
+                ValidatedRequirementMaterialsRequest(
+                    parsed = parsed,
+                    requirementInput = request.requirementInput,
+                    root = root,
+                    subdirectory = subdirectory,
+                    folder = folder,
+                    projects = request.projects,
+                ),
+            )
+        } catch (error: Exception) {
+            RequestValidation.Invalid(
+                requirementId,
+                "需求资料目录创建失败：${error.message ?: error::class.simpleName}",
+            )
+        }
+    }
+
+    private fun resolveValidated(
+        request: ValidatedRequirementMaterialsRequest,
+    ): RequirementMaterialsResult {
+        val requirementId = request.parsed.id
+        val existing = findRequirementDirectories(request.root, requirementId)
+        if (existing.size > 1) {
+            return RequirementMaterialsResult.Failed(
+                requirementId,
+                "同一需求编号匹配到多个需求目录，未自动选择",
+                existing,
+            )
+        }
+        if (existing.singleOrNull() != null) {
+            val context = resolveExistingRequirementDirectory(
+                root = request.root,
+                id = requirementId,
+                subdirectory = request.subdirectory,
+                requirementInput = request.requirementInput,
+            ) ?: error("需求资料目录复用判定丢失")
+            return RequirementMaterialsResult.Ready(
+                requirementId = requirementId,
+                requirementPath = context.requirementDirectory,
+                writeRoot = context.writeRoot,
+                status = RequirementMaterialsResult.Ready.Status.REUSED,
+            )
+        }
+
+        val project = resolveProject(request.parsed, requirementId, request.projects)
+            ?: return RequirementMaterialsResult.Failed(
+                requirementId,
+                lastFailure ?: if (request.projects.isEmpty()) "未配置 Meegle 项目" else "未能唯一匹配需求所属的 Meegle 项目",
+            )
+        val sprint = resolveActiveSprint(project, requirementId)
+            ?: return RequirementMaterialsResult.Failed(requirementId, lastFailure ?: "需求没有关联当前进行中的 Sprint")
+
+        val requirementPath = buildRequirementDirectory(request.root, sprint.name, requirementId, request.folder)
+        return RequirementMaterialsResult.Ready(
+            requirementId = requirementId,
+            requirementPath = requirementPath,
+            writeRoot = requirementPath.resolve(request.subdirectory),
+            status = RequirementMaterialsResult.Ready.Status.CREATED,
+        )
     }
 
     private var lastFailure: String? = null
@@ -166,6 +262,9 @@ class RequirementMaterialsService(
             workItemId = link.workItemId,
         )
     }
+
+    /** Returns the local numeric identity understood by desktop task creation, when valid. */
+    fun parseRequirementId(raw: String): String? = parseRequirementInput(raw)?.id
 
     /** Returns the built-in Feishu project key for a validated requirement link, when known. */
     fun resolveRequirementProjectKey(raw: String): String? = FeishuWorkItemLink.parse(raw)?.projectKey
