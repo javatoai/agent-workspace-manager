@@ -20,23 +20,71 @@ class ConfigStoreTest {
     lateinit var temporary: Path
 
     @Test
-    fun `system default stores application data in hidden home directory`() {
+    fun `system default stores application data and tasks under awm in user home`() {
         assertEquals(
-            temporary.resolve(".AgentWorkspaceManager"),
+            temporary.resolve("awm"),
             ApplicationPaths.systemDefault(temporary.toString()).home,
+        )
+        assertEquals(
+            temporary.resolve("awm").resolve("tasks"),
+            ApplicationPaths.systemDefault(temporary.toString()).tasks,
         )
     }
 
     @Test
-    fun `missing config returns one hidden default group`() {
-        val store = ConfigStore(ApplicationPaths(temporary.resolve("home")))
+    fun `missing config initializes current config and default task root`() {
+        val paths = ApplicationPaths(temporary.resolve("home"))
+        val store = ConfigStore(paths)
 
         val config = store.load()
 
-        assertFalse(store.exists())
-        assertEquals(null, config.taskRoot)
+        assertTrue(store.exists())
+        assertTrue(Files.isDirectory(paths.tasks))
+        assertEquals(paths.tasks.toAbsolutePath().normalize().toString(), config.taskRoot)
         assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
         assertEquals(emptyList<RepositoryConfig>(), config.repositories)
+        assertEquals(config, store.load())
+    }
+
+    @Test
+    fun `existing custom task root is preserved`() {
+        val paths = ApplicationPaths(temporary.resolve("custom-home"))
+        val store = ConfigStore(paths)
+        val custom = temporary.resolve("custom-tasks").toAbsolutePath().normalize().toString()
+        store.save(AppConfig(taskRoot = custom))
+
+        assertEquals(custom, store.load().taskRoot)
+        assertFalse(Files.exists(paths.tasks))
+    }
+
+    @Test
+    fun `new default does not inspect legacy application directory`() {
+        val legacyPaths = ApplicationPaths(temporary.resolve(".AgentWorkspaceManager"))
+        ConfigStore(legacyPaths).save(AppConfig(taskRoot = temporary.resolve("legacy-tasks").toString()))
+        val currentPaths = ApplicationPaths.systemDefault(temporary.toString())
+
+        val current = ConfigStore(currentPaths).load()
+
+        assertEquals(currentPaths.tasks.toAbsolutePath().normalize().toString(), current.taskRoot)
+        assertTrue(Files.exists(legacyPaths.config))
+        assertTrue(Files.exists(currentPaths.config))
+    }
+
+    @Test
+    fun `failed default task directory initialization leaves valid config for manual selection`() {
+        val paths = ApplicationPaths(temporary.resolve("unwritable-default-home"))
+        val store = ConfigStore(paths, initializeDefaultTaskRoot = { error("simulated access denied") })
+
+        val error = assertThrows(DefaultTaskRootInitializationException::class.java) { store.load() }
+
+        assertEquals(paths.tasks.toAbsolutePath().normalize(), error.taskRoot)
+        assertTrue(store.exists())
+        assertEquals(null, store.load().taskRoot)
+
+        val selected = temporary.resolve("manual-tasks").toAbsolutePath().normalize()
+        Files.createDirectories(selected)
+        val updated = store.update { it.copy(taskRoot = selected.toString()) }
+        assertEquals(selected.toString(), updated.taskRoot)
     }
 
     @Test

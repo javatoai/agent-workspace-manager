@@ -28,7 +28,7 @@ Agent Workspace Manager（AWM）是一个桌面工具，用来把“一项需求
 
 ## 三分钟上手
 
-1. 在“设置”中选择任务工作区根目录，并添加本地 Git 仓库到一个组。
+1. 首次启动会自动使用用户目录下的 `awm/tasks` 作为任务根目录；在“设置”中添加本地 Git 仓库到一个组。
 2. 为服务选择“标准 Worktree”或“独立克隆”，按需配置基础分支、Tag 和开发工具。
 3. 点击“创建任务”，填写或选择需求链接、任务名称和分支，再选择需要修改的服务。
 4. 在任务详情中打开工作区开始开发；完成后检查未提交/未推送状态，按需构建 Tag、归档或删除任务。
@@ -85,8 +85,9 @@ codex plugin add awm-codex@agent-workspace-manager
 ## 数据位置
 
 ```text
-~/.AgentWorkspaceManager/
+~/awm/
 ├── config.json
+├── tasks/
 ├── agents/
 │   ├── global/AGENTS.md
 │   ├── groups/<groupId>/AGENTS.md
@@ -96,6 +97,10 @@ codex plugin add awm-codex@agent-workspace-manager
 ```
 
 每个任务目录包含严格版本的 `agent-workspace.json`、最终合成的 `AGENTS.md`、Tag 构建历史以及服务 Worktree 或独立克隆。
+
+Windows 的 `~` 为 `%USERPROFILE%`，macOS 的 `~` 为 `$HOME`。首次启动会创建 `~/awm`、`~/awm/tasks` 和包含默认 `taskRoot` 的当前版本配置。AWM 不探测或读取旧的 `~/.AgentWorkspaceManager`；如需保留旧数据，应在停止 AWM 后手动迁移并验证。
+
+在设置页更改任务根目录时，空目录可直接切换；已有任务时会先显示迁移预览。确认后，同磁盘整体移动、跨磁盘完整复制，标准 Worktree 会修复 Git 注册；全部任务及 Git 状态校验成功后才更新 `taskRoot`。
 
 `1.0.0` 使用字符串 schema。仅相同主次版本的 PATCH 可兼容读取；主版本或次版本不同则拒绝读取，且不会迁移或改写旧数据。`0.12.x` 及更早数据不会读取、迁移或删除。升级时需先备份数据，手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `1.0.0`，并在设置页重新保存需求资料根目录与资料子目录。
 

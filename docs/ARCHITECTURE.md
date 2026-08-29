@@ -29,21 +29,25 @@ Desktop -> Application -> Domain
 
 ## 启动和刷新边界
 
-启动只读取本地 `config.json`、任务清单和 Agent 文件，并异步检查最近任务的本地 Git 状态；不递归发现仓库、不 Fetch、不访问飞书。顶部手动刷新会校验已配置仓库、重新读取任务与 Agent 文件、刷新飞书状态和当前任务 Git 状态。
+首次启动会创建 `~/awm`、`~/awm/tasks` 和当前版本 `config.json`。后续启动只读取本地配置、处理未完成的任务根目录迁移日志、读取任务清单和 Agent 文件，并异步检查最近任务的本地 Git 状态；不探测旧的 `~/.AgentWorkspaceManager`，不递归发现仓库、不 Fetch、不访问飞书。顶部手动刷新会校验已配置仓库、重新读取任务与 Agent 文件、刷新飞书状态和当前任务 Git 状态。
 
 ## 持久化
 
-- 全局配置：`~/.AgentWorkspaceManager/config.json`
-- 任务说明模板：`~/.AgentWorkspaceManager/task-templates.json`
-- 全局说明：`~/.AgentWorkspaceManager/agents/global/AGENTS.md`
-- 组说明：`~/.AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md`
+- 全局配置：`~/awm/config.json`
+- 默认任务根目录：`~/awm/tasks`
+- 任务说明模板：`~/awm/agents/task-templates.json`
+- 全局说明：`~/awm/agents/global/AGENTS.md`
+- 组说明：`~/awm/agents/groups/<groupId>/AGENTS.md`
 - 任务清单：`<taskDir>/agent-workspace.json`
 - 最终说明：`<taskDir>/AGENTS.md`
 - Tag 操作快照：`<taskDir>/tag-operations/*.json`
 - 构建历史：`<taskDir>/tag-build-history.jsonl`
-- 仓库锁：`~/.AgentWorkspaceManager/locks/<git-common-dir-hash>.lock`
+- 仓库锁：`~/awm/locks/<git-common-dir-hash>.lock`
+- 任务根目录迁移日志：`~/awm/migrations/task-root.json`
 
 配置和任务使用严格 schema。文件写入采用同目录临时文件加原子替换，避免进程中断留下半个 JSON 或覆盖用户正在维护的 Agent 文档。
+
+任务根目录迁移与任务写操作共享根目录锁。迁移先记录原路径、目标路径、原清单和工作区策略；同文件系统移动、跨文件系统复制后修复标准 Worktree，更新目标清单和 Agent 系统区，并验证 Git 快照。配置是提交点：提交前失败回滚到源路径，提交后启动恢复只继续清理旧目录。
 
 ## Git 隔离和安全
 

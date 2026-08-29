@@ -27,6 +27,11 @@ class UnsupportedConfigVersionException(
         "当前版本为 $CURRENT_APP_CONFIG_SCHEMA_VERSION。AWM 不读取或改写旧产品数据。",
 )
 
+class DefaultTaskRootInitializationException(
+    val taskRoot: Path,
+    cause: Throwable,
+) : IllegalStateException("无法创建默认任务根目录：$taskRoot；请在设置中选择可写目录", cause)
+
 /** Strict release-versioned configuration repository backed by an atomic JSON file. */
 interface ConfigurationRepository {
     fun load(): AppConfig
@@ -45,6 +50,7 @@ class ConfigStore(
         prettyPrint = true
         encodeDefaults = true
     },
+    private val initializeDefaultTaskRoot: (Path) -> Unit = { it.createDirectories() },
 ) : ConfigurationRepository {
     private val processMutationLock = mutationLocks.computeIfAbsent(
         paths.config.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT),
@@ -84,7 +90,7 @@ class ConfigStore(
     }
 
     override fun load(): AppConfig {
-        if (!exists()) return AppConfig()
+        if (!exists()) return initializeDefaults()
         val content = Files.readString(paths.config)
         val element = json.parseToJsonElement(content).withoutRetiredConfigurationFields()
         val version = element
@@ -95,6 +101,20 @@ class ConfigStore(
             throw UnsupportedConfigVersionException(version)
         }
         return json.decodeFromJsonElement<AppConfig>(element)
+    }
+
+    private fun initializeDefaults(): AppConfig = withMutationLock {
+        if (exists()) return@withMutationLock load()
+        val taskRoot = paths.tasks.toAbsolutePath().normalize()
+        try {
+            initializeDefaultTaskRoot(taskRoot)
+        } catch (error: Exception) {
+            saveUnlocked(AppConfig())
+            throw DefaultTaskRootInitializationException(taskRoot, error)
+        }
+        val initial = AppConfig(taskRoot = taskRoot.toString())
+        saveUnlocked(initial)
+        initial
     }
 
     override fun save(config: AppConfig) = withMutationLock {

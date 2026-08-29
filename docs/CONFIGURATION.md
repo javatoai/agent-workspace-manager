@@ -2,7 +2,9 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\.AgentWorkspaceManager`，macOS 使用 `~/.AgentWorkspaceManager`。1.0.0 的说明文件固定保存在：
+Windows 使用 `%USERPROFILE%\awm`，macOS 使用 `~/awm`。首次启动时，如果 `config.json` 不存在，AWM 会创建应用目录和 `tasks` 子目录，并原子写入以 `~/awm/tasks` 为 `taskRoot` 的当前版本配置。默认任务目录无法创建时，AWM 会保留一份可继续编辑的当前版本配置、显示错误，并允许在设置中选择其他可写目录。已有配置中的自定义 `taskRoot` 保持不变；程序不会探测或读取旧的 `~/.AgentWorkspaceManager`。
+
+1.0.0 的说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -19,7 +21,7 @@ agents/task-templates.json
 ```json
 {
   "schemaVersion": "1.0.0",
-  "taskRoot": "Q:\\tasks",
+  "taskRoot": "C:\\Users\\alice\\awm\\tasks",
   "developmentTools": [
     { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
     { "type": "VISUAL_STUDIO_CODE", "path": "C:\\Tools\\Code.exe" }
@@ -96,6 +98,19 @@ agents/task-templates.json
   "theme": "SYSTEM"
 }
 ```
+
+## 任务根目录迁移
+
+在设置页选择新的任务根目录后，AWM 先进行只读预检。旧目录没有任务时直接保存；存在任务时展示迁移方式、任务数、工作区数和数据量，用户确认后才开始迁移。
+
+- 新旧目录不能相同或互相包含；目标必须为空且可写，并有足够空间。
+- 所有任务清单必须可读且为当前版本，工作区必须位于对应任务目录内；发现冲突会阻止整批迁移。
+- 同磁盘整体移动任务目录；跨磁盘不跟随符号链接地复制并保留基础文件属性。
+- 标准 Worktree 执行 `git worktree repair`；独立克隆保留完整 `.git`。
+- AWM 校验 HEAD、分支、仓库身份以及暂存、未暂存和未跟踪文件状态，更新清单路径并重新生成 `AGENTS.md` 系统区。
+- 全部任务成功后才原子更新 `taskRoot` 并清理旧目录。清理失败时新目录仍生效，界面会列出待清理路径；迁移日志位于 `~/awm/migrations/task-root.json`，下次启动会继续清理或回滚。
+
+需求资料目录由 `requirementMaterialsRoot` 独立管理，不随任务根目录迁移。
 
 工作区策略属于模块而不是服务。同一服务的 `modules` 可以同时包含 Worktree 与独立克隆模块：
 

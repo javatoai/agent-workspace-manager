@@ -468,6 +468,51 @@ class DesktopApplicationTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `task root with existing tasks waits for confirmation before migrating`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-task-root-preview")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val source = Files.createDirectories(root.resolve("source-tasks"))
+        val target = root.resolve("target-tasks")
+        val store = ConfigStore(paths).also { it.save(AppConfig(taskRoot = source.toString())) }
+        ManifestStore().save(
+            source.resolve("TASK-1"),
+            TaskManifest(
+                folderName = "TASK-1",
+                taskDirectoryName = "TASK-1",
+                featureBranch = "feature/task-root-preview",
+                createdAt = "2026-08-29 00:00:00",
+                updatedAt = "2026-08-29 00:00:00",
+                services = emptyList(),
+            ),
+        )
+        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            controller.updateTaskRoot(target.toString())
+            advanceUntilIdle()
+
+            val preview = assertIs<TaskRootMigrationUiState.Preview>(controller.taskRootMigrationState)
+            assertEquals(1, preview.preview.taskCount)
+            assertEquals(source.toAbsolutePath().normalize().toString(), controller.config.taskRoot)
+            assertFalse(Files.exists(target.resolve("TASK-1")))
+
+            controller.confirmTaskRootMigration()
+            assertIs<TaskRootMigrationUiState.Migrating>(controller.taskRootMigrationState)
+            advanceUntilIdle()
+
+            assertIs<TaskRootMigrationUiState.Idle>(controller.taskRootMigrationState)
+            assertEquals(target.toAbsolutePath().normalize().toString(), controller.config.taskRoot)
+            assertTrue(Files.exists(target.resolve("TASK-1/agent-workspace.json")))
+            assertFalse(Files.exists(source.resolve("TASK-1")))
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun `agents preview includes a ready materials path when supplied`() {
         val root = Files.createTempDirectory("awm-preview-materials")

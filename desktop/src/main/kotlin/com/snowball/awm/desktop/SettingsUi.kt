@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
@@ -93,6 +94,9 @@ import com.snowball.awm.core.LocalGitEnvironmentSnapshot
 import com.snowball.awm.core.CommandVersionStatus
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ThemePreference
+import com.snowball.awm.core.TaskRootMigrationMode
+import com.snowball.awm.core.TaskRootMigrationPhase
+import com.snowball.awm.core.TaskRootMigrationProgress
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -394,6 +398,25 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             }
         }
     }
+    when (val migration = controller.taskRootMigrationState) {
+        TaskRootMigrationUiState.Idle -> Unit
+        is TaskRootMigrationUiState.Preview -> TaskRootMigrationDialog(
+            preview = migration.preview,
+            migrating = false,
+            onDismiss = {
+                controller.cancelTaskRootMigration()
+                taskRoot = controller.config.taskRoot.orEmpty()
+            },
+            onConfirm = { controller.confirmTaskRootMigration() },
+        )
+        is TaskRootMigrationUiState.Migrating -> TaskRootMigrationDialog(
+            preview = migration.preview,
+            migrating = true,
+            progress = migration.progress,
+            onDismiss = {},
+            onConfirm = {},
+        )
+    }
     if (newGroup) NameDialog("创建组", "", onDismiss = { newGroup = false }) {
         controller.addGroup(it) { newGroup = false }
     }
@@ -458,6 +481,62 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             onConfirm = { if (controller.importConfig(preview.source.toString())) importPreview = null },
         )
     }
+}
+
+@Composable
+private fun TaskRootMigrationDialog(
+    preview: com.snowball.awm.core.TaskRootMigrationPreview,
+    migrating: Boolean,
+    progress: TaskRootMigrationProgress? = null,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val mode = when (preview.mode) {
+        TaskRootMigrationMode.DIRECT_SWITCH -> "直接切换"
+        TaskRootMigrationMode.SAME_FILE_STORE -> "同磁盘移动"
+        TaskRootMigrationMode.CROSS_FILE_STORE -> "跨磁盘复制并校验"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (migrating) "正在迁移任务目录" else "迁移任务并切换目录？") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("AWM 将迁移全部任务，校验 Git 状态和任务清单后才更新配置。迁移期间请关闭这些工作区的 IDE 和终端。")
+                Text("原目录：${preview.sourceRoot}", style = MaterialTheme.typography.bodySmall)
+                Text("新目录：${preview.targetRoot}", style = MaterialTheme.typography.bodySmall)
+                Text("方式：$mode · ${preview.taskCount} 个任务 · ${preview.workspaceCount} 个工作区 · ${formatByteSize(preview.totalBytes)}")
+                if (migrating) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(taskRootMigrationProgressLabel(progress), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !migrating) {
+                Text(if (migrating) "迁移中…" else "迁移并切换")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !migrating) { Text("取消") }
+        },
+    )
+}
+
+private fun taskRootMigrationProgressLabel(progress: TaskRootMigrationProgress?): String = when (progress?.phase) {
+    null, TaskRootMigrationPhase.PREPARING -> "正在准备迁移…"
+    TaskRootMigrationPhase.TRANSFERRING_AND_VERIFYING -> progress.let {
+        "正在迁移并校验 ${it.currentTask.orEmpty()}（${it.completedTasks + 1}/${it.totalTasks}）"
+    }
+    TaskRootMigrationPhase.UPDATING_CONFIG -> "任务已校验，正在更新配置…"
+    TaskRootMigrationPhase.CLEANING_SOURCE -> "配置已生效，正在清理旧目录…"
+    TaskRootMigrationPhase.COMPLETED -> "迁移完成"
+}
+
+private fun formatByteSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes.toDouble() / (1024L * 1024L * 1024L))
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes.toDouble() / (1024L * 1024L))
+    bytes >= 1024L -> "%.1f KB".format(bytes.toDouble() / 1024L)
+    else -> "$bytes B"
 }
 
 internal fun normalizeSettingsSection(stored: String, supported: Set<String>): String = when (stored) {
@@ -894,8 +973,8 @@ private fun SettingsAgentsSection(
         val isGlobal = agentScope == "global"
         val agentPath = if (isGlobal) controller.globalAgentsPath else controller.groupAgentsPath(agentGroupId)
         Text(
-            if (isGlobal) "对所有任务生效；也可直接编辑 ~/.AgentWorkspaceManager/agents/global/AGENTS.md，程序会自动同步。"
-            else "仅对当前组生效；也可直接编辑 ~/.AgentWorkspaceManager/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
+            if (isGlobal) "对所有任务生效；也可直接编辑 ~/awm/agents/global/AGENTS.md，程序会自动同步。"
+            else "仅对当前组生效；也可直接编辑 ~/awm/agents/groups/<groupId>/AGENTS.md，程序会自动同步。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

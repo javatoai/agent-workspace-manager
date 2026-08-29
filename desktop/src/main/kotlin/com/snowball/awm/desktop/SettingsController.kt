@@ -35,6 +35,10 @@ import com.snowball.awm.core.RemoteBranchCatalog
 import com.snowball.awm.core.RepositoryRemoteCatalog
 import com.snowball.awm.core.GitRepositoryRemoteCatalog
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.TaskRootMigrationPreview
+import com.snowball.awm.core.TaskRootMigrationProgress
+import com.snowball.awm.core.TaskRootMigrationResult
+import com.snowball.awm.core.TaskRootMigrationService
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.validateRequirementMaterialsSubdirectory
@@ -60,9 +64,24 @@ data class SettingsUiState(
     val localGit: LocalGitSettingsState,
     val genbu: GenbuSettingsState,
     val saveStates: Map<String, SettingsSaveState>,
+    val taskRootMigration: TaskRootMigrationUiState,
 )
 
 enum class SettingsSaveState { IDLE, SAVING, SAVED, FAILED }
+
+sealed interface TaskRootMigrationUiState {
+    data object Idle : TaskRootMigrationUiState
+    data class Preview(val preview: TaskRootMigrationPreview) : TaskRootMigrationUiState
+    data class Migrating(
+        val preview: TaskRootMigrationPreview,
+        val progress: TaskRootMigrationProgress? = null,
+    ) : TaskRootMigrationUiState
+}
+
+private sealed interface TaskRootChangeOutcome {
+    data class PreviewRequired(val preview: TaskRootMigrationPreview) : TaskRootChangeOutcome
+    data class Applied(val result: TaskRootMigrationResult) : TaskRootChangeOutcome
+}
 
 sealed interface MeegleProjectCatalogState {
     data object Idle : MeegleProjectCatalogState
@@ -124,6 +143,7 @@ class SettingsController internal constructor(
     private val session: AppSessionStore,
     private val configStore: ConfigStore,
     private val groups: GroupConfigurationService,
+    private val taskRootMigrations: TaskRootMigrationService,
     private val pathPicker: NativePathPicker,
     private val branchCatalog: RemoteBranchCatalog,
     private val remoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(),
@@ -158,9 +178,22 @@ class SettingsController internal constructor(
     private var localGitJob: Job? = null
     private var genbuCommand by mutableStateOf(genbuExecutable.current() to genbuExecutable.source())
     private var saveStates by mutableStateOf<Map<String, SettingsSaveState>>(emptyMap())
+    private var taskRootMigration by mutableStateOf<TaskRootMigrationUiState>(TaskRootMigrationUiState.Idle)
 
     val state: SettingsUiState
-        get() = SettingsUiState(session.config, remoteBranches, repositoryRemotes, repositoryAddResult, pathPickerBusy, meegleProjects, meegleCli, localGit, genbu, saveStates)
+        get() = SettingsUiState(
+            session.config,
+            remoteBranches,
+            repositoryRemotes,
+            repositoryAddResult,
+            pathPickerBusy,
+            meegleProjects,
+            meegleCli,
+            localGit,
+            genbu,
+            saveStates,
+            taskRootMigration,
+        )
 
     fun saveState(key: String): SettingsSaveState = saveStates[key] ?: SettingsSaveState.IDLE
 
@@ -324,16 +357,76 @@ class SettingsController internal constructor(
     ) { it.copy(theme = theme) }
 
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(
-        "正在保存任务根目录…",
-        "任务根目录已保存",
+        "正在检查任务根目录…",
+        "任务根目录检查完成",
         block = {
             val path = Path.of(value).toAbsolutePath().normalize()
-            Files.createDirectories(path)
-            configStore.update { it.copy(taskRoot = path.toString()) }
+            val preview = taskRootMigrations.preview(session.config, path)
+            require(preview.canMigrate) { preview.blockers.joinToString("；") }
+            if (preview.taskCount == 0) {
+                TaskRootChangeOutcome.Applied(taskRootMigrations.migrate(session.config, path))
+            } else {
+                TaskRootChangeOutcome.PreviewRequired(preview)
+            }
         },
-        onSuccess = { applyConfig(it); reloadTasks(); setSaveState("paths", SettingsSaveState.SAVED) },
+        onSuccess = { outcome ->
+            when (outcome) {
+                is TaskRootChangeOutcome.Applied -> applyTaskRootMigration(outcome.result)
+                is TaskRootChangeOutcome.PreviewRequired -> {
+                    taskRootMigration = TaskRootMigrationUiState.Preview(outcome.preview)
+                    setSaveState("paths", SettingsSaveState.IDLE)
+                }
+            }
+        },
         onFailure = { setSaveState("paths", SettingsSaveState.FAILED); onFailure(it) },
     ).also { started -> setSaveState("paths", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED) }
+
+    fun confirmTaskRootMigration(onFailure: (Throwable) -> Unit = {}): Boolean {
+        val preview = (taskRootMigration as? TaskRootMigrationUiState.Preview)?.preview ?: return false
+        taskRootMigration = TaskRootMigrationUiState.Migrating(preview)
+        return settingsOperations.run(
+            "正在迁移任务目录…",
+            "任务目录迁移完成",
+            block = {
+                taskRootMigrations.migrate(session.config, preview.targetRoot) { progress ->
+                    scope.launch {
+                        val current = taskRootMigration as? TaskRootMigrationUiState.Migrating
+                        if (current?.preview?.targetRoot == preview.targetRoot) {
+                            taskRootMigration = current.copy(progress = progress)
+                        }
+                    }
+                }
+            },
+            onSuccess = ::applyTaskRootMigration,
+            onFailure = { error ->
+                taskRootMigration = TaskRootMigrationUiState.Preview(preview)
+                setSaveState("paths", SettingsSaveState.FAILED)
+                onFailure(error)
+            },
+        ).also { started ->
+            setSaveState("paths", if (started) SettingsSaveState.SAVING else SettingsSaveState.FAILED)
+            if (!started) taskRootMigration = TaskRootMigrationUiState.Preview(preview)
+        }
+    }
+
+    fun cancelTaskRootMigration() {
+        if (taskRootMigration is TaskRootMigrationUiState.Preview) {
+            taskRootMigration = TaskRootMigrationUiState.Idle
+            setSaveState("paths", SettingsSaveState.IDLE)
+        }
+    }
+
+    private fun applyTaskRootMigration(result: TaskRootMigrationResult) {
+        applyConfig(result.config)
+        reloadTasks()
+        taskRootMigration = TaskRootMigrationUiState.Idle
+        setSaveState("paths", SettingsSaveState.SAVED)
+        if (result.cleanupFailures.isEmpty()) {
+            showStatus(if (result.migratedTasks == 0) "任务根目录已保存" else "已迁移 ${result.migratedTasks} 个任务")
+        } else {
+            showStatus("迁移已生效，以下旧目录待清理：${result.cleanupFailures.joinToString()}")
+        }
+    }
 
     /** Saves and normalizes the optional requirement-materials root independently. */
     fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(

@@ -72,6 +72,7 @@ import com.snowball.awm.core.TagOutputFormatter
 import com.snowball.awm.core.TaskApplicationService
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.TaskOperationLock
+import com.snowball.awm.core.TaskRootMigrationService
 import com.snowball.awm.core.FileTaskOperationLock
 import com.snowball.awm.core.TaskBranchInfoFormatter
 import com.snowball.awm.core.TaskWorkspaceToolAvailability
@@ -196,6 +197,15 @@ class DesktopApplication(
     private val operationLock: TaskOperationLock = FileTaskOperationLock(paths),
     private val repositoryLock: RepositoryOperationLock = RepositoryOperationLock(paths),
     private val agentDocuments: AgentDocumentService = AgentDocumentService(paths),
+    private val taskRootMigrations: TaskRootMigrationService = TaskRootMigrationService(
+        configStore = configStore,
+        manifests = manifests,
+        git = gitClient,
+        agentDocuments = agentDocuments,
+        taskLock = operationLock,
+        paths = paths,
+        repositoryLock = repositoryLock,
+    ),
     private val provisioning: WorkspaceProvisioningService = WorkspaceProvisioningService(
         listOf(
             StandardWorktreeProvisioner(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
@@ -263,7 +273,12 @@ class DesktopApplication(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val initial = runCatching { configStore.load() }
+    private var startupMigrationWarnings: List<String> = emptyList()
+    private val initial = runCatching {
+        val loaded = configStore.load()
+        startupMigrationWarnings = taskRootMigrations.recoverInterruptedMigration(loaded)
+        if (startupMigrationWarnings.isEmpty()) loaded else configStore.load()
+    }
     /**
      * A malformed on-disk configuration must never be mistaken for a new, empty
      * configuration.  The app still needs an in-memory model to render an error
@@ -288,12 +303,14 @@ class DesktopApplication(
         genbuExecutablePath.set(it.genbuExecutablePath)
     }
     private val initialTasks = scanTasks(initialConfig)
-    private var taskScanWarning: String? = initialTasks.warning
+    private var taskScanWarning: String? = (startupMigrationWarnings + listOfNotNull(initialTasks.warning))
+        .joinToString("\n")
+        .takeIf(String::isNotBlank)
     var taskManifestIssues by mutableStateOf(initialTasks.manifestIssues)
         private set
     val sessionStore = AppSessionStore(initialConfig, initialTasks.manifests)
     val operationCoordinator = OperationCoordinator(
-        initialError = initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: initialTasks.warning,
+        initialError = initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: taskScanWarning,
         onError = ::recordError,
     )
     var recentErrors by mutableStateOf(errorLogReader.latest())
@@ -359,6 +376,7 @@ class DesktopApplication(
             session = sessionStore,
             configStore = configStore,
             groups = groupConfigurations,
+            taskRootMigrations = taskRootMigrations,
             pathPicker = nativePathPicker,
             branchCatalog = remoteBranchCatalog,
             remoteCatalog = repositoryRemoteCatalog,
@@ -504,6 +522,7 @@ class DesktopApplication(
     val agentConflict: AgentFileChange.Conflict? get() = agentInstructionsController.state.conflict
     val deleteRiskInspections: Map<String, DeleteRiskInspection> get() = taskController.state.deleteRisks
     val pathPickerBusy: Boolean get() = settingsController.state.pathPickerBusy
+    val taskRootMigrationState: TaskRootMigrationUiState get() = settingsController.state.taskRootMigration
     val remoteBranches: Map<String, RemoteBranchesState> get() = settingsController.state.remoteBranches
     val repositoryAddResult: BatchRepositoryAddResult? get() = settingsController.state.repositoryAddResult
     val workspaceGitHealth: Map<String, WorkspaceGitHealth> get() = taskController.state.gitHealth
@@ -629,6 +648,8 @@ class DesktopApplication(
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
+    fun confirmTaskRootMigration(onFailure: (Throwable) -> Unit = {}) = settingsController.confirmTaskRootMigration(onFailure)
+    fun cancelTaskRootMigration() = settingsController.cancelTaskRootMigration()
     fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateRequirementMaterialsRoot(value, onFailure)
     fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}) =

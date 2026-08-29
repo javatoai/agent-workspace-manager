@@ -223,8 +223,10 @@ class TaskApplicationService(
             ?: error("尚未配置任务根目录")
         val folderName = TaskNaming.requireValidDirectoryName(request.folderName)
         val taskDirectory = taskRoot.resolve(folderName)
-        return operationLock.withLock(taskDirectory) {
-            createUnlocked(config, request, taskRoot, taskDirectory, folderName)
+        return operationLock.withLock(taskRoot) {
+            operationLock.withLock(taskDirectory) {
+                createUnlocked(config, request, taskRoot, taskDirectory, folderName)
+            }
         }
     }
 
