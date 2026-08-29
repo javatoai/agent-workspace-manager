@@ -74,14 +74,30 @@ class DesktopIntegration(
 
     fun openTerminal(path: Path, configuredExecutable: String? = null) {
         val osName = System.getProperty("os.name")
+        val resolution = terminalResolution(configuredExecutable)
         val command = TerminalLaunchCommand.build(
             configuredExecutable = configuredExecutable,
             target = path,
             osName = osName,
+            windowsTerminalAvailable = resolution.command == "wt.exe",
+        )
+        launchDetached(command)
+    }
+
+    fun terminalResolution(configuredExecutable: String? = null): TerminalCommandResolution {
+        val osName = System.getProperty("os.name")
+        val resolution = TerminalLaunchCommand.resolve(
+            configuredExecutable = configuredExecutable,
+            osName = osName,
             windowsTerminalAvailable = configuredExecutable.isNullOrBlank() &&
                 osName.startsWith("Windows", ignoreCase = true) && commandExists("wt.exe"),
         )
-        launchDetached(command)
+        val configured = configuredExecutable?.trim()?.takeIf(String::isNotBlank) ?: return resolution
+        val available = runCatching {
+            val path = Path.of(configured)
+            if (path.isAbsolute) Files.exists(path) else commandExists(configured)
+        }.getOrDefault(false)
+        return resolution.copy(available = available)
     }
 
     /**
@@ -145,8 +161,35 @@ class DesktopIntegration(
     }
 }
 
+enum class TerminalCommandSource { CONFIGURED, SYSTEM_DEFAULT }
+
+data class TerminalCommandResolution(
+    val displayName: String,
+    val command: String,
+    val source: TerminalCommandSource,
+    val available: Boolean = true,
+)
+
 /** Builds a terminal command without treating a macOS .app bundle as an executable file. */
 object TerminalLaunchCommand {
+    fun resolve(
+        configuredExecutable: String?,
+        osName: String = System.getProperty("os.name"),
+        windowsTerminalAvailable: Boolean = false,
+    ): TerminalCommandResolution {
+        val configured = configuredExecutable?.trim()?.takeIf(String::isNotEmpty)
+        return when {
+            configured != null -> TerminalCommandResolution("自定义终端", configured, TerminalCommandSource.CONFIGURED)
+            osName.startsWith("Windows", ignoreCase = true) && windowsTerminalAvailable ->
+                TerminalCommandResolution("Windows Terminal", "wt.exe", TerminalCommandSource.SYSTEM_DEFAULT)
+            osName.startsWith("Windows", ignoreCase = true) ->
+                TerminalCommandResolution("Windows PowerShell", "powershell.exe", TerminalCommandSource.SYSTEM_DEFAULT)
+            osName.startsWith("Mac", ignoreCase = true) ->
+                TerminalCommandResolution("Terminal", "Terminal.app", TerminalCommandSource.SYSTEM_DEFAULT)
+            else -> TerminalCommandResolution("系统终端", "x-terminal-emulator", TerminalCommandSource.SYSTEM_DEFAULT)
+        }
+    }
+
     fun build(
         configuredExecutable: String?,
         target: Path,

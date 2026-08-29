@@ -16,6 +16,7 @@ class WindowPreferencesTest {
     fun `new window starts with a large desktop size`() {
         assertEquals(1600, WindowPreferences.Snapshot().width)
         assertEquals(980, WindowPreferences.Snapshot().height)
+        assertEquals("overview", WindowPreferences.Snapshot().settingsSection)
     }
 
     @Test
@@ -28,11 +29,12 @@ class WindowPreferencesTest {
 
     @Test
     fun `settings selection restores supported keys and maps legacy advanced to feishu`() {
-        val supported = setOf("basic", "paths", "groups", "agents", "tools", "branches", "git", "feishu", "logs")
+        val supported = settingsNavigationSections().map { it.key }.toSet()
 
         assertEquals("logs", normalizeSettingsSection("logs", supported))
         assertEquals("paths", normalizeSettingsSection("paths", supported))
         assertEquals("feishu", normalizeSettingsSection("advanced", supported))
-        assertEquals("basic", normalizeSettingsSection("unknown", supported))
+        assertEquals("overview", normalizeSettingsSection("unknown", supported))
+        assertEquals("git", normalizeSettingsSection("branches", supported))
     }
 }

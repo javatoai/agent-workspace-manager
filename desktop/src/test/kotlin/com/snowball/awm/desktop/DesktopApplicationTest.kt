@@ -59,6 +59,67 @@ import kotlin.test.assertFalse
 class DesktopApplicationTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `restoring a development tool to automatic replaces only that manual path`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-development-tool-reset")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val manualIdea = root.resolve("manual/idea.exe").toAbsolutePath().normalize().toString()
+        val detectedIdea = root.resolve("detected/idea.exe").toAbsolutePath().normalize().toString()
+        val code = root.resolve("Code.exe").toAbsolutePath().normalize().toString()
+        store.save(
+            AppConfig(
+                developmentTools = listOf(
+                    DevelopmentToolConfig(DevelopmentToolType.INTELLIJ_IDEA, manualIdea),
+                    DevelopmentToolConfig(DevelopmentToolType.VISUAL_STUDIO_CODE, code),
+                ),
+            ),
+        )
+        var invocation = 0
+        val detection = DevelopmentToolStartupDetection { initial ->
+            invocation++
+            if (invocation == 1) {
+                DevelopmentToolAutoDetectionResult(initial, emptySet())
+            } else {
+                val updated = store.update { current ->
+                    if (current.developmentTools.any { it.type == DevelopmentToolType.INTELLIJ_IDEA }) current
+                    else current.copy(
+                        developmentTools = current.developmentTools +
+                            DevelopmentToolConfig(DevelopmentToolType.INTELLIJ_IDEA, detectedIdea),
+                    )
+                }
+                DevelopmentToolAutoDetectionResult(updated, setOf(DevelopmentToolType.INTELLIJ_IDEA))
+            }
+        }
+
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            developmentToolStartupDetection = detection,
+            ioDispatcher = dispatcher,
+        )
+        try {
+            advanceUntilIdle()
+            controller.resetDevelopmentToolToAutomatic(DevelopmentToolType.INTELLIJ_IDEA)
+            advanceUntilIdle()
+
+            assertEquals(
+                detectedIdea,
+                controller.config.developmentTools.single { it.type == DevelopmentToolType.INTELLIJ_IDEA }.path,
+            )
+            assertEquals(
+                code,
+                controller.config.developmentTools.single { it.type == DevelopmentToolType.VISUAL_STUDIO_CODE }.path,
+            )
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `development tool detection starts asynchronously and refreshes desktop configuration`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)

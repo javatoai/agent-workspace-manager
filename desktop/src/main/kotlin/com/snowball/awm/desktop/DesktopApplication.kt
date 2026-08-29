@@ -17,6 +17,7 @@ import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.CURRENT_PRODUCT_VERSION
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
+import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.DevelopmentToolAutoDetectionService
 import com.snowball.awm.core.DevelopmentToolStartupDetection
 import com.snowball.awm.core.ConfiguredGitExecutable
@@ -81,6 +82,7 @@ import com.snowball.awm.core.TaskWorkspaceToolAvailability
 import com.snowball.awm.core.TaskWorkspaceToolDescriptor
 import com.snowball.awm.core.TaskWorkspaceToolRegistry
 import com.snowball.awm.core.ThemePreference
+import com.snowball.awm.core.TerminalLaunchCommand
 import com.snowball.awm.core.TagNavigationPolicy
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.WorkspaceToolLaunchService
@@ -307,6 +309,8 @@ class DesktopApplication(
         gitExecutablePath.set(it.gitExecutablePath)
         genbuExecutablePath.set(it.genbuExecutablePath)
     }
+    private var resolvedTerminal by mutableStateOf(TerminalLaunchCommand.resolve(initialConfig.terminalExecutable))
+    private var terminalDetectionGeneration = 0L
     private val initialTasks = scanTasks(initialConfig)
     private var taskScanWarning: String? = (startupMigrationWarnings + listOfNotNull(initialTasks.warning))
         .joinToString("\n")
@@ -642,6 +646,7 @@ class DesktopApplication(
         }
         refreshCurrentTaskGitStatus()
         detectDevelopmentToolsInBackground()
+        detectTerminalInBackground()
     }
 
     /**
@@ -667,6 +672,36 @@ class DesktopApplication(
         allowTemporaryDevelopmentToolSelection: Boolean,
         onFailure: (Throwable) -> Unit = {},
     ) = settingsController.updateDevelopmentTools(tools, defaultTool, terminal, allowTemporaryDevelopmentToolSelection, onFailure)
+    fun terminalCommandResolution() = resolvedTerminal
+    fun redetectDevelopmentTools() = detectDevelopmentToolsInBackground()
+    fun resetDevelopmentToolToAutomatic(type: DevelopmentToolType) {
+        val configuredBeforeReset = config.developmentTools.firstOrNull { it.type == type }
+        scope.launch {
+            try {
+                val cleared = withContext(ioDispatcher) {
+                    configStore.update { current ->
+                        current.copy(developmentTools = current.developmentTools.filterNot { it.type == type })
+                    }
+                }
+                val configuredNow = config.developmentTools.firstOrNull { it.type == type }
+                if (configuredNow == configuredBeforeReset) {
+                    applyConfig(config.copy(developmentTools = config.developmentTools.filterNot { it.type == type }))
+                }
+                val result = withContext(ioDispatcher) {
+                    developmentToolStartupDetection.detectAndPersist(cleared)
+                }
+                val detected = result.config.developmentTools.firstOrNull { it.type == type }
+                if (config.developmentTools.none { it.type == type } && detected != null) {
+                    applyConfig(config.copy(developmentTools = config.developmentTools + detected))
+                }
+                showStatus("${type.displayName} 已恢复自动探测")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                showError(error)
+            }
+        }
+    }
     fun updateHiddenTaskDetailBranches(branches: List<String>, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateHiddenTaskDetailBranches(branches, onFailure)
     fun addGroup(name: String, onCompleted: () -> Unit = {}) = settingsController.addGroup(name, onCompleted)
@@ -1124,6 +1159,7 @@ class DesktopApplication(
     }
 
     private fun applyConfig(updated: AppConfig) {
+        val terminalConfigurationChanged = config.terminalExecutable != updated.terminalExecutable
         val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects ||
             config.requirementMaterialsRoot != updated.requirementMaterialsRoot ||
             config.requirementMaterialsSubdirectory != updated.requirementMaterialsSubdirectory
@@ -1133,6 +1169,7 @@ class DesktopApplication(
             navigation = NavigationItem.TASKS
         }
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
+        if (terminalConfigurationChanged) detectTerminalInBackground()
         if (requirementConfigurationChanged) requirementController.onConfigurationChanged()
         updated.groups.forEach { group ->
             runCatching {
@@ -1162,6 +1199,25 @@ class DesktopApplication(
             } catch (_: Throwable) {
                 // Startup discovery is best-effort: missing tools or local probe
                 // failures must never block startup or surface a dialog.
+            }
+        }
+    }
+
+    private fun detectTerminalInBackground() {
+        val configuredTerminal = config.terminalExecutable
+        val generation = ++terminalDetectionGeneration
+        scope.launch {
+            try {
+                val resolution = withContext(ioDispatcher) {
+                    desktopIntegration.terminalResolution(configuredTerminal)
+                }
+                if (generation == terminalDetectionGeneration) resolvedTerminal = resolution
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                if (generation == terminalDetectionGeneration) {
+                    resolvedTerminal = TerminalLaunchCommand.resolve(configuredTerminal)
+                }
             }
         }
     }

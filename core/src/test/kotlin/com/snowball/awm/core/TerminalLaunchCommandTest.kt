@@ -7,6 +7,30 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class TerminalLaunchCommandTest {
+    @Test
+    fun `terminal resolution exposes configured and automatic Windows choices`() {
+        assertEquals(
+            TerminalCommandResolution("自定义终端", "C:\\Tools\\terminal.exe", TerminalCommandSource.CONFIGURED),
+            TerminalLaunchCommand.resolve("C:\\Tools\\terminal.exe", "Windows 11", windowsTerminalAvailable = true),
+        )
+        assertEquals(
+            TerminalCommandResolution("Windows Terminal", "wt.exe", TerminalCommandSource.SYSTEM_DEFAULT),
+            TerminalLaunchCommand.resolve(null, "Windows 11", windowsTerminalAvailable = true),
+        )
+        assertEquals(
+            TerminalCommandResolution("Windows PowerShell", "powershell.exe", TerminalCommandSource.SYSTEM_DEFAULT),
+            TerminalLaunchCommand.resolve(null, "Windows 11", windowsTerminalAvailable = false),
+        )
+    }
+
+    @Test
+    fun `terminal resolution exposes the macOS system terminal`() {
+        assertEquals(
+            TerminalCommandResolution("Terminal", "Terminal.app", TerminalCommandSource.SYSTEM_DEFAULT),
+            TerminalLaunchCommand.resolve(null, "Mac OS X"),
+        )
+    }
+
     private val target = Path.of("D:/tasks/demo")
 
     @Test

@@ -14,14 +14,14 @@ internal object WindowPreferences {
         val width: Int = 1600,
         val height: Int = 980,
         val maximized: Boolean = false,
-        val settingsSection: String = "basic",
+        val settingsSection: String = "overview",
     )
 
     fun load(): Snapshot = Snapshot(
         width = preferences.getInt("width", 1600),
         height = preferences.getInt("height", 980),
         maximized = preferences.getBoolean("maximized", false),
-        settingsSection = preferences.get("settingsSection", "basic"),
+        settingsSection = preferences.get("settingsSection", "overview"),
     )
 
     fun saveWindow(width: Int, height: Int, maximized: Boolean) {

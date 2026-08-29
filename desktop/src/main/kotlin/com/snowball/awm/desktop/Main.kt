@@ -435,5 +435,5 @@ private val NavigationItem.pageDescription: String
         NavigationItem.ARCHIVED -> "查看已归档任务并按需恢复"
         NavigationItem.SERVICES -> "按组管理仓库、模块和工作区策略"
         NavigationItem.TAG -> "从已启用的工作区安全构建测试Tag"
-        NavigationItem.SETTINGS -> "管理本地目录、组、Agent 说明与开发工具"
+        NavigationItem.SETTINGS -> "管理本地目录、服务、协作说明与开发工具"
     }
