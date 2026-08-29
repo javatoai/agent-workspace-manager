@@ -16,7 +16,7 @@ class WindowPreferencesTest {
     fun `new window starts with a large desktop size`() {
         assertEquals(1600, WindowPreferences.Snapshot().width)
         assertEquals(980, WindowPreferences.Snapshot().height)
-        assertEquals("overview", WindowPreferences.Snapshot().settingsSection)
+        assertEquals("basic", WindowPreferences.Snapshot().settingsSection)
     }
 
     @Test
@@ -34,7 +34,8 @@ class WindowPreferencesTest {
         assertEquals("logs", normalizeSettingsSection("logs", supported))
         assertEquals("paths", normalizeSettingsSection("paths", supported))
         assertEquals("feishu", normalizeSettingsSection("advanced", supported))
-        assertEquals("overview", normalizeSettingsSection("unknown", supported))
+        assertEquals("basic", normalizeSettingsSection("unknown", supported))
+        assertEquals("basic", normalizeSettingsSection("overview", supported))
         assertEquals("git", normalizeSettingsSection("branches", supported))
     }
 }

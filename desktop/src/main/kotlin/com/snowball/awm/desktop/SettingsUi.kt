@@ -160,18 +160,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     val sections = remember { settingsNavigationSections() }
     val initialSection = remember { WindowPreferences.load().settingsSection }
     var selectedSection by remember { mutableStateOf(normalizeSettingsSection(initialSection, sections.map { it.key }.toSet())) }
-    var advancedExpanded by remember {
-        mutableStateOf(sections.any { it.key == selectedSection && it.category == SettingsSectionCategory.ADVANCED })
-    }
     fun navigateToSection(key: String) {
-        when (key) {
-            "tasks" -> controller.navigation = NavigationItem.TASKS
-            "services" -> controller.navigation = NavigationItem.SERVICES
-            else -> {
-                selectedSection = key
-                WindowPreferences.saveSettingsSection(key)
-            }
-        }
+        selectedSection = key
+        WindowPreferences.saveSettingsSection(key)
     }
     fun saving(key: String) = controller.settingsSaveState(key) == SettingsSaveState.SAVING
     fun currentToolConfigs(): List<DevelopmentToolConfig> = DevelopmentToolType.entries.mapNotNull { type ->
@@ -214,12 +205,6 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     }
 
     LaunchedEffect(selectedSection) {
-        if (selectedSection == "overview") {
-            controller.refreshCliInstallationStatus()
-            controller.refreshMeegleStatus()
-            controller.refreshLocalGit()
-            controller.refreshGenbu()
-        }
         if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
         if (selectedSection == "cli") controller.refreshCliInstallationStatus()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
@@ -243,49 +228,18 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 LazyColumn(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SettingsSectionCategory.entries.forEach { category ->
-                        item(key = "category-${category.name}") {
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .clickable(enabled = category == SettingsSectionCategory.ADVANCED) {
-                                        advancedExpanded = !advancedExpanded
-                                    }
-                                    .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    category.displayName,
-                                    Modifier.weight(1f),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                if (category == SettingsSectionCategory.ADVANCED) {
-                                    Icon(
-                                        if (advancedExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-                                        if (advancedExpanded) "收起高级设置" else "展开高级设置",
-                                        Modifier.size(17.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-                        val visibleSections = sections.filter {
-                            it.category == category && (category != SettingsSectionCategory.ADVANCED || advancedExpanded)
-                        }
-                        items(visibleSections, key = { it.key }) { section ->
-                            Surface(
-                                Modifier.fillMaxWidth().clickable { navigateToSection(section.key) },
-                                color = if (selectedSection == section.key) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp),
-                            ) {
-                                Text(
-                                    section.label,
-                                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                    fontWeight = if (selectedSection == section.key) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (selectedSection == section.key) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
+                    items(sections, key = { it.key }) { section ->
+                        Surface(
+                            Modifier.fillMaxWidth().clickable { navigateToSection(section.key) },
+                            color = if (selectedSection == section.key) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Text(
+                                section.label,
+                                Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                fontWeight = if (selectedSection == section.key) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selectedSection == section.key) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            )
                         }
                     }
                 }
@@ -321,9 +275,6 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                         }
                     }
                 }
-            }
-            if (selectedSection == "overview") item {
-                SettingsOverviewSection(controller, ::navigateToSection)
             }
             if (selectedSection == "basic") item {
                 SettingsBasicSection(
@@ -579,10 +530,10 @@ private fun formatByteSize(bytes: Long): String = when {
 
 internal fun normalizeSettingsSection(stored: String, supported: Set<String>): String = when (stored) {
     "advanced" -> "feishu"
-    "branches" -> if ("git" in supported) "git" else "overview"
-    "genbu" -> if ("genbu" in supported) "genbu" else "overview"
+    "branches" -> if ("git" in supported) "git" else "basic"
+    "genbu" -> if ("genbu" in supported) "genbu" else "basic"
     in supported -> stored
-    else -> "overview"
+    else -> "basic"
 }
 
 private enum class CliDetectionPhase { IDLE, LOADING, READY, FAILED }
@@ -743,229 +694,6 @@ private fun SettingsBasicSection(
                     )
                 }
             }
-        }
-    }
-}
-
-private enum class OverviewTone { READY, ATTENTION, NEUTRAL }
-
-private data class EnvironmentOverviewItem(
-    val label: String,
-    val status: String,
-    val detail: String,
-    val actionLabel: String,
-    val tone: OverviewTone,
-    val action: () -> Unit,
-)
-
-@Composable
-private fun SettingsOverviewSection(
-    controller: DesktopApplication,
-    navigateToSection: (String) -> Unit,
-) {
-    val taskRoot = controller.config.taskRoot?.let { runCatching { Path.of(it) }.getOrNull() }
-    val taskRootReady = taskRoot != null && Files.isDirectory(taskRoot) && Files.isWritable(taskRoot)
-    val serviceCount = controller.config.groups.sumOf { it.services.size }
-    val onboarding = settingsOnboardingSteps(
-        SettingsOnboardingProgress(
-            taskRootReady = taskRootReady,
-            repositoryCount = controller.config.repositories.size,
-            serviceCount = serviceCount,
-            taskCount = controller.tasks.size,
-        ),
-    )
-    if (onboarding.any { !it.completed }) {
-        SettingsCard("首次使用", "完成最短路径即可创建任务；Meegle、Genbu、资料目录和高级 Git 规则都可以稍后配置。") {
-            onboarding.forEachIndexed { index, step ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (step.completed) SuccessGreen.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
-                    ) {
-                        Text(
-                            if (step.completed) "✓" else "${index + 1}",
-                            Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                            color = if (step.completed) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(step.title, fontWeight = FontWeight.SemiBold)
-                        Text(step.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (!step.completed) {
-                        OutlinedButton(onClick = { navigateToSection(step.targetSection) }) {
-                            Text(if (step.targetSection == "tasks") "去创建" else "去配置")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    val configuredTools = controller.config.developmentTools
-    val validToolCount = configuredTools.count { runCatching { Files.exists(Path.of(it.path)) }.getOrDefault(false) }
-    val invalidToolCount = configuredTools.size - validToolCount
-    val terminal = controller.terminalCommandResolution()
-    val gitState = controller.localGitSettingsState
-    val gitResolution = controller.gitCommandResolution()
-    val meegleState = controller.meegleCliState
-    val genbuState = controller.genbuSettingsState
-    val cli = controller.cliInstallationStatus
-    val items = buildList {
-        add(
-            EnvironmentOverviewItem(
-                label = "任务目录",
-                status = if (taskRootReady) "正常" else "需要处理",
-                detail = taskRoot?.toString() ?: "尚未配置任务根目录",
-                actionLabel = if (taskRootReady) "查看" else "更换目录",
-                tone = if (taskRootReady) OverviewTone.READY else OverviewTone.ATTENTION,
-                action = { navigateToSection("paths") },
-            ),
-        )
-        add(
-            EnvironmentOverviewItem(
-                label = "Git",
-                status = when (gitState) {
-                    is LocalGitSettingsState.Loaded -> "可用"
-                    is LocalGitSettingsState.Loading -> "检测中"
-                    is LocalGitSettingsState.Failed -> "检测失败"
-                    LocalGitSettingsState.Idle -> "尚未检测"
-                },
-                detail = "${gitResolution.first} · ${gitSourceLabel(gitResolution.second)}",
-                actionLabel = if (gitState is LocalGitSettingsState.Failed) "修复" else "查看",
-                tone = if (gitState is LocalGitSettingsState.Loaded) OverviewTone.READY else OverviewTone.ATTENTION,
-                action = { navigateToSection("git") },
-            ),
-        )
-        add(
-            EnvironmentOverviewItem(
-                label = "开发工具",
-                status = "$validToolCount/${DevelopmentToolType.entries.size} 可用",
-                detail = when {
-                    invalidToolCount > 0 -> "$invalidToolCount 个已配置路径失效"
-                    configuredTools.isEmpty() -> "尚未检测到开发工具"
-                    else -> "未配置的类型会在启动后静默探测"
-                },
-                actionLabel = if (invalidToolCount > 0) "修复" else "管理",
-                tone = when {
-                    invalidToolCount > 0 || configuredTools.isEmpty() -> OverviewTone.ATTENTION
-                    else -> OverviewTone.READY
-                },
-                action = { navigateToSection("tools") },
-            ),
-        )
-        add(
-            EnvironmentOverviewItem(
-                label = "终端",
-                status = when {
-                    controller.config.terminalExecutable.isNullOrBlank() -> "自动"
-                    terminal.available -> "手动配置 · 可用"
-                    else -> "路径无效"
-                },
-                detail = "${terminal.displayName} · ${terminal.command}",
-                actionLabel = if (terminal.available) "管理" else "修复",
-                tone = if (terminal.available) OverviewTone.READY else OverviewTone.ATTENTION,
-                action = { navigateToSection("tools") },
-            ),
-        )
-        val meegleStatus = when (meegleState) {
-            is MeegleCliState.Ready -> meegleState.status
-            is MeegleCliState.Loading -> meegleState.previous
-            MeegleCliState.Idle, is MeegleCliState.Failed -> null
-        }
-        add(
-            EnvironmentOverviewItem(
-                label = "Meegle",
-                status = when {
-                    meegleStatus?.authenticated == true -> "已登录"
-                    meegleStatus?.installed == true -> "需要登录"
-                    meegleState is MeegleCliState.Loading -> "检测中"
-                    else -> "未就绪"
-                },
-                detail = if (controller.config.meegleProjects.isEmpty()) "尚未选择项目" else "已配置 ${controller.config.meegleProjects.size} 个项目",
-                actionLabel = if (meegleStatus?.installed == true && !meegleStatus.authenticated) "立即登录" else "配置",
-                tone = if (meegleStatus?.authenticated == true) OverviewTone.READY else OverviewTone.NEUTRAL,
-                action = {
-                    if (meegleStatus?.installed == true && !meegleStatus.authenticated) controller.loginMeegle()
-                    else navigateToSection("feishu")
-                },
-            ),
-        )
-        add(
-            EnvironmentOverviewItem(
-                label = "AWM CLI",
-                status = if (cli.installed) "已安装 ${cli.version.orEmpty()}".trim() else "未安装",
-                detail = cli.message,
-                actionLabel = if (!cli.installed && cli.supported && cli.bundledPayloadAvailable) "立即安装" else "查看",
-                tone = if (cli.installed) OverviewTone.READY else OverviewTone.NEUTRAL,
-                action = {
-                    if (!cli.installed && cli.supported && cli.bundledPayloadAvailable) controller.installCli()
-                    else navigateToSection("cli")
-                },
-            ),
-        )
-        add(
-            EnvironmentOverviewItem(
-                label = "需求资料目录",
-                status = if (controller.config.requirementMaterialsConfigured) "已启用" else "未启用",
-                detail = if (controller.config.requirementMaterialsConfigured) "创建任务时会预览并创建或复用资料目录" else "可选功能，不影响任务创建",
-                actionLabel = "配置",
-                tone = if (controller.config.requirementMaterialsConfigured) OverviewTone.READY else OverviewTone.NEUTRAL,
-                action = { navigateToSection("paths") },
-            ),
-        )
-        add(
-            EnvironmentOverviewItem(
-                label = "Genbu",
-                status = when (genbuState) {
-                    is GenbuSettingsState.Loaded -> "可用"
-                    GenbuSettingsState.Loading -> "检测中"
-                    is GenbuSettingsState.Failed -> "未就绪"
-                    GenbuSettingsState.Idle -> "未启用"
-                },
-                detail = if (controller.enabledGenbuProbeServiceCount > 0) "${controller.enabledGenbuProbeServiceCount} 个服务已启用状态探测" else "可选集成",
-                actionLabel = "配置",
-                tone = if (genbuState is GenbuSettingsState.Loaded) OverviewTone.READY else OverviewTone.NEUTRAL,
-                action = { navigateToSection("genbu") },
-            ),
-        )
-    }
-    SettingsCard("环境状态", "显示当前实际使用的本机能力；可选集成未配置不会阻止创建任务。") {
-        items.chunked(2).forEach { rowItems ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                rowItems.forEach { item -> EnvironmentOverviewCard(item, Modifier.weight(1f)) }
-                if (rowItems.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun EnvironmentOverviewCard(item: EnvironmentOverviewItem, modifier: Modifier = Modifier) {
-    val statusColor = when (item.tone) {
-        OverviewTone.READY -> SuccessGreen
-        OverviewTone.ATTENTION -> MaterialTheme.colorScheme.error
-        OverviewTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    OutlinedCard(modifier) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(item.label, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                Text(item.status, style = MaterialTheme.typography.labelSmall, color = statusColor)
-            }
-            Text(
-                item.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            TextButton(onClick = item.action, modifier = Modifier.align(Alignment.End)) { Text(item.actionLabel) }
         }
     }
 }
@@ -1208,11 +936,6 @@ private fun SettingsGroupsSection(
 ) {
     SettingsCard("服务与仓库", "按任务组维护仓库和服务；只能删除没有服务和任务引用的空组。") {
         AutoSaveStatus(controller, "groups")
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            OutlinedButton(onClick = { controller.navigation = NavigationItem.SERVICES }) {
-                Text("打开服务仓库")
-            }
-        }
         controller.config.groups.forEachIndexed { index, group ->
             GroupSettingsRow(
                 controller = controller,
@@ -1406,23 +1129,23 @@ private fun SettingsToolsSection(
                             },
                         )
                     }
-                    OutlinedTextField(
-                        value,
-                        { developmentToolPaths[type] = it },
-                        Modifier.fillMaxWidth().onFocusChanged { focus ->
-                            val configured = controller.config.developmentTools.firstOrNull { it.type == type }?.path.orEmpty()
-                            if (!focus.isFocused && developmentToolPaths[type].orEmpty().trim() != configured) onSaveDevelopmentTools()
-                        },
-                        label = { Text("应用路径") },
-                        placeholder = { Text("留空时由 AWM 自动探测") },
-                        singleLine = true,
-                        readOnly = controller.busy || saving,
-                    )
-                    FlowRow(
+                    Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        OutlinedTextField(
+                            value,
+                            { developmentToolPaths[type] = it },
+                            Modifier.weight(1f).onFocusChanged { focus ->
+                                val configured = controller.config.developmentTools.firstOrNull { it.type == type }?.path.orEmpty()
+                                if (!focus.isFocused && developmentToolPaths[type].orEmpty().trim() != configured) onSaveDevelopmentTools()
+                            },
+                            label = { Text("应用路径") },
+                            placeholder = { Text("留空时由 AWM 自动探测") },
+                            singleLine = true,
+                            readOnly = controller.busy || saving,
+                        )
                         OutlinedButton(
                             onClick = { controller.chooseApplication(value) { developmentToolPaths[type] = it; onSaveDevelopmentTools() } },
                             enabled = !controller.pathPickerBusy && !controller.busy && !saving,
@@ -2213,8 +1936,6 @@ private fun SettingsCard(title: String, subtitle: String, content: @Composable C
 }
 
 private fun settingsCardIcon(title: String): ImageVector = when (title) {
-    "首次使用" -> Icons.Outlined.AccountTree
-    "环境状态" -> Icons.Outlined.Build
     "外观" -> Icons.Outlined.Palette
     "任务路径设置" -> Icons.Outlined.Folder
     "需求资料目录设置" -> Icons.Outlined.Folder
