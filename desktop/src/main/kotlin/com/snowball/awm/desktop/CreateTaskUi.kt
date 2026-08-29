@@ -68,6 +68,18 @@ import com.snowball.awm.core.TaskServiceSelection
 import com.snowball.awm.core.WorkspaceStrategy
 import java.util.UUID
 
+internal data class TaskInformationLayout(
+    val formItemSpacingDp: Int,
+    val materialsLineSpacingDp: Int,
+)
+
+internal fun taskInformationLayout(): TaskInformationLayout = TaskInformationLayout(
+    formItemSpacingDp = 11,
+    materialsLineSpacingDp = 2,
+)
+
+internal fun taskNameSupportingMessage(error: String?): String? = error
+
 @Composable
 internal fun CreateTaskDialog(
     controller: DesktopApplication,
@@ -118,6 +130,7 @@ internal fun CreateTaskDialog(
     val taskNameError = draft.taskName.takeUnless(String::isBlank)
         ?.let(TaskNaming::directoryNameValidationError)
     val unresolvedBranch = BranchPrefixResolver.containsUnresolvedPlaceholder(draft.branch)
+    val informationLayout = taskInformationLayout()
     val materialsPreview = controller.requirementMaterialsPreviewState
     val materialsDirectory = (materialsPreview as? RequirementMaterialsPreviewState.Ready)?.let {
         RequirementMaterialsDirectory(
@@ -198,7 +211,10 @@ internal fun CreateTaskDialog(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
                         shape = RoundedCornerShape(15.dp),
                     ) {
-                    Column(Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                    Column(
+                        Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(informationLayout.formItemSpacingDp.dp),
+                    ) {
                         SectionHeader("任务信息", "名称和分支将用于创建任务目录与 Git 分支")
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                             OutlinedTextField(
@@ -280,7 +296,9 @@ internal fun CreateTaskDialog(
                             label = { Text("文件夹名称") },
                             placeholder = { Text("例如：PAY-1024 支付订单优化") },
                             isError = taskNameError != null,
-                            supportingText = { taskNameError?.let { Text(it) } },
+                            supportingText = taskNameSupportingMessage(taskNameError)?.let { message ->
+                                { Text(message) }
+                            },
                             singleLine = true,
                         )
                         when (val state = materialsPreview) {
@@ -296,9 +314,11 @@ internal fun CreateTaskDialog(
                                 } else {
                                     "预计新建"
                                 }
-                                Text("需求资料目录：$status", style = MaterialTheme.typography.bodySmall)
-                                SelectionContainer {
-                                    Text(state.path, style = MaterialTheme.typography.bodySmall)
+                                Column(verticalArrangement = Arrangement.spacedBy(informationLayout.materialsLineSpacingDp.dp)) {
+                                    Text("需求资料目录：$status", style = MaterialTheme.typography.bodySmall)
+                                    SelectionContainer {
+                                        Text(state.path, style = MaterialTheme.typography.bodySmall)
+                                    }
                                 }
                             }
                             is RequirementMaterialsPreviewState.Failed -> Text(
