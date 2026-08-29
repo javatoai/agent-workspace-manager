@@ -17,6 +17,8 @@ import com.snowball.awm.core.ConfigStore
 import com.snowball.awm.core.CURRENT_PRODUCT_VERSION
 import com.snowball.awm.core.DeleteRisk
 import com.snowball.awm.core.DesktopIntegration
+import com.snowball.awm.core.DevelopmentToolAutoDetectionService
+import com.snowball.awm.core.DevelopmentToolStartupDetection
 import com.snowball.awm.core.ConfiguredGitExecutable
 import com.snowball.awm.core.ConfiguredGenbuExecutable
 import com.snowball.awm.core.ConfiguredMeegleExecutable
@@ -103,6 +105,7 @@ import com.snowball.awm.core.WorkspaceModuleRemovalService
 import com.snowball.awm.core.toInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -188,6 +191,8 @@ class DesktopApplication(
     private val bootstrapService: BootstrapService = BootstrapService(git = gitClient),
     private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, git = gitClient, meegleExecutable = meegleExecutable),
     private val configStore: ConfigStore = ConfigStore(paths),
+    private val developmentToolStartupDetection: DevelopmentToolStartupDetection =
+        DevelopmentToolAutoDetectionService(configStore),
     private val manifests: ManifestStore = ManifestStore(),
     private val requirementMaterialsService: RequirementMaterialsService =
         RequirementMaterialsService(meegleExecutable = meegleExecutable),
@@ -636,6 +641,7 @@ class DesktopApplication(
             }.onFailure(::showError)
         }
         refreshCurrentTaskGitStatus()
+        detectDevelopmentToolsInBackground()
     }
 
     /**
@@ -1135,6 +1141,29 @@ class DesktopApplication(
             }.onFailure(::showError)
         }
         refreshConfigFileSnapshot()
+    }
+
+    private fun detectDevelopmentToolsInBackground() {
+        val startupConfig = config
+        scope.launch {
+            try {
+                val result = withContext(ioDispatcher) {
+                    developmentToolStartupDetection.detectAndPersist(startupConfig)
+                }
+                val configuredNow = config.developmentTools.map { it.type }.toSet()
+                val detectedAdditions = result.config.developmentTools.filter {
+                    it.type in result.addedTypes && it.type !in configuredNow
+                }
+                if (detectedAdditions.isNotEmpty()) {
+                    applyConfig(config.copy(developmentTools = config.developmentTools + detectedAdditions))
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Startup discovery is best-effort: missing tools or local probe
+                // failures must never block startup or surface a dialog.
+            }
+        }
     }
 
     private fun showStatus(message: String) {

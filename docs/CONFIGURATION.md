@@ -208,6 +208,8 @@ agents/task-templates.json
 
 创建前会执行 `fetch --prune --no-tags <remote>`，并从最新的 `refs/remotes/<remote>/<branch>` 创建 Worktree；不会切换或移动用户本地 `master`。普通任务创建不受本地同名 Tag 冲突影响。标准服务创建 Worktree 后按服务配置执行 Bootstrap。
 
+每次启动后，AWM 会在后台静默补齐 `developmentTools` 中仍未配置的工具，不阻塞界面、不弹窗、不联网，也不会递归扫描磁盘。已有配置即使路径已经失效也不会被覆盖。Windows 依次检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 稳定版目录和 `where.exe` 可解析的 PATH；macOS 依次检查 `/Applications`、`~/Applications`、JetBrains Toolbox 稳定版目录和 PATH 中的命令。探测完成时会重新读取配置，并通过一次原子更新只补仍为空的类型，因此不会覆盖探测期间用户手动保存的路径。支持 IntelliJ IDEA、WebStorm、PyCharm、Visual Studio Code、Android Studio 和 DevEco Studio；未找到的类型保持为空。
+
 `allowTemporaryDevelopmentToolSelection` 默认关闭。关闭时，任务工具栏和工作区行只用各自默认开发工具打开；开启后才显示临时 IDE 下拉。该开关不会让 AWM 在任务创建完成后自动打开服务。`hiddenTaskDetailBranches` 只过滤任务详情头部的实际分支汇总，使用区分大小写的完整名称匹配；工作区行和分支信息仍完整展示。
 
 ### 独立克隆

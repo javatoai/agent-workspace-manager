@@ -1100,7 +1100,10 @@ private fun SettingsToolsSection(
     saving: Boolean,
     onSaveDevelopmentTools: () -> Unit,
 ) {
-    SettingsCard("开发工具", "工具路径完全由用户选择；未配置的工具不会出现在临时打开列表中。") {
+    SettingsCard(
+        "开发工具",
+        "启动后会在后台静默探测尚未填写的工具路径；已有路径即使失效也不会被覆盖。未配置的工具不会出现在临时打开列表中。",
+    ) {
         AutoSaveStatus(controller, "tools")
         DevelopmentToolType.entries.forEach { type ->
             val value = developmentToolPaths[type].orEmpty()

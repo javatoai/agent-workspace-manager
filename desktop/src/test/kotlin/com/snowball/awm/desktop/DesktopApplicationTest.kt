@@ -3,6 +3,10 @@ package com.snowball.awm.desktop
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ApplicationPaths
 import com.snowball.awm.core.ConfigStore
+import com.snowball.awm.core.DevelopmentToolAutoDetectionResult
+import com.snowball.awm.core.DevelopmentToolConfig
+import com.snowball.awm.core.DevelopmentToolStartupDetection
+import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.CommandResult
 import com.snowball.awm.core.CommandRunner
 import com.snowball.awm.core.ConfiguredGitExecutable
@@ -53,6 +57,72 @@ import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 
 class DesktopApplicationTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `development tool detection starts asynchronously and refreshes desktop configuration`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-development-tool-startup")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val code = root.resolve("Visual Studio Code/Code.exe").toAbsolutePath().normalize().toString()
+        var invoked = false
+        val detection = DevelopmentToolStartupDetection { initial ->
+            invoked = true
+            val updated = initial.copy(
+                developmentTools = initial.developmentTools +
+                    DevelopmentToolConfig(DevelopmentToolType.VISUAL_STUDIO_CODE, code),
+            )
+            DevelopmentToolAutoDetectionResult(updated, setOf(DevelopmentToolType.VISUAL_STUDIO_CODE))
+        }
+
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            developmentToolStartupDetection = detection,
+            ioDispatcher = dispatcher,
+        )
+        try {
+            assertFalse(invoked)
+            assertTrue(controller.config.developmentTools.isEmpty())
+
+            advanceUntilIdle()
+
+            assertTrue(invoked)
+            assertEquals(code, controller.config.developmentTools.single().path)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `development tool detection failure remains silent`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-development-tool-failure")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            developmentToolStartupDetection = DevelopmentToolStartupDetection { error("probe failed") },
+            ioDispatcher = dispatcher,
+        )
+        try {
+            advanceUntilIdle()
+
+            assertEquals(null, controller.errorMessage)
+            assertTrue(controller.config.developmentTools.isEmpty())
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `Genbu refresh persists only the detected executable and exposes version status`() = runTest {

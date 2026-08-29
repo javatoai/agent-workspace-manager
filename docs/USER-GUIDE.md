@@ -57,6 +57,8 @@ AWM 隔离的是代码工作目录和 Git 工作区；端口、数据库、Docke
 
 任务详情可逐个复制当前实际分支和路径、打开 IDE/终端/文件夹、查看工作数据、添加服务，以及在满足开关条件时构建 Tag。分支设置可隐藏头部中如 `master`、`develop` 的精确分支名，但工作区行仍完整展示。创建任务时，分支输入框可搜索所选标准 Worktree 服务的远程 Heads；下拉查询不会执行 fetch 或读取 Tag。
 
+启动后，AWM 会在后台静默查找尚未填写路径的开发工具。Windows 只检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 已知目录和 PATH；macOS 只检查 `/Applications`、`~/Applications`、JetBrains Toolbox 已知目录和 PATH，不会联网或递归扫描磁盘。手动保存的路径优先级最高，即使当前无效也不会被自动结果覆盖；未找到时不会提示。
+
 开发工具中的“临时选择开发工具”默认关闭。关闭时，工作数据和每个服务都直接使用其默认工具打开；开启后才显示临时选择菜单。任务创建完成不会因为这个开关自动打开服务。
 
 Git 设置页只读取本机 Git 可执行文件、版本、用户配置来源、凭据助手名称、已配置仓库的当前分支、HEAD、upstream、ahead/behind、状态、Worktree 和原始远程 URL，不执行任何联网 Git 命令。
