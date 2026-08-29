@@ -167,7 +167,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         "branches" to "分支",
         "git" to "Git",
         "genbu" to "Genbu",
-        "feishu" to "飞书项目",
+        "feishu" to "Meegle",
         "logs" to "日志",
     )
     val initialSection = remember { WindowPreferences.load().settingsSection }
@@ -1517,10 +1517,10 @@ private fun SettingsFeishuSection(
     saving: Boolean,
     onSaveMeegleProjects: () -> Unit,
 ) {
-    SettingsCard("飞书项目", "管理创建任务时用于读取需求的 Meegle 项目。") {
+    SettingsCard("Meegle", "管理创建任务时用于读取需求的 Meegle 项目。") {
         AutoSaveStatus(controller, "feishu")
         MeegleCliStatusPanel(controller)
-        Text("飞书需求项目", style = MaterialTheme.typography.titleSmall)
+        Text("Meegle 项目", style = MaterialTheme.typography.titleSmall)
         Text(
             "点击添加后从本机 Meegle CLI 读取项目；创建任务时会拉取已配置项目中的飞书需求链接。",
             style = MaterialTheme.typography.bodySmall,
@@ -1537,7 +1537,7 @@ private fun SettingsFeishuSection(
                         Text(project.simpleName, fontWeight = FontWeight.SemiBold)
                         Text(project.projectKey, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    ActionIconButton("删除飞书项目配置", { meegleProjects.remove(index); onSaveMeegleProjects() }, enabled = !controller.busy && !saving) {
+                    ActionIconButton("删除 Meegle 项目配置", { meegleProjects.remove(index); onSaveMeegleProjects() }, enabled = !controller.busy && !saving) {
                         Icon(Icons.Outlined.Delete, "删除项目")
                     }
                 }
@@ -1696,7 +1696,7 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
                     Text("登录凭据即将过期，建议刷新或重新登录", style = MaterialTheme.typography.labelSmall, color = WarningAmber)
                 }
                 if (current.installed && !current.authenticated) {
-                    Button(onClick = controller::loginMeegle, enabled = !controller.meegleBusy) { Text("登录飞书项目") }
+                    Button(onClick = controller::loginMeegle, enabled = !controller.meegleBusy) { Text("登录 Meegle") }
                 }
             }
             if (controller.meegleBusy && controller.meegleOperationCancellable) {
@@ -1879,7 +1879,7 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "Git 环境" -> Icons.Outlined.Terminal
     "分支写保护" -> Icons.Outlined.Lock
     "Genbu" -> Icons.Outlined.Sell
-    "飞书项目" -> Icons.Outlined.Link
+    "Meegle" -> Icons.Outlined.Link
     "日志" -> Icons.AutoMirrored.Outlined.Subject
     else -> Icons.Outlined.Description
 }
