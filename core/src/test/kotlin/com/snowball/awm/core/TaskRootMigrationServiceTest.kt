@@ -127,9 +127,9 @@ class TaskRootMigrationServiceTest {
         assertFalse(sourceTask.exists())
         assertTrue(migratedWorktree.resolve("dirty.txt").exists())
         assertEquals(migratedWorktree.toAbsolutePath().normalize().toString(), migratedManifest.services.single().worktreePath)
-        assertEquals(migratedWorktree.toAbsolutePath().normalize(), GitClient().topLevel(migratedWorktree))
+        assertTrue(Files.isSameFile(migratedWorktree, GitClient().topLevel(migratedWorktree)))
         assertEquals("feature/migrate", GitClient().currentBranch(migratedWorktree))
-        assertTrue(GitClient().worktrees(repositoryPath).any { it.path.toAbsolutePath().normalize() == migratedWorktree.toAbsolutePath().normalize() })
+        assertTrue(GitClient().worktrees(repositoryPath).any { Files.isSameFile(it.path, migratedWorktree) })
         assertTrue(Files.readString(migratedTask.resolve("AGENTS.md")).contains(migratedWorktree.toString()))
         assertEquals(targetRoot.toAbsolutePath().normalize().toString(), configStore.load().taskRoot)
     }
@@ -211,7 +211,7 @@ class TaskRootMigrationServiceTest {
         assertFalse(sourceTask.exists())
         assertTrue(migrated.resolve("staged.txt").exists())
         assertEquals(before, GitClient().readOnly(migrated, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all").stdout)
-        assertTrue(GitClient().worktrees(repositoryPath).any { it.path.toAbsolutePath().normalize() == migrated.toAbsolutePath().normalize() })
+        assertTrue(GitClient().worktrees(repositoryPath).any { Files.isSameFile(it.path, migrated) })
     }
 
     @Test
@@ -248,7 +248,7 @@ class TaskRootMigrationServiceTest {
         assertTrue(worktree.exists())
         assertFalse(targetRoot.resolve("TASK-4").exists())
         assertEquals(sourceRoot.toAbsolutePath().normalize().toString(), store.load().taskRoot)
-        assertTrue(git.worktrees(repositoryPath).any { it.path.toAbsolutePath().normalize() == worktree.toAbsolutePath().normalize() })
+        assertTrue(git.worktrees(repositoryPath).any { Files.isSameFile(it.path, worktree) })
         assertFalse(paths.home.resolve("migrations/task-root.json").exists())
     }
 

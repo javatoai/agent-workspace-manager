@@ -7,7 +7,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_PRODUCT_VERSION = "1.0.1"
+const val CURRENT_PRODUCT_VERSION = "1.0.2"
 const val CURRENT_APP_CONFIG_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
 const val DEFAULT_GROUP_ID = "default"

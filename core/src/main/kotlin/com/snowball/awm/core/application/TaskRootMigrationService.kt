@@ -301,19 +301,19 @@ class TaskRootMigrationService(
         head = git.resolve(path, "HEAD"),
         branch = git.currentBranch(path),
         status = git.readOnly(path, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all").stdout,
-        commonDirectory = git.commonDirectory(path).toString(),
+        commonDirectory = git.commonDirectory(path),
         originUrl = git.remoteUrl(path),
     )
 
     private fun verify(workspace: ServiceWorkspace, target: Path, expected: WorkspaceSnapshot) {
-        require(git.topLevel(target) == target.toAbsolutePath().normalize()) { "迁移后的路径不是 Git 顶层目录：$target" }
+        require(sameFile(git.topLevel(target), target)) { "迁移后的路径不是 Git 顶层目录：$target" }
         require(git.resolve(target, "HEAD") == expected.head) { "迁移后 HEAD 发生变化：$target" }
         require(git.currentBranch(target) == expected.branch) { "迁移后分支发生变化：$target" }
         require(
             git.readOnly(target, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all").stdout == expected.status,
         ) { "迁移后工作区文件状态发生变化：$target" }
         when (workspace.strategy) {
-            WorkspaceStrategy.STANDARD_WORKTREE -> require(git.commonDirectory(target).toString() == expected.commonDirectory) {
+            WorkspaceStrategy.STANDARD_WORKTREE -> require(sameFile(git.commonDirectory(target), expected.commonDirectory)) {
                 "迁移后 Worktree 仓库身份发生变化：$target"
             }
             WorkspaceStrategy.INDEPENDENT_CLONE -> require(git.remoteUrl(target) == expected.originUrl) {
@@ -321,6 +321,9 @@ class TaskRootMigrationService(
             }
         }
     }
+
+    private fun sameFile(left: Path, right: Path): Boolean =
+        runCatching { Files.isSameFile(left, right) }.getOrDefault(false)
 
     private fun repairRegisteredWorktree(repository: Path, worktree: Path) {
         repositoryLock.withLock(git.commonDirectory(repository)) {
@@ -481,7 +484,7 @@ class TaskRootMigrationService(
         val head: String,
         val branch: String?,
         val status: String,
-        val commonDirectory: String,
+        val commonDirectory: Path,
         val originUrl: String?,
     )
 
