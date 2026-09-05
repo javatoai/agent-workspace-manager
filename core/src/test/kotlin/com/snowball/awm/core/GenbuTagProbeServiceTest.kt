@@ -25,7 +25,7 @@ class GenbuTagProbeServiceTest {
 
     @Test
     fun `built tag remains eligible until released`() {
-        val fixture = fixture(resultByTag = mapOf("1.0.0.1" to GenbuTagQueryResult(built = true, uatReleased = false, productionReleased = false)))
+        val fixture = fixture(resultByTag = mapOf("1.0.0.1" to buildingResult()))
         fixture.store.save(fixture.taskDirectory, operation("1.0.0.1", "2026-08-25 10:00:00"))
 
         assertTrue(fixture.probes.probe(fixture.config, listOf(fixture.task)))
@@ -33,9 +33,30 @@ class GenbuTagProbeServiceTest {
 
         assertEquals(listOf("1.0.0.1", "1.0.0.1"), fixture.calls)
         val status = fixture.store.list(fixture.taskDirectory).single().genbuStatus
-        assertTrue(status.built)
-        assertFalse(status.released)
+        assertEquals(GenbuStageStatus.SUCCESS, status.build)
+        assertEquals(GenbuStageStatus.INITIAL, status.uat)
         assertFalse(status.stoppedByNewerRelease)
+    }
+
+    @Test
+    fun `failed build tag stops automatic polling until re-tagged`() {
+        val fixture = fixture(
+            resultByTag = mapOf(
+                "1.0.0.1" to GenbuTagQueryResult(
+                    build = GenbuStageStatus.FAILED,
+                    uat = GenbuStageStatus.INITIAL,
+                    production = GenbuStageStatus.INITIAL,
+                ),
+            ),
+        )
+        fixture.store.save(fixture.taskDirectory, operation("1.0.0.1", "2026-08-25 10:00:00"))
+
+        assertTrue(fixture.probes.probe(fixture.config, listOf(fixture.task)))
+        assertFalse(fixture.probes.probe(fixture.config, listOf(fixture.task)))
+
+        assertEquals(listOf("1.0.0.1"), fixture.calls)
+        val status = fixture.store.list(fixture.taskDirectory).single().genbuStatus
+        assertEquals(GenbuStageStatus.FAILED, status.build)
     }
 
     @Test
@@ -53,7 +74,7 @@ class GenbuTagProbeServiceTest {
 
     @Test
     fun `newer released tag stops older tag polling`() {
-        val fixture = fixture(resultByTag = mapOf("1.0.0.2" to GenbuTagQueryResult(built = true, uatReleased = true, productionReleased = false)))
+        val fixture = fixture(resultByTag = mapOf("1.0.0.2" to releasedResult()))
         fixture.store.save(fixture.taskDirectory, operation("1.0.0.1", "2026-08-25 10:00:00"))
         fixture.store.save(fixture.taskDirectory, operation("1.0.0.2", "2026-08-25 11:00:00"))
 
@@ -61,7 +82,7 @@ class GenbuTagProbeServiceTest {
 
         assertEquals(listOf("1.0.0.2"), fixture.calls)
         val byTag = fixture.store.list(fixture.taskDirectory).associateBy { it.tag }
-        assertTrue(requireNotNull(byTag["1.0.0.2"]).genbuStatus.released)
+        assertEquals(GenbuStageStatus.SUCCESS, requireNotNull(byTag["1.0.0.2"]).genbuStatus.uat)
         assertTrue(requireNotNull(byTag["1.0.0.1"]).genbuStatus.stoppedByNewerRelease)
     }
 
@@ -71,7 +92,9 @@ class GenbuTagProbeServiceTest {
         fixture.store.save(fixture.taskDirectory, operation("1.0.0.1", "2026-08-25 10:00:00"))
         fixture.store.save(
             fixture.taskDirectory,
-            operation("1.0.0.2", "2026-08-25 11:00:00").copy(genbuStatus = GenbuTagProbeStatus(built = true, released = true)),
+            operation("1.0.0.2", "2026-08-25 11:00:00").copy(
+                genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.SUCCESS, uat = GenbuStageStatus.SUCCESS),
+            ),
         )
 
         assertTrue(fixture.probes.probe(fixture.config, listOf(fixture.task)))
@@ -86,7 +109,9 @@ class GenbuTagProbeServiceTest {
         val fixture = fixture()
         fixture.store.save(
             fixture.taskDirectory,
-            operation("1.0.0.1", "2026-08-25 10:00:00").copy(genbuStatus = GenbuTagProbeStatus(built = true, released = true)),
+            operation("1.0.0.1", "2026-08-25 10:00:00").copy(
+                genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.SUCCESS, uat = GenbuStageStatus.SUCCESS),
+            ),
         )
         fixture.store.save(
             fixture.taskDirectory,
@@ -120,7 +145,7 @@ class GenbuTagProbeServiceTest {
         store.save(taskRoot.resolve("task"), operation("1.0.0.1", "2026-08-25 10:00:00").copy(groupServiceId = "service-random", folderName = "task"))
         val probes = GenbuTagProbeService(store, GenbuTagStatusProvider { service, _ ->
             services += service
-            GenbuTagQueryResult(built = false, uatReleased = false, productionReleased = false)
+            buildingResult()
         })
 
         probes.probe(config, listOf(task))
@@ -154,12 +179,24 @@ class GenbuTagProbeServiceTest {
             operations = TagOperationStore(),
             genbu = GenbuTagStatusProvider { _, tag ->
                 calls += tag
-                resultByTag[tag] ?: GenbuTagQueryResult(built = false, uatReleased = false, productionReleased = false)
+                resultByTag[tag] ?: buildingResult()
             },
             clock = Clock.fixed(Instant.parse("2026-08-25T04:00:00Z"), ZoneOffset.UTC),
         )
         return Fixture(config, task, taskRoot.resolve(task.taskDirectoryName), TagOperationStore(), probes, calls)
     }
+
+    private fun buildingResult() = GenbuTagQueryResult(
+        build = GenbuStageStatus.SUCCESS,
+        uat = GenbuStageStatus.INITIAL,
+        production = GenbuStageStatus.INITIAL,
+    )
+
+    private fun releasedResult() = GenbuTagQueryResult(
+        build = GenbuStageStatus.SUCCESS,
+        uat = GenbuStageStatus.SUCCESS,
+        production = GenbuStageStatus.INITIAL,
+    )
 
     private fun operation(tag: String, createdAt: String) = TagOperation(
         operationId = "operation-$tag",

@@ -231,8 +231,8 @@ class RequirementMaterialsService(
                 requirementId,
                 lastFailure ?: if (request.projects.isEmpty()) "未配置 Meegle 项目" else "未能唯一匹配需求所属的 Meegle 项目",
             )
-        val sprint = resolveActiveSprint(project, requirementId)
-            ?: return RequirementMaterialsResult.Failed(requirementId, lastFailure ?: "需求没有关联当前进行中的 Sprint")
+        val sprint = resolveRequirementSprint(project, requirementId)
+            ?: return RequirementMaterialsResult.Failed(requirementId, lastFailure ?: "未能确定需求关联的 Sprint")
 
         val requirementPath = buildRequirementDirectory(request.root, sprint.name, requirementId, request.folder)
         return RequirementMaterialsResult.Ready(
@@ -355,7 +355,7 @@ class RequirementMaterialsService(
         }
     }
 
-    private fun resolveActiveSprint(project: MeegleProjectConfig, requirementId: String): SprintMatch? {
+    private fun resolveRequirementSprint(project: MeegleProjectConfig, requirementId: String): SprintMatch? {
         // Fetch the work item again so this method remains independent of project lookup and can
         // be retried safely after the user changes CLI authentication.
         val base = runCommand(
@@ -421,7 +421,9 @@ class RequirementMaterialsService(
             return null
         }
 
-        val mql = "SELECT `work_item_id`, `name`, `work_item_status`, `archiving_status` FROM `${project.projectKey}`.`sprint` WHERE `work_item_status` = '进行中'"
+        // Fetch every Sprint and select locally: a single linked Sprint is used
+        // whatever its status; only multiple links require the in-progress one.
+        val mql = "SELECT `work_item_id`, `name`, `work_item_status`, `archiving_status` FROM `${project.projectKey}`.`sprint`"
         val queried = runCommand(
             listOf(
                 meegleExecutable.resolve(), "workitem", "query",
@@ -438,26 +440,22 @@ class RequirementMaterialsService(
             lastFailure = "Meegle CLI 返回不是可解析的 JSON"
             return null
         }
-        val active = rows.filter { row ->
-            val id = row["work_item_id"] ?: row["item_id"] ?: return@filter false
-            val status = row["work_item_status"].orEmpty()
+        val related = rows.mapNotNull { row ->
+            val id = row["work_item_id"] ?: row["item_id"] ?: return@mapNotNull null
+            if (!relatedIds.contains(id)) return@mapNotNull null
             val archived = row["archiving_status"]?.toBooleanStrictOrNull() ?: false
-            relatedIds.contains(id) && !archived && (status == "进行中" || status.equals("In Progress", true))
+            if (archived) return@mapNotNull null
+            RequirementSprint(
+                id = id,
+                label = row["name"].orEmpty(),
+                status = row["work_item_status"],
+            )
         }
         return try {
-            val snapshot = resolveUniqueActiveSprint(active.map {
-                RequirementSprint(
-                    id = it["work_item_id"] ?: it["item_id"].orEmpty(),
-                    label = it["name"].orEmpty(),
-                    status = "进行中",
-                )
-            })
+            val snapshot = resolveMaterialsSprint(related)
             SprintMatch(snapshot.id, snapshot.label)
         } catch (error: IllegalArgumentException) {
-            lastFailure = when {
-                active.isEmpty() -> "需求没有关联当前进行中的 Sprint"
-                else -> "需求同时关联多个当前进行中的 Sprint"
-            }
+            lastFailure = error.message
             null
         }
     }
@@ -621,18 +619,28 @@ class RequirementMaterialsService(
         )
     }
 
-    /** Shared Sprint cardinality rule used by desktop and Agent flows. */
-    fun resolveUniqueActiveSprint(sprints: List<RequirementSprint>): RequirementSprintSnapshot {
-        val active = sprints.filter {
-            it.status == ACTIVE_SPRINT_STATUS || it.status.equals("In Progress", ignoreCase = true)
-        }
-        require(active.size == 1) {
-            when (active.size) {
-                0 -> "需求未关联唯一的进行中 Sprint，已停止创建需求资料目录"
-                else -> "需求关联多个进行中 Sprint，已停止创建需求资料目录：${active.joinToString { it.label }}"
+    /**
+     * Shared Sprint selection rule used by desktop and Agent flows. Local reuse
+     * is always decided before this runs; a single associated Sprint is used
+     * regardless of its status, and several associated Sprints require exactly
+     * one in progress.
+     */
+    fun resolveMaterialsSprint(sprints: List<RequirementSprint>): RequirementSprintSnapshot {
+        require(sprints.isNotEmpty()) { "需求未关联可用的 Sprint，已停止创建需求资料目录" }
+        val sprint = if (sprints.size == 1) {
+            sprints.single()
+        } else {
+            val active = sprints.filter {
+                it.status == ACTIVE_SPRINT_STATUS || it.status.equals("In Progress", ignoreCase = true)
             }
+            require(active.size == 1) {
+                when (active.size) {
+                    0 -> "需求关联多个 Sprint 且均不在进行中，已停止创建需求资料目录"
+                    else -> "需求关联多个进行中 Sprint，已停止创建需求资料目录：${active.joinToString { it.label }}"
+                }
+            }
+            active.single()
         }
-        val sprint = active.single()
         return RequirementSprintSnapshot(sprint.id, validateSegment(sprint.label, "Sprint 名称", 120)!!)
     }
 

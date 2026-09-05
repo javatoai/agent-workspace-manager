@@ -33,20 +33,20 @@ class GenbuTagProbeService(
 
     private fun probeService(candidates: List<Candidate>, force: Boolean): Boolean {
         var changed = false
-        val latestReleasedIndex = candidates.indexOfFirst { it.operation.genbuStatus.released }
+        val latestReleasedIndex = candidates.indexOfFirst { it.operation.genbuStatus.uat == GenbuStageStatus.SUCCESS }
         if (!force && latestReleasedIndex >= 0) {
             changed = stopOlderCandidates(candidates.drop(latestReleasedIndex + 1)) || changed
         }
         val candidatesToProbe = if (force || latestReleasedIndex < 0) candidates else candidates.take(latestReleasedIndex)
         candidatesToProbe.forEachIndexed { index, candidate ->
             val status = candidate.operation.genbuStatus
-            if (!force && (status.released || status.notFound || status.stoppedByNewerRelease)) return@forEachIndexed
+            if (!force && status.isTerminal()) return@forEachIndexed
             val queried = runCatching { genbu.query(candidate.genbuServiceName, requireNotNull(candidate.operation.tag)) }
             val updated = queried.fold(
                 onSuccess = { result -> candidate.operation.copy(genbuStatus = status.copy(
-                    built = result.built,
-                    released = result.uatReleased,
-                    productionReleased = result.productionReleased,
+                    build = result.build,
+                    uat = result.uat,
+                    production = result.production,
                     notFound = result.notFound,
                     builtCompletedAt = result.builtCompletedAt,
                     releasedCompletedAt = result.uatReleasedCompletedAt,
@@ -64,7 +64,7 @@ class GenbuTagProbeService(
                 operations.save(candidate.taskDirectory, updated)
                 changed = true
             }
-            if (!force && updated.genbuStatus.released) {
+            if (!force && updated.genbuStatus.uat == GenbuStageStatus.SUCCESS) {
                 changed = stopOlderCandidates(candidates.drop(index + 1)) || changed
                 return changed
             }
@@ -76,7 +76,7 @@ class GenbuTagProbeService(
         var changed = false
         candidates.forEach { older ->
             val oldStatus = older.operation.genbuStatus
-            if (!oldStatus.released && !oldStatus.stoppedByNewerRelease) {
+            if (oldStatus.uat != GenbuStageStatus.SUCCESS && !oldStatus.stoppedByNewerRelease) {
                 operations.save(older.taskDirectory, older.operation.copy(genbuStatus = oldStatus.copy(
                     stoppedByNewerRelease = true,
                     failureReason = null,
@@ -93,3 +93,14 @@ class GenbuTagProbeService(
         val genbuServiceName: String,
     )
 }
+
+/**
+ * Terminal states stop automatic polling: a released Tag reached its goal, and a
+ * failed build is final for its Tag — the UI offers a re-Tag action instead of
+ * polling forever. The manual force refresh still re-queries these records.
+ */
+internal fun GenbuTagProbeStatus.isTerminal(): Boolean =
+    uat == GenbuStageStatus.SUCCESS ||
+        build == GenbuStageStatus.FAILED ||
+        notFound ||
+        stoppedByNewerRelease

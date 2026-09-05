@@ -114,7 +114,7 @@ agents/task-templates.json
 
 工作区策略属于模块而不是服务。同一服务的 `modules` 可以同时包含 Worktree 与独立克隆模块：
 
-`genbuProbeEnabled` 是服务级开关，默认 `false`。开启后，Tag 构建页面会用 `where.exe genbu.exe` 自动发现本机 `genbu` CLI，并在页面打开期间以 `genbu query-tag <服务> <精确 Tag>` 查询所有带 Tag 记录的构建、UAT 发版和生产发版状态及其返回的完成时间；`genbuServiceName` 默认使用服务展示名称，可在服务配置中改为 Genbu 的实际服务名。自动轮询会跳过已完成 UAT 发布、被更晚 Tag 覆盖或已确认未在 Genbu 找到的记录；页面的“刷新 Genbu”会强制重新查询全部带 Tag 记录。
+`genbuProbeEnabled` 是服务级开关，默认 `false`。开启后，Tag 构建页面会用 `where.exe genbu.exe` 自动发现本机 `genbu` CLI，并在页面打开期间以 `genbu query-tag --json <服务> <精确 Tag>` 查询所有带 Tag 记录的构建、UAT 发版和生产发版三个阶段的状态（初始/构建中/成功/失败）及其返回的完成时间；`genbuServiceName` 默认使用服务展示名称，可在服务配置中改为 Genbu 的实际服务名。自动轮询会跳过已完成 UAT 发布、构建失败、被更晚 Tag 覆盖或已确认未在 Genbu 找到的记录；页面的“刷新 Genbu”会强制重新查询全部带 Tag 记录。当某条记录的 Genbu 构建结果为失败时，行内提供“重新打Tag”按钮：重新执行完整 Tag 流程，版本号在失败 Tag 基础上自动 +1，并原地替换该条构建记录。
 
 ```json
 "modules": [

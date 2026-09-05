@@ -547,13 +547,28 @@ data class TagOperation(
     val batchId: String? = null,
 )
 
+/** Genbu pipeline stage result mapped from `genbu query-tag --json`. */
+@Serializable
+enum class GenbuStageStatus {
+    /** The pipeline record exists but has not run yet. */
+    INITIAL,
+
+    /** The Tag build pipeline is still running. */
+    BUILDING,
+    SUCCESS,
+    FAILED,
+
+    /** Missing step or an unrecognized status returned by the CLI. */
+    UNKNOWN,
+}
+
 @Serializable
 data class GenbuTagProbeStatus(
-    val built: Boolean = false,
+    val build: GenbuStageStatus = GenbuStageStatus.UNKNOWN,
     /** UAT release result returned by `genbu query-tag`. */
-    val released: Boolean = false,
+    val uat: GenbuStageStatus = GenbuStageStatus.UNKNOWN,
     /** Production release result returned by pipeline step=9. */
-    val productionReleased: Boolean = false,
+    val production: GenbuStageStatus = GenbuStageStatus.UNKNOWN,
     /** The Genbu CLI confirmed this exact Tag does not exist. */
     val notFound: Boolean = false,
     val builtCompletedAt: String? = null,

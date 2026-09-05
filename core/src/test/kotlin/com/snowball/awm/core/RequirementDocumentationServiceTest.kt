@@ -173,6 +173,54 @@ class RequirementDocumentationServiceTest {
     }
 
     @Test
+    fun `uses the only linked Sprint even when it is not in progress`() {
+        val root = Files.createDirectories(temporary.resolve("docs-single-inactive"))
+        val service = RequirementDocumentationService(
+            iterations = FixedIterations(listOf(RequirementSprint("9", "OBT-20260901--20260914", "未开始"))),
+        )
+
+        val plan = service.plan(materialsConfig(root), link, "登录优化", directoryFolderName = "任务目录")
+
+        assertEquals("OBT-20260901--20260914", plan.sprint.label)
+        assertEquals(false, plan.reusedHistoricalDirectory)
+    }
+
+    @Test
+    fun `picks the in-progress Sprint when several are linked`() {
+        val root = Files.createDirectories(temporary.resolve("docs-multi-mixed"))
+        val service = RequirementDocumentationService(
+            iterations = FixedIterations(
+                listOf(
+                    RequirementSprint("9", "OBT-20260901--20260914", "未开始"),
+                    singleActive.single(),
+                ),
+            ),
+        )
+
+        val plan = service.plan(materialsConfig(root), link, "登录优化", directoryFolderName = "任务目录")
+
+        assertEquals("OBT-20260817--20260828", plan.sprint.label)
+    }
+
+    @Test
+    fun `blocks several linked Sprints when none is in progress`() {
+        val root = Files.createDirectories(temporary.resolve("docs-multi-inactive"))
+        val service = RequirementDocumentationService(
+            iterations = FixedIterations(
+                listOf(
+                    RequirementSprint("8", "OBT-20260817--20260828", "已结束"),
+                    RequirementSprint("9", "OBT-20260901--20260914", "未开始"),
+                ),
+            ),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            service.plan(materialsConfig(root), link, "登录优化", directoryFolderName = "任务目录")
+        }
+        assertTrue(error.message.orEmpty().contains("均不在进行中"))
+    }
+
+    @Test
     fun `does not let an index hide a second historical manifest`() {
         val root = Files.createDirectories(temporary.resolve("docs-duplicate"))
         val config = materialsConfig(root)

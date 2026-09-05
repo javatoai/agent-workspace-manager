@@ -404,6 +404,166 @@ Builder: ${System.getProperty("user.name")}
         assertTrue(GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1").isNotBlank())
     }
 
+    @Test
+    fun `retag replaces the Genbu failed record with the next version tag`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("retag-source"))
+        GitTestSupport.run(seed, "branch", "release/test")
+        GitTestSupport.run(seed, "push", "origin", "release/test")
+        createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
+        val repository = GitTestSupport.clone(remote, temporary.resolve("retag-services").resolve("operation-center"))
+        val repositoryInfo = GitRepositoryInspector().inspect(repository)
+        val taskDirectory = temporary.resolve("retag-tasks").resolve("TAG-RETAG")
+        val featureWorktree = taskDirectory.resolve("operation-center")
+        Files.createDirectories(featureWorktree.parent)
+        GitClient().addWorktree(repository, featureWorktree, "feature/TAG-RETAG", "origin/master")
+        GitTestSupport.configureIdentity(featureWorktree)
+        Files.writeString(featureWorktree.resolve("feature.txt"), "retag feature\n")
+        GitTestSupport.run(featureWorktree, "add", "feature.txt")
+        GitTestSupport.run(featureWorktree, "commit", "-m", "retag feature change")
+        val now = Instant.now().toString()
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TAG-RETAG",
+                taskDirectoryName = "TAG-RETAG",
+                featureBranch = "feature/TAG-RETAG",
+                createdAt = now,
+                updatedAt = now,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = repositoryInfo.id,
+                        serviceName = "operation-center",
+                        repositoryPath = repository.toString(),
+                        worktreePath = featureWorktree.toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/TAG-RETAG",
+                        health = WorkspaceHealth.READY,
+                        groupServiceId = "operation-center",
+                        tagEnabled = true,
+                        tagTargetRef = "origin/release/test",
+                    ),
+                ),
+            ),
+        )
+        val config = AppConfig(
+            taskRoot = temporary.resolve("retag-tasks").toString(),
+            repositories = listOf(repositoryInfo),
+            groups = listOf(
+                GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, services = listOf(
+                    GroupServiceConfig.standard(
+                        id = "operation-center",
+                        repositoryId = repositoryInfo.id,
+                        displayName = "operation-center",
+                    ).copy(modules = listOf(ServiceModuleConfig("default"))),
+                )),
+            ),
+        )
+        val builder = TagBuildService(paths = ApplicationPaths(temporary.resolve("retag-app-home")))
+        val built = builder.build(config, taskDirectory, repositoryInfo.id)
+        assertEquals(TagOperationState.SUCCESS, built.state, built.message)
+        assertEquals("1.0.0.beta-1", built.tag)
+
+        // Only a successful Tag with a failed Genbu build qualifies for re-Tag.
+        assertFailsWith<IllegalArgumentException> {
+            builder.retag(config, taskDirectory, built.operationId)
+        }
+
+        TagOperationStore().save(
+            taskDirectory,
+            built.copy(genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED, checkedAt = "2026-09-04 12:00:00")),
+        )
+
+        val retagged = builder.retag(config, taskDirectory, built.operationId)
+
+        assertEquals(TagOperationState.SUCCESS, retagged.state, retagged.message)
+        assertEquals(built.operationId, retagged.operationId)
+        assertEquals(built.createdAt, retagged.createdAt)
+        assertEquals("1.0.0.beta-2", retagged.tag)
+        assertEquals(GenbuTagProbeStatus(), retagged.genbuStatus)
+        assertTrue(
+            GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-2")
+                .isNotBlank(),
+        )
+    }
+
+    @Test
+    fun `failed build retries on the same record once the worktree is clean`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("failed-source"))
+        GitTestSupport.run(seed, "branch", "release/test")
+        GitTestSupport.run(seed, "push", "origin", "release/test")
+        createAnnotatedTag(seed, "1.0.0.beta-0", "2025-01-01T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
+        val repository = GitTestSupport.clone(remote, temporary.resolve("failed-services").resolve("operation-center"))
+        val repositoryInfo = GitRepositoryInspector().inspect(repository)
+        val taskDirectory = temporary.resolve("failed-tasks").resolve("TAG-FAILED")
+        val featureWorktree = taskDirectory.resolve("operation-center")
+        Files.createDirectories(featureWorktree.parent)
+        GitClient().addWorktree(repository, featureWorktree, "feature/TAG-FAILED", "origin/master")
+        GitTestSupport.configureIdentity(featureWorktree)
+        Files.writeString(featureWorktree.resolve("feature.txt"), "failed feature\n")
+        GitTestSupport.run(featureWorktree, "add", "feature.txt")
+        GitTestSupport.run(featureWorktree, "commit", "-m", "failed feature change")
+        val now = Instant.now().toString()
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "TAG-FAILED",
+                taskDirectoryName = "TAG-FAILED",
+                featureBranch = "feature/TAG-FAILED",
+                createdAt = now,
+                updatedAt = now,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = repositoryInfo.id,
+                        serviceName = "operation-center",
+                        repositoryPath = repository.toString(),
+                        worktreePath = featureWorktree.toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/TAG-FAILED",
+                        health = WorkspaceHealth.READY,
+                        groupServiceId = "operation-center",
+                        tagEnabled = true,
+                        tagTargetRef = "origin/release/test",
+                    ),
+                ),
+            ),
+        )
+        val config = AppConfig(
+            taskRoot = temporary.resolve("failed-tasks").toString(),
+            repositories = listOf(repositoryInfo),
+            groups = listOf(
+                GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, services = listOf(
+                    GroupServiceConfig.standard(
+                        id = "operation-center",
+                        repositoryId = repositoryInfo.id,
+                        displayName = "operation-center",
+                    ).copy(modules = listOf(ServiceModuleConfig("default"))),
+                )),
+            ),
+        )
+        val builder = TagBuildService(paths = ApplicationPaths(temporary.resolve("failed-app-home")))
+
+        // Dirty the feature worktree so the preflight fails before any Git write.
+        Files.writeString(featureWorktree.resolve("dirty.txt"), "dirty\n")
+        val failed = builder.build(config, taskDirectory, repositoryInfo.id)
+        assertEquals(TagOperationState.FAILED, failed.state, failed.message)
+
+        GitTestSupport.run(featureWorktree, "add", "dirty.txt")
+        GitTestSupport.run(featureWorktree, "commit", "-m", "clean up dirty file")
+        val retried = builder.resumeFailed(config, taskDirectory, failed.operationId)
+
+        assertEquals(TagOperationState.SUCCESS, retried.state, retried.message)
+        assertEquals(failed.operationId, retried.operationId)
+        assertEquals("1.0.0.beta-1", retried.tag)
+        assertTrue(
+            GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1")
+                .isNotBlank(),
+        )
+    }
+
     private fun createAnnotatedTag(repository: Path, tag: String, timestamp: String) {
         val result = ProcessCommandRunner().run(
             command = listOf("git", "tag", "-a", tag, "-m", tag),

@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.snowball.awm.core.GenbuStageStatus
 import com.snowball.awm.core.TagOperation
 import com.snowball.awm.core.TagOperationState
 import com.snowball.awm.core.TagHistoryItem
@@ -310,13 +311,24 @@ internal fun tagOperationIsProblem(operation: TagOperation): Boolean = operation
     TagOperationState.CREATED,
     TagOperationState.PREFLIGHT_PASSED,
     TagOperationState.SOURCE_BRANCH_PUSHED,
-)
+) || tagOperationCanRetag(operation)
 
 internal fun tagOperationIsRetryableInterrupted(operation: TagOperation): Boolean = operation.state in setOf(
     TagOperationState.CREATED,
     TagOperationState.PREFLIGHT_PASSED,
     TagOperationState.SOURCE_BRANCH_PUSHED,
 )
+
+internal fun tagOperationCanRetryFailed(operation: TagOperation): Boolean =
+    operation.state == TagOperationState.FAILED
+
+internal fun tagOperationCanResumePartial(operation: TagOperation): Boolean =
+    operation.state == TagOperationState.PARTIAL
+
+/** A locally successful Tag whose Genbu pipeline build failed can be re-tagged with the next version. */
+internal fun tagOperationCanRetag(operation: TagOperation): Boolean =
+    operation.state == TagOperationState.SUCCESS &&
+        operation.genbuStatus.build == GenbuStageStatus.FAILED
 
 internal fun tagOperationRecordCopyText(operation: TagOperation): String =
     operation.tag?.let { "${operation.serviceName} · $it" } ?: buildString {
@@ -390,11 +402,16 @@ private fun TagHistoryRow(
                     controller = controller,
                     operation = operation,
                 )
-            } else if (tagOperationCanInspectWorkspace(operation)) {
-                TagWorkspaceCheckActions(controller, operation)
+            } else if (tagOperationCanRetryFailed(operation)) {
+                TagFailedActions(controller, operation)
+            } else if (tagOperationCanResumePartial(operation)) {
+                TagPartialActions(controller, operation)
             }
             if (tagOperationIsRetryableInterrupted(operation)) {
                 TagInterruptedActions(controller, operation)
+            }
+            if (tagOperationCanRetag(operation)) {
+                TagGenbuBuildFailedActions(controller, operation)
             }
             operation.genbuStatus.failureReason?.takeIf(String::isNotBlank)?.let { reason ->
                 Text(
@@ -431,7 +448,75 @@ private fun TagInterruptedActions(controller: DesktopApplication, operation: Tag
         ) {
             Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
             Spacer(Modifier.width(5.dp))
-            Text("重新构建测试Tag")
+            Text("重试构建Tag")
+        }
+    }
+}
+
+@Composable
+private fun TagFailedActions(controller: DesktopApplication, operation: TagOperation) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (tagOperationCanInspectWorkspace(operation)) {
+                OutlinedButton(
+                    onClick = { controller.inspectConflictWorkspace(operation) },
+                    enabled = !controller.busy,
+                ) {
+                    Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("重新检测工作区")
+                }
+            }
+            OutlinedButton(
+                onClick = { controller.retryFailedTag(operation) },
+                enabled = !controller.busy,
+            ) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("重试构建Tag")
+            }
+        }
+        TagWorkspaceCheckResult(controller.conflictWorkspaceCheck(operation))
+    }
+}
+
+@Composable
+private fun TagPartialActions(controller: DesktopApplication, operation: TagOperation) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "上次构建在目标分支推送后中断，本地测试Tag已创建但尚未推送完成。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        OutlinedButton(
+            onClick = { controller.resumePartialTag(operation) },
+            enabled = !controller.busy,
+        ) {
+            Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+            Text("继续构建Tag")
+        }
+    }
+}
+
+@Composable
+private fun TagGenbuBuildFailedActions(controller: DesktopApplication, operation: TagOperation) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "Genbu 构建失败，重新打Tag 后版本号自动 +1，当前记录将被替换。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        OutlinedButton(
+            onClick = { controller.retagBuildFailedTag(operation) },
+            enabled = !controller.busy,
+        ) {
+            Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+            Text("重新打Tag")
         }
     }
 }
@@ -480,23 +565,8 @@ private fun TagConflictActions(
             ) {
                 Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
                 Spacer(Modifier.width(5.dp))
-                Text("已解决，重新构建测试Tag")
+                Text("已解决，重试构建Tag")
             }
-        }
-        TagWorkspaceCheckResult(controller.conflictWorkspaceCheck(operation))
-    }
-}
-
-@Composable
-private fun TagWorkspaceCheckActions(controller: DesktopApplication, operation: TagOperation) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OutlinedButton(
-            onClick = { controller.inspectConflictWorkspace(operation) },
-            enabled = !controller.busy,
-        ) {
-            Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
-            Spacer(Modifier.width(5.dp))
-            Text("重新检测工作区")
         }
         TagWorkspaceCheckResult(controller.conflictWorkspaceCheck(operation))
     }
@@ -516,7 +586,7 @@ private fun TagWorkspaceCheckResult(check: TagWorkspaceCheck?) {
 
 internal fun tagConflictGuidance(operation: TagOperation): String {
     val target = operation.targetBranch?.let { "${operation.remote}/$it" } ?: "目标分支"
-    return "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再点击“已解决，重新构建测试Tag”。"
+    return "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再点击“已解决，重试构建Tag”。"
 }
 
 internal fun tagConflictFilesSummary(operation: TagOperation): String =
@@ -539,19 +609,29 @@ internal fun genbuTagStatusLabels(operation: TagOperation, probeEnabled: Boolean
         return@buildList
     }
     if (status.failureReason != null) return@buildList
-    when {
-        status.released -> {
-            add("已构建")
-            add("UAT已发布")
-        }
-        status.built -> {
-            add("已构建")
-            add("UAT未发布")
-        }
-        probeEnabled || status.checkedAt != null -> {
-            add("构建中")
-            add("UAT未发布")
-        }
+    val probed = status.checkedAt != null
+    val hasStageResult = listOf(status.build, status.uat, status.production).any { it != GenbuStageStatus.UNKNOWN }
+    if (!probeEnabled && !probed && !hasStageResult) return@buildList
+    add(
+        when {
+            // A later successful stage implies the build completed.
+            status.uat == GenbuStageStatus.SUCCESS || status.production == GenbuStageStatus.SUCCESS -> "已构建"
+            status.build == GenbuStageStatus.SUCCESS -> "已构建"
+            status.build == GenbuStageStatus.FAILED -> "构建失败"
+            status.build == GenbuStageStatus.BUILDING || !probed -> "构建中"
+            else -> "构建状态未知"
+        },
+    )
+    add(
+        when (status.uat) {
+            GenbuStageStatus.SUCCESS -> "UAT已发布"
+            GenbuStageStatus.FAILED -> "UAT发布失败"
+            else -> "UAT未发布"
+        },
+    )
+    when (status.production) {
+        GenbuStageStatus.SUCCESS -> add("已生产发布")
+        GenbuStageStatus.FAILED -> add("生产发布失败")
+        else -> {}
     }
-    if (status.productionReleased) add("已生产发布")
 }

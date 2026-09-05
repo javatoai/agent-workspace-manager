@@ -1,5 +1,6 @@
 package com.snowball.awm.desktop
 
+import com.snowball.awm.core.GenbuStageStatus
 import com.snowball.awm.core.TagOperation
 import com.snowball.awm.core.TagOperationState
 import com.snowball.awm.core.GenbuTagProbeStatus
@@ -34,6 +35,33 @@ class TagPresentationTest {
         assertTrue(tagOperationIsProblem(operation(TagOperationState.CONFLICT)))
         assertTrue(tagOperationIsProblem(operation(TagOperationState.SOURCE_BRANCH_PUSHED)))
         assertFalse(tagOperationIsProblem(operation(TagOperationState.SUCCESS)))
+        assertTrue(
+            tagOperationIsProblem(
+                operation(TagOperationState.SUCCESS).copy(
+                    genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `failed partial and Genbu failed builds expose their retry actions`() {
+        assertTrue(tagOperationCanRetryFailed(operation(TagOperationState.FAILED)))
+        assertFalse(tagOperationCanRetryFailed(operation(TagOperationState.SUCCESS)))
+        assertTrue(tagOperationCanResumePartial(operation(TagOperationState.PARTIAL)))
+        assertFalse(tagOperationCanResumePartial(operation(TagOperationState.FAILED)))
+        val genbuFailed = operation(TagOperationState.SUCCESS).copy(
+            genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED),
+        )
+        assertTrue(tagOperationCanRetag(genbuFailed))
+        assertFalse(tagOperationCanRetag(operation(TagOperationState.SUCCESS)))
+        assertFalse(
+            tagOperationCanRetag(
+                operation(TagOperationState.FAILED).copy(
+                    genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -51,7 +79,7 @@ class TagPresentationTest {
         )
 
         assertEquals(
-            "请将 feature/task-42 合入 upstream/uat，解决冲突后提交并推送 upstream/uat，再点击“已解决，重新构建测试Tag”。",
+            "请将 feature/task-42 合入 upstream/uat，解决冲突后提交并推送 upstream/uat，再点击“已解决，重试构建Tag”。",
             tagConflictGuidance(conflict),
         )
     }
@@ -90,24 +118,93 @@ class TagPresentationTest {
     }
 
     @Test
-    fun `Genbu labels distinguish building published and unavailable states`() {
+    fun `Genbu labels classify build uat and production stages`() {
         assertEquals(
             listOf("构建中", "UAT未发布"),
             genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus()), probeEnabled = true),
         )
         assertEquals(
-            listOf("构建中", "UAT未发布"),
+            emptyList(),
+            genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus()), probeEnabled = false),
+        )
+        assertEquals(
+            listOf("构建状态未知", "UAT未发布"),
             genbuTagStatusLabels(
                 operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(checkedAt = "2026-08-26 11:00:00")),
                 probeEnabled = true,
             ),
         )
-        assertTrue(genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(built = true))).contains("已构建"))
-        assertFalse(genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(built = true))).contains("UAT已发布"))
-        assertEquals(listOf("已构建", "UAT已发布"), genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(released = true))))
-        assertEquals(listOf("已构建", "UAT未发布"), genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(built = true, checkedAt = "2026-08-26 11:00:00"))))
-        assertEquals(listOf("已构建", "UAT已发布", "已生产发布"), genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(released = true, productionReleased = true))))
-        assertEquals(listOf("未在Genbu中找到"), genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(notFound = true))))
+        assertEquals(
+            listOf("构建中", "UAT未发布"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(
+                    genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.BUILDING, checkedAt = "2026-08-26 11:00:00"),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("已构建", "UAT未发布"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.SUCCESS)),
+            ),
+        )
+        assertEquals(
+            listOf("构建失败", "UAT未发布"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED)),
+            ),
+        )
+        assertEquals(
+            listOf("已构建", "UAT已发布"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(
+                    genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.SUCCESS, uat = GenbuStageStatus.SUCCESS),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("已构建", "UAT发布失败"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(
+                    genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.SUCCESS, uat = GenbuStageStatus.FAILED),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("已构建", "UAT已发布", "已生产发布"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(
+                    genbuStatus = GenbuTagProbeStatus(
+                        build = GenbuStageStatus.SUCCESS,
+                        uat = GenbuStageStatus.SUCCESS,
+                        production = GenbuStageStatus.SUCCESS,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("已构建", "UAT已发布", "生产发布失败"),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(
+                    genbuStatus = GenbuTagProbeStatus(
+                        build = GenbuStageStatus.SUCCESS,
+                        uat = GenbuStageStatus.SUCCESS,
+                        production = GenbuStageStatus.FAILED,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("未在Genbu中找到"),
+            genbuTagStatusLabels(operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(notFound = true))),
+        )
+        assertEquals(
+            emptyList(),
+            genbuTagStatusLabels(
+                operation(TagOperationState.SUCCESS).copy(genbuStatus = GenbuTagProbeStatus(failureReason = "网络超时")),
+                probeEnabled = true,
+            ),
+        )
     }
 
     @Test

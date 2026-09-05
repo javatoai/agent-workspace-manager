@@ -862,21 +862,7 @@ class DesktopApplication(
             showError(IllegalStateException("只有冲突测试Tag才能重试"))
             return false
         }
-        val task = sessionStore.tasks.firstOrNull { it.folderName == operation.folderName }
-        if (task == null) {
-            showError(IllegalStateException("找不到测试Tag对应的研发任务：${operation.folderName}"))
-            return false
-        }
-        val workspace = tagOperationWorkspace(operation)
-        if (workspace == null) {
-            showError(IllegalStateException("找不到测试Tag对应的服务工作区：${operation.groupServiceId}/${operation.moduleId}"))
-            return false
-        }
-        if (!canBuildTag(task, workspace)) {
-            showError(IllegalStateException("当前服务工作区不可构建测试Tag，请确认任务和服务仍处于就绪状态"))
-            return false
-        }
-        return deliveryController.retryConflict(task, operation)
+        return withBuildableTagOperation(operation) { task -> deliveryController.retryConflict(task, operation) }
     }
 
     /** Rechecks the exact conflict workspace without starting another Tag flow. */
@@ -905,6 +891,41 @@ class DesktopApplication(
             showError(IllegalStateException("只有构建中断的测试Tag才能重试"))
             return false
         }
+        return withBuildableTagOperation(operation) { task -> deliveryController.retryInterrupted(task, operation) }
+    }
+
+    /** Retries a locally failed Tag build on its original history record. */
+    fun retryFailedTag(operation: TagOperation): Boolean {
+        if (operation.state != com.snowball.awm.core.TagOperationState.FAILED) {
+            showError(IllegalStateException("只有失败的测试Tag才能重试"))
+            return false
+        }
+        return withBuildableTagOperation(operation) { task -> deliveryController.retryFailed(task, operation) }
+    }
+
+    /** Pushes the already-created local Tag of a partially completed build. */
+    fun resumePartialTag(operation: TagOperation): Boolean {
+        if (operation.state != com.snowball.awm.core.TagOperationState.PARTIAL) {
+            showError(IllegalStateException("只有部分完成的测试Tag才能继续构建"))
+            return false
+        }
+        return withBuildableTagOperation(operation) { task -> deliveryController.resumePartial(task, operation) }
+    }
+
+    /** Rebuilds a Genbu-failed Tag with the next version on the same history record. */
+    fun retagBuildFailedTag(operation: TagOperation): Boolean {
+        if (
+            operation.state != com.snowball.awm.core.TagOperationState.SUCCESS ||
+            operation.genbuStatus.build != com.snowball.awm.core.GenbuStageStatus.FAILED
+        ) {
+            showError(IllegalStateException("只有 Genbu 构建失败的测试Tag才能重新打Tag"))
+            return false
+        }
+        return withBuildableTagOperation(operation) { task -> deliveryController.retag(task, operation) }
+    }
+
+    /** Resolves the task and workspace of a history record and verifies it can still build. */
+    private fun withBuildableTagOperation(operation: TagOperation, action: (TaskManifest) -> Boolean): Boolean {
         val task = sessionStore.tasks.firstOrNull { it.folderName == operation.folderName }
         if (task == null) {
             showError(IllegalStateException("找不到测试Tag对应的研发任务：${operation.folderName}"))
@@ -919,7 +940,7 @@ class DesktopApplication(
             showError(IllegalStateException("当前服务工作区不可构建测试Tag，请确认任务和服务仍处于就绪状态"))
             return false
         }
-        return deliveryController.retryInterrupted(task, operation)
+        return action(task)
     }
 
     private fun TagOperation.isRetryableInterruptedTag(): Boolean = state in setOf(

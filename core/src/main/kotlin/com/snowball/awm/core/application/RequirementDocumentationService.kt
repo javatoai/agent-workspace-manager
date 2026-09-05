@@ -138,7 +138,7 @@ class RequirementDocumentationService(
                 ?.projectKey
                 ?: materials.resolveRequirementProjectKey(requirementLink)
                 ?: throw IllegalStateException("需求空间 ${identity.space} 未配置 Meegle project key")
-            val sprint = resolveActiveSprint(requirementLink, projectKey)
+            val sprint = resolveRequirementSprint(requirementLink, projectKey)
             val title = resolveTitle(requirementLink, projectKey, requestedTitle)
             val requirementDirectory = materialsDirectory(root, sprint.label, identity.workItemId, directoryFolderName)
             val context = materials.validatePlannedDirectory(
@@ -282,8 +282,8 @@ class RequirementDocumentationService(
             ?: metadata.fetch(requirementLink, projectKey)?.title?.trim()?.takeIf(String::isNotBlank)
             ?: throw IllegalArgumentException("需要提供需求中文简写，或确保本地 Meegle 能读取需求标题")
 
-    private fun resolveActiveSprint(requirementLink: String, projectKey: String): RequirementSprintSnapshot {
-        return materials.resolveUniqueActiveSprint(iterations.resolve(requirementLink, projectKey))
+    private fun resolveRequirementSprint(requirementLink: String, projectKey: String): RequirementSprintSnapshot {
+        return materials.resolveMaterialsSprint(iterations.resolve(requirementLink, projectKey))
     }
 
     private fun materialsDirectory(root: Path, sprintLabel: String, id: String, folderName: String?): Path {

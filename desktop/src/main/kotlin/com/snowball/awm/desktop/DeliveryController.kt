@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.awm.core.DeliveryTarget
+import com.snowball.awm.core.GenbuStageStatus
 import com.snowball.awm.core.GenbuTagProbeService
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TagOperation
@@ -126,6 +127,57 @@ class DeliveryController internal constructor(
             "测试Tag重试已完成",
             block = {
                 adapter.resumeInterrupted(
+                    DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
+                    operation.operationId,
+                )
+            },
+            onSuccess = { reloadHistory(); refreshGitStatus() },
+        )
+    }
+
+    /** Retries a locally failed build on the same history record. */
+    fun retryFailed(task: TaskManifest, operation: TagOperation): Boolean {
+        require(operation.state == com.snowball.awm.core.TagOperationState.FAILED) { "只有失败的测试Tag可以重试" }
+        return operations.run(
+            "正在重试 ${operation.serviceName} 测试Tag…",
+            "测试Tag重试已完成",
+            block = {
+                adapter.resumeFailed(
+                    DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
+                    operation.operationId,
+                )
+            },
+            onSuccess = { reloadHistory(); refreshGitStatus() },
+        )
+    }
+
+    /** Pushes the already-created local Tag of a partially completed build. */
+    fun resumePartial(task: TaskManifest, operation: TagOperation): Boolean {
+        require(operation.state == com.snowball.awm.core.TagOperationState.PARTIAL) { "只有部分完成的测试Tag可以继续构建" }
+        return operations.run(
+            "正在继续构建 ${operation.serviceName} 测试Tag…",
+            "测试Tag继续构建已完成",
+            block = {
+                adapter.resumePartial(
+                    DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
+                    operation.operationId,
+                )
+            },
+            onSuccess = { reloadHistory(); refreshGitStatus() },
+        )
+    }
+
+    /** Rebuilds a Genbu-failed Tag with the next version on the same history record. */
+    fun retag(task: TaskManifest, operation: TagOperation): Boolean {
+        require(
+            operation.state == com.snowball.awm.core.TagOperationState.SUCCESS &&
+                operation.genbuStatus.build == GenbuStageStatus.FAILED,
+        ) { "只有 Genbu 构建失败的测试Tag可以重新打Tag" }
+        return operations.run(
+            "正在重新打 ${operation.serviceName} 测试Tag…",
+            "重新打Tag已完成",
+            block = {
+                adapter.retag(
                     DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
                     operation.operationId,
                 )

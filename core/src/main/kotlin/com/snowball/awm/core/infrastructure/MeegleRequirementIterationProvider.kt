@@ -21,7 +21,7 @@ data class RequirementSprint(
 fun interface RequirementIterationProvider {
     /**
      * Resolves every Sprint associated with the supplied requirement. Callers,
-     * rather than this transport adapter, own the "one active Sprint" rule.
+     * rather than this transport adapter, own the Sprint selection rule.
      */
     fun resolve(requirementLink: String, projectKey: String): List<RequirementSprint>
 }

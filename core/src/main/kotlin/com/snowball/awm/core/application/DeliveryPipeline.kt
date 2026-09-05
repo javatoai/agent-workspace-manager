@@ -79,6 +79,15 @@ class GitTagDeliveryAdapter(
     fun resumeInterrupted(target: DeliveryTarget, operationId: String): TagOperation =
         tags.resumeInterrupted(target.config, target.taskDirectory, operationId)
 
+    fun resumeFailed(target: DeliveryTarget, operationId: String): TagOperation =
+        tags.resumeFailed(target.config, target.taskDirectory, operationId)
+
+    fun resumePartial(target: DeliveryTarget, operationId: String): TagOperation =
+        tags.resumePartial(target.config, target.taskDirectory, operationId)
+
+    fun retag(target: DeliveryTarget, operationId: String): TagOperation =
+        tags.retag(target.config, target.taskDirectory, operationId)
+
     fun executeBatch(config: AppConfig, taskDirectory: Path, selectionKeys: List<String>): List<TagOperation> =
         tags.buildBatch(config, taskDirectory, selectionKeys)
 

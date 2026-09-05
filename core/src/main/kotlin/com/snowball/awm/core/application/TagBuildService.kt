@@ -198,13 +198,11 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation = resumeExisting(
-        config = config,
-        taskDirectory = taskDirectory,
-        operationId = operationId,
-        retryableStates = setOf(TagOperationState.CONFLICT),
-        invalidStateMessage = "只有${TagOperationState.CONFLICT.userFacingLabel()}的测试Tag操作可以重试",
-    )
+    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
+        require(previous.state == TagOperationState.CONFLICT) {
+            "只有${TagOperationState.CONFLICT.userFacingLabel()}的测试Tag操作可以重试"
+        }
+    }
 
     /**
      * Re-runs an operation interrupted before it changed the target branch or
@@ -215,23 +213,45 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation = resumeExisting(
-        config = config,
-        taskDirectory = taskDirectory,
-        operationId = operationId,
-        retryableStates = interruptedRetryableTagStates,
-        invalidStateMessage = "只有构建中断的测试Tag操作可以重试",
-    )
+    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
+        require(previous.state in interruptedRetryableTagStates) { "只有构建中断的测试Tag操作可以重试" }
+    }
+
+    /**
+     * Re-runs a locally failed build on the same record. No Tag was created for
+     * a failed operation, so the retry simply recomputes the next version.
+     */
+    fun resumeFailed(
+        config: AppConfig,
+        taskDirectory: Path,
+        operationId: String,
+    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
+        require(previous.state == TagOperationState.FAILED) { "只有失败的测试Tag操作可以重试" }
+    }
+
+    /**
+     * Rebuilds a Tag whose Genbu pipeline build failed. The full Tag flow runs
+     * again on the same record and the version auto-increments past the failed
+     * Tag, so the history row is replaced instead of duplicated.
+     */
+    fun retag(
+        config: AppConfig,
+        taskDirectory: Path,
+        operationId: String,
+    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
+        require(previous.state == TagOperationState.SUCCESS && previous.genbuStatus.build == GenbuStageStatus.FAILED) {
+            "只有 Genbu 构建失败的测试Tag可以重新打Tag"
+        }
+    }
 
     private fun resumeExisting(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-        retryableStates: Set<TagOperationState>,
-        invalidStateMessage: String,
+        validate: (TagOperation) -> Unit,
     ): TagOperation = taskLock.withLock(taskDirectory) {
         val previous = operations.load(taskDirectory, operationId)
-        require(previous.state in retryableStates) { invalidStateMessage }
+        validate(previous)
         runCatching {
             buildUnlocked(
                 config = config,
@@ -251,6 +271,7 @@ class TagBuildService(
                 tag = null,
                 message = error.message ?: error::class.simpleName ?: "重试失败",
                 conflictFiles = emptyList(),
+                genbuStatus = GenbuTagProbeStatus(),
             ).also {
                 operations.save(taskDirectory, it)
                 recordHistory(taskDirectory, it)
@@ -289,6 +310,9 @@ class TagBuildService(
             conflictFiles = emptyList(),
             groupServiceId = workspace.groupServiceId,
             moduleId = workspace.moduleId,
+            // A resumed/re-Tag flow produces a new Tag, so the previous Genbu
+            // result no longer applies and the probe starts over.
+            genbuStatus = GenbuTagProbeStatus(),
         ) ?: TagOperation(
             operationId = UUID.randomUUID().toString(),
             folderName = manifest.folderName,

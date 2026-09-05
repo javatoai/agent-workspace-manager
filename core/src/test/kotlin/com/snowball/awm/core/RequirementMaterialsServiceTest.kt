@@ -259,7 +259,7 @@ class RequirementMaterialsServiceTest {
     }
 
     @Test
-    fun `records retryable failure when requirement has no active sprint`() {
+    fun `records retryable failure when the linked sprint cannot be resolved`() {
         val runner = RecordingRunner { command ->
             when {
                 command.contains("meta-fields") -> CommandResult(0, """{"list":[{"field_name":"Sprint","field_key":"field_sprint"}]}""", "")
@@ -272,7 +272,71 @@ class RequirementMaterialsServiceTest {
 
         val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
 
-        assertEquals("需求没有关联当前进行中的 Sprint", (result as RequirementMaterialsResult.Failed).reason)
+        assertEquals("需求未关联可用的 Sprint，已停止创建需求资料目录", (result as RequirementMaterialsResult.Failed).reason)
+    }
+
+    @Test
+    fun `creates the directory under a single linked sprint even when it is not in progress`() {
+        val runner = sprintRunner(
+            sprintIds = listOf("sprint-1"),
+            sprintRows = listOf(sprintRow("sprint-1", "Sprint 8", "未开始")),
+        )
+
+        val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
+
+        val ready = result as RequirementMaterialsResult.Ready
+        assertEquals(RequirementMaterialsResult.Ready.Status.CREATED, ready.status)
+        assertEquals(root.resolve("Sprint 8").resolve("123-task"), ready.requirementPath)
+        assertTrue(Files.isDirectory(ready.writeRoot))
+    }
+
+    @Test
+    fun `picks the only in-progress sprint when several are linked`() {
+        val runner = sprintRunner(
+            sprintIds = listOf("sprint-1", "sprint-2"),
+            sprintRows = listOf(
+                sprintRow("sprint-1", "Sprint 7", "未开始"),
+                sprintRow("sprint-2", "Sprint 8", "进行中"),
+            ),
+        )
+
+        val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
+
+        val ready = result as RequirementMaterialsResult.Ready
+        assertEquals(RequirementMaterialsResult.Ready.Status.CREATED, ready.status)
+        assertEquals(root.resolve("Sprint 8").resolve("123-task"), ready.requirementPath)
+    }
+
+    @Test
+    fun `fails when several linked sprints have none in progress`() {
+        val runner = sprintRunner(
+            sprintIds = listOf("sprint-1", "sprint-2"),
+            sprintRows = listOf(
+                sprintRow("sprint-1", "Sprint 7", "未开始"),
+                sprintRow("sprint-2", "Sprint 8", "已结束"),
+            ),
+        )
+
+        val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
+
+        assertEquals("需求关联多个 Sprint 且均不在进行中，已停止创建需求资料目录", (result as RequirementMaterialsResult.Failed).reason)
+    }
+
+    @Test
+    fun `fails when several linked sprints are in progress`() {
+        val runner = sprintRunner(
+            sprintIds = listOf("sprint-1", "sprint-2"),
+            sprintRows = listOf(
+                sprintRow("sprint-1", "Sprint 7", "进行中"),
+                sprintRow("sprint-2", "Sprint 8", "进行中"),
+            ),
+        )
+
+        val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
+
+        val reason = (result as RequirementMaterialsResult.Failed).reason
+        assertTrue(reason.contains("需求关联多个进行中 Sprint"))
+        assertTrue(reason.contains("Sprint 7") && reason.contains("Sprint 8"))
     }
 
     @Test
@@ -339,6 +403,34 @@ class RequirementMaterialsServiceTest {
     }
 
     private fun projects() = listOf(MeegleProjectConfig("project-key", "obt"))
+
+    private fun sprintRunner(sprintIds: List<String>, sprintRows: List<String>) = RecordingRunner { command ->
+        when {
+            command.contains("meta-fields") -> CommandResult(0, """{"list":[{"field_name":"Sprint","field_key":"field_sprint"}]}""", "")
+            command.contains("--fields") -> CommandResult(
+                0,
+                sprintIds.joinToString(
+                    prefix = """{"work_item_fields":[{"key":"field_sprint","value":[""",
+                    postfix = """]}]}""",
+                ) { """{"id":"$it"}""" },
+                "",
+            )
+            command.contains("workitem") && command.contains("get") -> CommandResult(
+                0,
+                """{"work_item_id":"123","work_item_attribute":{"work_item_type":{"key":"User Story"}}}""",
+                "",
+            )
+            command.contains("query") -> CommandResult(
+                0,
+                sprintRows.joinToString(prefix = """{"data":{"1":[""", postfix = """]}}"""),
+                "",
+            )
+            else -> error("unexpected command: $command")
+        }
+    }
+
+    private fun sprintRow(id: String, name: String, status: String): String =
+        """{"moql_field_list":[{"key":"work_item_id","value":{"long_value":"$id"}},{"key":"name","value":{"string_value":"$name"}},{"key":"work_item_status","value":{"key_label_value_list":[{"key":"status","label":"$status"}]}},{"key":"archiving_status","value":{"bool_value":false}}]}"""
 
     private fun service(runner: CommandRunner) = RequirementMaterialsService(
         runner = runner,
