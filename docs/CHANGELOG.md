@@ -2,7 +2,7 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
-## 未发布
+## 1.0.3
 
 - 移除 Codex 插件分发形态（`plugins/awm-codex`），Agent 技能统一维护在 `skills/awm`；Tag 构建命令参考拆分为 `skills/awm/references/tag-builds.md` 并由主文档引用。
 - Agent CLI 新增 `awm tag` 命令组（build/status/history/retry/workspace-check）：直接对已有任务执行 Tag 构建，输出包含失败原因、冲突分支与冲突文件、Genbu 三态状态和可执行的修复指引；`retry` 按记录状态自动选择重试路径，Genbu 构建失败可重新打Tag（版本号自动 +1）；`status` 实时刷新 Genbu 构建与发版状态；组或模块已关闭测试Tag 时直接报错不落废记录，重复指定同一模块只构建一次。
