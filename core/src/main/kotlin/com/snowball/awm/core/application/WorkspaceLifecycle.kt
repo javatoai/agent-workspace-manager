@@ -543,7 +543,10 @@ class GitWorkspaceLifecycle(
         val configured = config.repositories.firstOrNull { it.id == workspace.repositoryId }
         requireNotNull(configured) { "仓库配置不存在：${workspace.repositoryId}" }
         val repository = Path.of(configured.rootPath).toAbsolutePath().normalize()
-        require(git.commonDirectory(repository).toAbsolutePath().normalize() == Path.of(configured.gitCommonDirectory).toAbsolutePath().normalize()) {
+        require(
+            git.commonDirectory(repository).canonicalOrNormalized() ==
+                Path.of(configured.gitCommonDirectory).canonicalOrNormalized(),
+        ) {
             "主仓库 Git 身份与配置不匹配"
         }
         return repository
@@ -577,7 +580,11 @@ class GitWorkspaceLifecycle(
             val expectedCommon = config.repositories.firstOrNull { it.id == workspace.repositoryId }
                 ?.let { Path.of(it.gitCommonDirectory).toAbsolutePath().normalize() }
                 ?: git.commonDirectory(Path.of(workspace.repositoryPath)).toAbsolutePath().normalize()
-            require(git.commonDirectory(target).toAbsolutePath().normalize() == expectedCommon) {
+            // Git resolves linked worktrees through the filesystem, while a persisted
+            // repository path may have been entered through a symlink (notably /var on
+            // macOS). Compare the canonical paths on both sides so the identity check
+            // validates the repository rather than the spelling of its parent path.
+            require(git.commonDirectory(target).canonicalOrNormalized() == expectedCommon.canonicalOrNormalized()) {
                 "Linked Worktree 不属于配置的主仓库"
             }
         }
