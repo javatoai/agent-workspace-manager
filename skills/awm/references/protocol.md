@@ -4,6 +4,10 @@ The executor uses the `awm` executable distributed from this repository's
 `:cli:installDist` output. It always requests JSON output and never substitutes
 direct Git, Meegle, or filesystem mutations for a CLI operation.
 
+Every command prints `{"ok": true, "result": ...}` to stdout on success. A
+failure instead prints `{"ok": false, "error": "..."}` to stderr and exits 1;
+report that error verbatim rather than retrying blindly.
+
 ## Request file
 
 ```json
@@ -38,7 +42,8 @@ AWM uses the configured `requirementMaterialsRoot` and
 Agent process documents. It first searches the materials root for the exact
 identity `{space, kind, workItemId}`. One valid historical directory is
 reused; multiple `<workItemId>` / `<workItemId>-*` matches block the operation.
-Without history, it requires exactly one linked Sprint whose status is `进行中`.
+Without history, a single linked Sprint is used regardless of its status;
+with several linked Sprints, exactly one must be `进行中`.
 The requirement directory name is always the task `folderName`; the request's
 `requirementTitle` is used only as a Markdown title.
 
@@ -66,3 +71,10 @@ old standalone documentation directories.
 Each branch conflict returns a complete `key` object. The user must approve
 that exact key; insert it into `confirmedBranchReuseKeys` and generate a fresh
 plan. A changed key invalidates prior approval.
+
+## Tag builds
+
+Tag operations are immediate single-call commands over an existing task
+(`awm tag build|status|history|retry|workspace-check`); they never use the
+plan/apply handshake. See [the Tag build reference](tag-builds.md) for the
+commands, the result shape, and the self-repair loop.

@@ -6,6 +6,8 @@ import java.awt.datatransfer.StringSelection
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 class DesktopIntegration(
     private val runner: CommandRunner = ProcessCommandRunner(),
@@ -378,13 +380,35 @@ object DevelopmentToolLaunchCommand {
      * Some JetBrains launchers installed below Program Files require elevation. Launching them
      * directly with ProcessBuilder bypasses the Windows shell and fails with CreateProcess 740.
      */
-    private fun windowsShellLaunch(application: String, arguments: List<String>): List<String> =
-        listOf(
+    private fun windowsShellLaunch(application: String, arguments: List<String>): List<String> {
+        val script = "Start-Process -FilePath ${powerShellLiteral(application)} -ArgumentList ${powerShellLiteral(arguments.joinToString(" ", transform = ::windowsArgument))}"
+        // -Command undergoes another native command-line parse before PowerShell sees it.
+        // Encoding the script preserves the literal quotes needed by the child launcher.
+        return listOf(
             "powershell.exe",
             "-NoProfile",
-            "-Command",
-            "Start-Process -FilePath ${powerShellLiteral(application)} -ArgumentList @(${arguments.joinToString(",") { powerShellLiteral(it) }})",
+            "-EncodedCommand",
+            Base64.getEncoder().encodeToString(script.toByteArray(StandardCharsets.UTF_16LE)),
         )
+    }
+
+    // Start-Process joins ArgumentList into a Windows command line; PowerShell literals alone
+    // do not protect argument boundaries in that second parsing step.
+    private fun windowsArgument(value: String): String = buildString {
+        append('"')
+        var backslashes = 0
+        for (character in value) {
+            if (character == '\\') {
+                backslashes++
+            } else {
+                repeat(if (character == '"') backslashes * 2 + 1 else backslashes) { append('\\') }
+                append(character)
+                backslashes = 0
+            }
+        }
+        repeat(backslashes * 2) { append('\\') }
+        append('"')
+    }
 
     private fun powerShellLiteral(value: String): String = "'${value.replace("'", "''")}'"
 

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -92,7 +93,10 @@ internal fun requirementMaterialsActionGroupFor(directory: String?): Requirement
 
 @Composable
 internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
-    var notes by remember(task.folderName, task.updatedAt, controller.agentRevision) { mutableStateOf(controller.readTaskNotes(task)) }
+    var notes by remember(task.folderName, task.updatedAt) { mutableStateOf("") }
+    var notesLoading by remember(task.folderName, task.updatedAt) { mutableStateOf(true) }
+    var notesError by remember(task.folderName, task.updatedAt) { mutableStateOf<String?>(null) }
+    var notesLoadAttempt by remember(task.folderName, task.updatedAt) { mutableStateOf(0) }
     val templates = controller.agentTaskTemplates
     var selectedTemplateId by remember(task.folderName, task.updatedAt, controller.agentRevision) {
         mutableStateOf(selectedTemplateIdForNotes(notes, templates))
@@ -113,6 +117,9 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     var removalPreview by remember(task.folderName) { mutableStateOf<WorkspaceModuleRemovalPreview?>(null) }
     var removalChecking by remember(task.folderName) { mutableStateOf(false) }
     var agentsPreview by remember(task.folderName) { mutableStateOf<String?>(null) }
+    var agentsPreviewLoading by remember(task.folderName) { mutableStateOf(false) }
+    var agentsPreviewError by remember(task.folderName) { mutableStateOf<String?>(null) }
+    var agentsPreviewRequest by remember(task.folderName) { mutableStateOf(0) }
     val group = controller.config.groups.firstOrNull { it.id == task.groupId }
     val tagWorkspaces = task.services.filter { controller.canBuildTag(task, it) }
     val physicalWorkspaces = controller.physicalWorkspaces(task)
@@ -121,11 +128,49 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
         .takeIf { it.status == RequirementMaterialsStatus.READY }
         ?.writeRoot
         ?.takeIf(String::isNotBlank)
-    val requirementMaterialsActionGroup = requirementMaterialsActionGroupFor(requirementMaterialsDirectory)
+    var requirementMaterialsActionGroup by remember(task.folderName, requirementMaterialsDirectory) {
+        mutableStateOf<RequirementMaterialsActionGroup?>(null)
+    }
+    LaunchedEffect(task.folderName, requirementMaterialsDirectory) {
+        requirementMaterialsActionGroup = controller.requirementMaterialsActionGroupAsync(requirementMaterialsDirectory)
+    }
     val failedTools = task.workspaceToolLaunches.filter { it.status != WorkspaceToolLaunchStatus.OPENED }
     val failedServiceIds = task.services.filter { it.health == WorkspaceHealth.FAILED }
         .map(ServiceWorkspace::groupServiceId).filter(String::isNotBlank).distinct()
     val tagOperationLoading = controller.busy && controller.activeOperation?.contains("Tag") == true
+    val notesReady = !notesLoading && notesError == null
+    LaunchedEffect(task.folderName, task.updatedAt, controller.agentRevision, notesLoadAttempt) {
+        notesLoading = true
+        notesError = null
+        try {
+            val loaded = controller.readTaskNotesAsync(task)
+            notes = loaded
+            selectedTemplateId = selectedTemplateIdForNotes(loaded, templates)
+            notesLoading = false
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            notesError = error.message ?: error::class.simpleName ?: "无法读取任务 AGENTS.md"
+            controller.showError(error)
+            notesLoading = false
+        }
+    }
+    LaunchedEffect(task.folderName, agentsPreviewRequest) {
+        if (agentsPreviewRequest == 0) return@LaunchedEffect
+        agentsPreviewLoading = true
+        agentsPreviewError = null
+        agentsPreview = null
+        try {
+            agentsPreview = controller.previewTaskAgentsAsync(task, notes)
+            agentsPreviewLoading = false
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            agentsPreviewError = error.message ?: error::class.simpleName ?: "无法生成 AGENTS.md 预览"
+            controller.showError(error)
+            agentsPreviewLoading = false
+        }
+    }
     LaunchedEffect(controller.agentRevision) {
         selectedTemplateId = selectedTemplateIdForNotes(notes, templates)
         pendingTemplate = pendingTemplate?.takeIf { pending ->
@@ -280,7 +325,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                                     is TemplateFillResult.NeedsConfirmation -> pendingTemplate = result.target
                                 }
                             },
-                            enabled = !controller.busy,
+                            enabled = !controller.busy && notesReady,
                             label = { Text(template.name) },
                         )
                     }
@@ -289,13 +334,30 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
             OutlinedTextField(notes, {
                 notes = it
                 controller.markTaskNotesEdited(task, it)
-            }, Modifier.fillMaxWidth(), minLines = 4, maxLines = 6, readOnly = controller.busy, label = { Text("任务说明") })
+            }, Modifier.fillMaxWidth(), minLines = 4, maxLines = 6, readOnly = controller.busy || !notesReady, label = { Text("任务说明") })
+            if (notesLoading) {
+                Text("正在读取任务说明…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            notesError?.let { error ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("读取失败：$error", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = { notesLoadAttempt++ }, enabled = !controller.busy) { Text("重试") }
+                }
+            }
+            agentsPreviewError?.let { error ->
+                Text("预览失败：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                OutlinedButton(onClick = { agentsPreview = controller.previewTaskAgents(task, notes) }, enabled = !controller.busy) {
-                    Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("预览")
+                OutlinedButton(
+                    onClick = { agentsPreviewRequest++ },
+                    enabled = !controller.busy && notesReady && !agentsPreviewLoading,
+                ) {
+                    if (agentsPreviewLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp)); Text("预览")
                 }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { controller.saveTaskNotes(task, notes) }, enabled = !controller.busy) {
+                Button(onClick = { controller.saveTaskNotes(task, notes) }, enabled = !controller.busy && notesReady) {
                     Icon(Icons.Outlined.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("保存")
                 }
                 if (failedServiceIds.isNotEmpty()) {
@@ -319,6 +381,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
             title = "替换任务人工说明？",
             message = "当前说明已被手动修改，应用模板“${template.name}”将替换现有内容。",
             confirmLabel = "替换说明",
+            enabled = !controller.busy && notesReady,
             onDismiss = { pendingTemplate = null },
             onConfirm = {
                 applyTemplate(TemplateFillResult.Applied(template.content, template.id))

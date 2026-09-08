@@ -3,13 +3,22 @@ package com.snowball.awm.core
 import kotlinx.serialization.json.Json
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
+
+/** Result of an optimistic operation update. [changed] is false when the CAS did not match. */
+internal data class TagOperationUpdateResult(
+    val operation: TagOperation,
+    val changed: Boolean,
+)
 
 class TagOperationStore(
     private val json: Json = Json {
@@ -21,6 +30,43 @@ class TagOperationStore(
     fun save(taskDirectory: Path, operation: TagOperation) {
         val directory = taskDirectory.resolve("tag-operations")
         directory.createDirectories()
+        withOperationLock(taskDirectory, operation.operationId) {
+            saveUnlocked(directory, operation)
+        }
+    }
+
+    /**
+     * Applies a status-only update if the stored operation still matches
+     * [expected]. The record lock spans the reload and atomic replacement, so a
+     * late Genbu response cannot overwrite a newer build/tag/delete operation.
+     * A missing record returns null and is never recreated.
+     */
+    internal fun updateIfUnchanged(
+        taskDirectory: Path,
+        expected: TagOperation,
+        update: (TagOperation) -> TagOperation,
+    ): TagOperationUpdateResult? {
+        val directory = taskDirectory.resolve("tag-operations")
+        val target = directory.resolve("${expected.operationId}.json")
+        // Do this check before opening the lock. The lock helper used for writes
+        // creates its parent directory; a late probe must not recreate a task
+        // whose operation directory was already deleted.
+        if (!Files.isRegularFile(target)) return null
+        return withExistingOperationLock<TagOperationUpdateResult?>(taskDirectory, expected.operationId) {
+            val current = runCatching { loadUnlocked(target) }.getOrNull()
+            when {
+                current == null -> null
+                current != expected -> TagOperationUpdateResult(current, changed = false)
+                else -> {
+                    val updated = update(current)
+                    if (updated != current) saveUnlocked(directory, updated)
+                    TagOperationUpdateResult(updated, changed = updated != current)
+                }
+            }
+        }
+    }
+
+    private fun saveUnlocked(directory: Path, operation: TagOperation) {
         val target = directory.resolve("${operation.operationId}.json")
         val temporary = Files.createTempFile(directory, ".${operation.operationId}-", ".json.tmp")
         Files.writeString(temporary, json.encodeToString(operation))
@@ -37,9 +83,10 @@ class TagOperationStore(
     }
 
     fun load(taskDirectory: Path, operationId: String): TagOperation =
-        json.decodeFromString<TagOperation>(
-            Files.readString(taskDirectory.resolve("tag-operations").resolve("$operationId.json")),
-        ).normalizeLegacyState()
+        loadUnlocked(taskDirectory.resolve("tag-operations").resolve("$operationId.json"))
+
+    private fun loadUnlocked(target: Path): TagOperation =
+        json.decodeFromString<TagOperation>(Files.readString(target)).normalizeLegacyState()
 
     fun list(taskDirectory: Path): List<TagOperation> {
         val directory = taskDirectory.resolve("tag-operations")
@@ -59,8 +106,14 @@ class TagOperationStore(
         val directory = taskDirectory.resolve("tag-operations")
         if (directory.exists()) {
             Files.list(directory).use { files ->
-                files.filter { it.fileName.toString().endsWith(".json") }.forEach { record ->
-                    if (Files.deleteIfExists(record)) deleted++
+                val operationIds = files
+                    .filter { it.fileName.toString().endsWith(".json") }
+                    .map { it.fileName.toString().removeSuffix(".json") }
+                    .toList()
+                operationIds.forEach { operationId ->
+                    withOperationLock(taskDirectory, operationId) {
+                        if (Files.deleteIfExists(directory.resolve("$operationId.json"))) deleted++
+                    }
                 }
             }
         }
@@ -86,14 +139,18 @@ class TagOperationStore(
         val directory = taskDirectory.resolve("tag-operations")
         if (directory.exists()) {
             Files.list(directory).use { files ->
-                files
+                val operationIds = files
                     .filter { it.fileName.toString().endsWith(".json") }
-                    .forEach { record ->
-                        val fileOperationId = record.fileName.toString().removeSuffix(".json")
-                        if (fileOperationId in selected && Files.deleteIfExists(record)) {
+                    .map { it.fileName.toString().removeSuffix(".json") }
+                    .filter { it in selected }
+                    .toList()
+                operationIds.forEach { operationId ->
+                    withOperationLock(taskDirectory, operationId) {
+                        if (Files.deleteIfExists(directory.resolve("$operationId.json"))) {
                             deleted++
                         }
                     }
+                }
             }
         }
 
@@ -149,6 +206,58 @@ class TagOperationStore(
             }
         } finally {
             Files.deleteIfExists(temporary)
+        }
+    }
+
+    private fun <T> withOperationLock(taskDirectory: Path, operationId: String, block: () -> T): T {
+        val lockId = FileLocking.stablePathHash(taskDirectory.resolve(operationId))
+        return FileLocking.withExclusiveLockWaiting(
+            taskDirectory.resolve("tag-operations").resolve(".$lockId.lock"),
+            block,
+        )
+    }
+
+    /**
+     * Acquires a record lock without creating its parent. This is deliberately
+     * used only by the late-probe CAS path: if the task or operation directory
+     * disappeared after the initial existence check, the update is skipped.
+     */
+    private fun <T> withExistingOperationLock(
+        taskDirectory: Path,
+        operationId: String,
+        block: () -> T,
+    ): T? {
+        val parent = taskDirectory.resolve("tag-operations")
+        if (!Files.isDirectory(parent)) return null
+        val lockId = FileLocking.stablePathHash(taskDirectory.resolve(operationId))
+        val lockPath = parent.resolve(".$lockId.lock")
+        var interrupted = false
+        try {
+            FileChannel.open(
+                lockPath,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+            ).use { channel ->
+                while (true) {
+                    val lock = try {
+                        channel.tryLock()
+                    } catch (_: OverlappingFileLockException) {
+                        null
+                    }
+                    if (lock != null) {
+                        return lock.use { block() }
+                    }
+                    try {
+                        Thread.sleep(50)
+                    } catch (_: InterruptedException) {
+                        interrupted = true
+                    }
+                }
+            }
+        } catch (_: NoSuchFileException) {
+            return null
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
         }
     }
 }

@@ -69,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +81,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.ApplicationEventClipboard
 import com.snowball.awm.core.MeegleCommandSource
@@ -97,8 +100,6 @@ import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.TaskRootMigrationMode
 import com.snowball.awm.core.TaskRootMigrationPhase
 import com.snowball.awm.core.TaskRootMigrationProgress
-import java.nio.file.Files
-import java.nio.file.Path
 
 @Composable
 internal fun SettingsScreen(controller: DesktopApplication) {
@@ -151,12 +152,21 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var deleteTemplateTarget by remember { mutableStateOf<AgentTaskTemplate?>(null) }
     var agentGroupId by remember(controller.config.groups) { mutableStateOf(controller.config.groups.first().id) }
     var agentScope by remember { mutableStateOf("global") }
-    var globalAgents by remember(controller.agentRevision) { mutableStateOf(controller.readGlobalAgents()) }
-    val groupAgentDrafts = remember(controller.config.groups, controller.agentRevision) {
-        mutableStateMapOf<String, String>().apply {
-            controller.config.groups.forEach { group -> put(group.id, controller.readGroupAgents(group.id)) }
+    var globalAgents by remember { mutableStateOf("") }
+    var globalAgentsLoading by remember { mutableStateOf(true) }
+    var globalAgentsError by remember { mutableStateOf<String?>(null) }
+    val groupAgentDrafts = remember { mutableStateMapOf<String, String>() }
+    val groupAgentLoading = remember {
+        mutableStateMapOf<String, Boolean>().apply {
+            controller.config.groups.forEach { group -> put(group.id, true) }
         }
     }
+    val groupAgentLoaded = remember {
+        mutableStateMapOf<String, Boolean>().apply {
+            controller.config.groups.forEach { group -> put(group.id, false) }
+        }
+    }
+    val groupAgentErrors = remember { mutableStateMapOf<String, String>() }
     val sections = remember { settingsNavigationSections() }
     val initialSection = remember { WindowPreferences.load().settingsSection }
     var selectedSection by remember { mutableStateOf(normalizeSettingsSection(initialSection, sections.map { it.key }.toSet())) }
@@ -210,6 +220,41 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
         if (selectedSection == "genbu") controller.refreshGenbu()
+    }
+    LaunchedEffect(controller.agentRevision, controller.config.groups) {
+        globalAgentsLoading = true
+        globalAgentsError = null
+        groupAgentLoading.clear()
+        groupAgentLoaded.clear()
+        groupAgentErrors.clear()
+        controller.config.groups.forEach { group ->
+            groupAgentLoading[group.id] = true
+            groupAgentLoaded[group.id] = false
+        }
+        try {
+            globalAgents = controller.readGlobalAgentsAsync()
+            globalAgentsLoading = false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            globalAgentsError = error.message ?: error::class.simpleName ?: "无法读取全局 AGENTS.md"
+            controller.showError(error)
+            globalAgentsLoading = false
+        }
+        controller.config.groups.forEach { group ->
+            groupAgentLoading[group.id] = true
+            try {
+                groupAgentDrafts[group.id] = controller.readGroupAgentsAsync(group.id)
+                groupAgentLoaded[group.id] = true
+                groupAgentLoading[group.id] = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                groupAgentErrors[group.id] = error.message ?: error::class.simpleName ?: "无法读取组 AGENTS.md"
+                controller.showError(error)
+                groupAgentLoading[group.id] = false
+            }
+        }
     }
     DisposableEffect(selectedSection) {
         onDispose { if (selectedSection == "feishu") controller.cancelMeegleProjectLoad() }
@@ -316,6 +361,11 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     globalAgents = globalAgents,
                     onGlobalAgentsChange = { globalAgents = it },
                     groupAgentDrafts = groupAgentDrafts,
+                    globalAgentsLoading = globalAgentsLoading,
+                    globalAgentsError = globalAgentsError,
+                    groupAgentLoading = groupAgentLoading,
+                    groupAgentLoaded = groupAgentLoaded,
+                    groupAgentErrors = groupAgentErrors,
                 )
             }
             if (selectedSection == "agents") item {
@@ -756,6 +806,27 @@ private fun SettingsPathsSection(
 ) {
     val materialsSaving = controller.settingsSaveState("requirement-materials-root") == SettingsSaveState.SAVING ||
         controller.settingsSaveState("requirement-materials-subdirectory") == SettingsSaveState.SAVING
+    var backups by remember { mutableStateOf<List<ConfigStore.Backup>?>(null) }
+    var backupsLoading by remember { mutableStateOf(false) }
+    var backupLoadError by remember { mutableStateOf<String?>(null) }
+    var importLoading by remember { mutableStateOf(false) }
+    val ioScope = rememberCoroutineScope()
+    LaunchedEffect(backupMenuExpanded) {
+        if (!backupMenuExpanded) return@LaunchedEffect
+        backupsLoading = true
+        backups = null
+        backupLoadError = null
+        try {
+            backups = controller.configBackupsAsync()
+            backupsLoading = false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            backupLoadError = error.message ?: error::class.simpleName ?: "无法读取配置备份"
+            controller.showError(error)
+            backupsLoading = false
+        }
+    }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsCard("任务路径设置", "选择 AWM 扫描任务的根目录。") {
             AutoSaveStatus(controller, "paths")
@@ -831,23 +902,40 @@ private fun SettingsPathsSection(
                 OutlinedButton(
                     onClick = {
                         controller.chooseFile(null) { selected ->
-                            runCatching { controller.previewConfigImport(selected) }
-                                .onSuccess { onImportPreview(it) }
-                                .onFailure(controller::showError)
+                            if (!importLoading) {
+                                importLoading = true
+                                ioScope.launch {
+                                    try {
+                                        onImportPreview(controller.previewConfigImportAsync(selected))
+                                        importLoading = false
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Throwable) {
+                                        controller.showError(error)
+                                        importLoading = false
+                                    }
+                                }
+                            }
                         }
                     },
-                    enabled = !controller.busy && !controller.pathPickerBusy,
-                ) { Text("导入配置") }
+                    enabled = !controller.busy && !controller.pathPickerBusy && !importLoading,
+                ) { Text(if (importLoading) "读取中…" else "导入配置") }
                 Box {
                     OutlinedButton(onClick = { onBackupMenuExpandedChange(true) }, enabled = !controller.busy) { Text("恢复备份") }
                     AwmDropdownMenu(backupMenuExpanded, onDismissRequest = { onBackupMenuExpandedChange(false) }) {
-                        val backups = controller.configBackups()
-                        if (backups.isEmpty()) DropdownMenuItem(text = { Text("暂无配置备份") }, onClick = {}, enabled = false)
-                        backups.forEach { backup ->
-                            DropdownMenuItem(
-                                text = { Text(backup.path.fileName.toString()) },
-                                onClick = { onBackupMenuExpandedChange(false); onRestoreBackup(backup) },
-                            )
+                        when {
+                            backupLoadError != null ->
+                                DropdownMenuItem(text = { Text("读取失败：$backupLoadError") }, onClick = {}, enabled = false)
+                            backupsLoading || backups == null ->
+                                DropdownMenuItem(text = { Text("正在读取配置备份…") }, onClick = {}, enabled = false)
+                            backups!!.isEmpty() ->
+                                DropdownMenuItem(text = { Text("暂无配置备份") }, onClick = {}, enabled = false)
+                            else -> backups!!.forEach { backup ->
+                                DropdownMenuItem(
+                                    text = { Text(backup.path.fileName.toString()) },
+                                    onClick = { onBackupMenuExpandedChange(false); onRestoreBackup(backup) },
+                                )
+                            }
                         }
                     }
                 }
@@ -962,6 +1050,11 @@ private fun SettingsAgentsSection(
     globalAgents: String,
     onGlobalAgentsChange: (String) -> Unit,
     groupAgentDrafts: MutableMap<String, String>,
+    globalAgentsLoading: Boolean,
+    globalAgentsError: String?,
+    groupAgentLoading: Map<String, Boolean>,
+    groupAgentLoaded: Map<String, Boolean>,
+    groupAgentErrors: Map<String, String>,
 ) {
     SettingsCard("全局与组说明", "磁盘中的全局/组 AGENTS.md 是唯一准确来源，保存后会同步相关任务。") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -992,16 +1085,31 @@ private fun SettingsAgentsSection(
                 }
             }
         }
+        val currentGroupLoading = !isGlobal && groupAgentLoading[agentGroupId] != false
+        val currentGroupError = if (isGlobal) null else groupAgentErrors[agentGroupId]
+        val editorReady = if (isGlobal) !globalAgentsLoading && globalAgentsError == null else
+            groupAgentLoaded[agentGroupId] == true && !currentGroupLoading && currentGroupError == null
+        val agentLoading = if (isGlobal) globalAgentsLoading else currentGroupLoading
+        val agentError = if (isGlobal) globalAgentsError else currentGroupError
+        when {
+            agentLoading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            agentError != null -> Text(
+                "无法读取 Agent 说明：$agentError",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            else -> Unit
+        }
         if (isGlobal) {
             OutlinedTextField(globalAgents, {
                 onGlobalAgentsChange(it)
                 controller.markGlobalAgentsEdited(it)
-            }, Modifier.fillMaxWidth(), minLines = 10, readOnly = controller.busy)
+            }, Modifier.fillMaxWidth(), minLines = 10, readOnly = controller.busy || !editorReady)
         } else {
             OutlinedTextField(groupAgentDrafts[agentGroupId].orEmpty(), {
                 groupAgentDrafts[agentGroupId] = it
                 controller.markGroupAgentsEdited(agentGroupId, it)
-            }, Modifier.fillMaxWidth(), minLines = 10, readOnly = controller.busy)
+            }, Modifier.fillMaxWidth(), minLines = 10, readOnly = controller.busy || !editorReady)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Button(
@@ -1009,7 +1117,7 @@ private fun SettingsAgentsSection(
                     if (isGlobal) controller.saveGlobalAgents(globalAgents)
                     else controller.saveGroupAgents(agentGroupId, groupAgentDrafts[agentGroupId].orEmpty())
                 },
-                enabled = !controller.busy,
+                enabled = !controller.busy && editorReady,
             ) { Text(if (isGlobal) "保存全局说明" else "保存组说明") }
         }
     }
@@ -1103,6 +1211,21 @@ private fun SettingsToolsSection(
     saving: Boolean,
     onSaveDevelopmentTools: () -> Unit,
 ) {
+    val pathSnapshot = developmentToolPaths.toMap()
+    var existingPaths by remember { mutableStateOf<Set<DevelopmentToolType>>(emptySet()) }
+    var pathCheckLoading by remember { mutableStateOf(true) }
+    LaunchedEffect(pathSnapshot) {
+        pathCheckLoading = true
+        existingPaths = emptySet()
+        try {
+            existingPaths = controller.existingDevelopmentToolPathsAsync(pathSnapshot)
+            pathCheckLoading = false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            pathCheckLoading = false
+        }
+    }
     SettingsCard(
         "开发工具",
         "启动后会在后台静默探测尚未填写的工具路径；已有路径即使失效也不会被覆盖。未配置的工具不会出现在临时打开列表中。",
@@ -1110,7 +1233,8 @@ private fun SettingsToolsSection(
         AutoSaveStatus(controller, "tools")
         DevelopmentToolType.entries.forEach { type ->
             val value = developmentToolPaths[type].orEmpty()
-            val valid = value.isNotBlank() && runCatching { Files.exists(Path.of(value)) }.getOrDefault(false)
+            val pathChecked = type in pathSnapshot && (!pathCheckLoading || type in existingPaths)
+            val valid = value.isNotBlank() && pathChecked && type in existingPaths
             OutlinedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1118,6 +1242,7 @@ private fun SettingsToolsSection(
                         Text(
                             when {
                                 valid -> "已配置 · 可用"
+                                value.isNotBlank() && !pathChecked -> "检测中"
                                 value.isNotBlank() -> "路径无效"
                                 else -> "等待自动探测"
                             },

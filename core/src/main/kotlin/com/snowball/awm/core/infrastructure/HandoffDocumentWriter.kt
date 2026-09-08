@@ -62,7 +62,7 @@ object HandoffDocumentWriter {
         .replace(openAiStyleToken, "[REDACTED]")
 
     private val secretAssignment = Regex(
-        "(?im)^(\\s*(?:[-*]\\s*)?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization|cookie|set-cookie)\\s*[:=]\\s*)\\S+",
+        """(?im)^([ \t]*(?:[-*][ \t]*)?["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization|proxy-authorization|cookie|set-cookie)["']?[ \t]*[:=][ \t]*)[^\r\n]+""",
     )
-    private val openAiStyleToken = Regex("\\b(?:sk|rk|ghp)_[A-Za-z0-9_-]{12,}\\b")
+    private val openAiStyleToken = Regex("\\b(?:(?:sk|rk)[_-]|ghp_)[A-Za-z0-9_-]{12,}\\b")
 }

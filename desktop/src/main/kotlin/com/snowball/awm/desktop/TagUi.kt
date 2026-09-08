@@ -45,6 +45,14 @@ import com.snowball.awm.core.TagOperationState
 import com.snowball.awm.core.TagHistoryItem
 import com.snowball.awm.core.TagWorkspaceCheck
 import com.snowball.awm.core.userFacingLabel
+import com.snowball.awm.core.tagRetryKind
+import com.snowball.awm.core.TagRetryKind
+
+private val interruptedTagStates = setOf(
+    TagOperationState.CREATED,
+    TagOperationState.PREFLIGHT_PASSED,
+    TagOperationState.SOURCE_BRANCH_PUSHED,
+)
 
 @Composable
 internal fun TagScreen(controller: DesktopApplication) {
@@ -56,8 +64,15 @@ internal fun TagScreen(controller: DesktopApplication) {
     var onlyProblems by remember { mutableStateOf(false) }
     var selectedOperationIds by remember { mutableStateOf(emptySet<String>()) }
     var showDeleteSelectedConfirmation by remember { mutableStateOf(false) }
-    val problemCount = controller.tagHistory.count(::tagOperationIsProblem)
-    val visibleHistory = filterTagHistoryItems(controller.tagHistoryItems, query, onlyProblems)
+    val problemCount = controller.tagHistory.count { operation ->
+        tagOperationIsProblem(operation, active = controller.isTagBuildActive(operation))
+    }
+    val visibleHistory = filterTagHistoryItems(
+        controller.tagHistoryItems,
+        query,
+        onlyProblems,
+        isActive = controller::isTagBuildActive,
+    )
     val visibleOperationCount = visibleHistory.sumOf(FilteredTagHistoryItem::visibleOperationCount)
     val visibleOperationIds = visibleTagOperationIds(visibleHistory)
     LaunchedEffect(query, onlyProblems) { selectedOperationIds = emptySet() }
@@ -199,9 +214,10 @@ internal fun filterTagHistoryItems(
     items: List<TagHistoryItem>,
     query: String,
     onlyProblems: Boolean,
+    isActive: (TagOperation) -> Boolean = { false },
 ): List<FilteredTagHistoryItem> = items.mapNotNull { item ->
     val matchingOperations = item.operations.filter { operation ->
-        (!onlyProblems || tagOperationIsProblem(operation)) && tagHistoryMatchesQuery(operation, query)
+        (!onlyProblems || tagOperationIsProblem(operation, active = isActive(operation))) && tagHistoryMatchesQuery(operation, query)
     }
     matchingOperations.takeIf { it.isNotEmpty() }?.let { FilteredTagHistoryItem(item, it) }
 }
@@ -228,7 +244,9 @@ private fun TagHistoryGroupCard(
     selectedOperationIds: Set<String>,
     onSelectionChanged: (Set<String>, Boolean) -> Unit,
 ) {
-    val problemCount = group.operations.count(::tagOperationIsProblem)
+    val problemCount = group.operations.count { operation ->
+        tagOperationIsProblem(operation, active = controller.isTagBuildActive(operation))
+    }
     val successCount = group.operations.count { it.state == TagOperationState.SUCCESS }
     val visibleOperationIds = visibleOperations.map(TagOperation::operationId).toSet()
     val selected = visibleOperationIds.isNotEmpty() && visibleOperationIds.all { it in selectedOperationIds }
@@ -304,20 +322,23 @@ internal fun tagHistoryMatchesQuery(operation: TagOperation, query: String): Boo
     ).any { it.contains(normalizedQuery, ignoreCase = true) }
 }
 
-internal fun tagOperationIsProblem(operation: TagOperation): Boolean = operation.state in setOf(
-    TagOperationState.CONFLICT,
-    TagOperationState.FAILED,
-    TagOperationState.PARTIAL,
-    TagOperationState.CREATED,
-    TagOperationState.PREFLIGHT_PASSED,
-    TagOperationState.SOURCE_BRANCH_PUSHED,
-) || tagOperationCanRetag(operation)
+internal fun tagOperationIsProblem(operation: TagOperation, active: Boolean = false): Boolean =
+    operation.state in setOf(
+        TagOperationState.CONFLICT,
+        TagOperationState.FAILED,
+        TagOperationState.PARTIAL,
+    ) || (!active && operation.state in interruptedTagStates) || tagOperationCanRetag(operation)
 
-internal fun tagOperationIsRetryableInterrupted(operation: TagOperation): Boolean = operation.state in setOf(
-    TagOperationState.CREATED,
-    TagOperationState.PREFLIGHT_PASSED,
-    TagOperationState.SOURCE_BRANCH_PUSHED,
-)
+internal fun tagOperationIsRetryableInterrupted(operation: TagOperation, active: Boolean = false): Boolean =
+    !active && operation.state in interruptedTagStates
+
+/** An active durable checkpoint is normal progress; inactive checkpoints remain recoverable interruptions. */
+internal fun tagOperationInProgressMessage(operation: TagOperation): String? = when (operation.state) {
+    TagOperationState.CREATED -> "正在初始化测试Tag构建。"
+    TagOperationState.PREFLIGHT_PASSED -> "测试Tag预检已通过，正在推送源分支。"
+    TagOperationState.SOURCE_BRANCH_PUSHED -> "源分支已推送，正在合并目标分支并创建测试Tag。"
+    else -> null
+}
 
 internal fun tagOperationCanRetryFailed(operation: TagOperation): Boolean =
     operation.state == TagOperationState.FAILED
@@ -327,8 +348,7 @@ internal fun tagOperationCanResumePartial(operation: TagOperation): Boolean =
 
 /** A locally successful Tag whose Genbu pipeline build failed can be re-tagged with the next version. */
 internal fun tagOperationCanRetag(operation: TagOperation): Boolean =
-    operation.state == TagOperationState.SUCCESS &&
-        operation.genbuStatus.build == GenbuStageStatus.FAILED
+    tagRetryKind(operation) == TagRetryKind.RETAG
 
 internal fun tagOperationRecordCopyText(operation: TagOperation): String =
     operation.tag?.let { "${operation.serviceName} · $it" } ?: buildString {
@@ -346,7 +366,8 @@ private fun TagHistoryRow(
     selected: Boolean = false,
     onSelectionChanged: (Boolean) -> Unit = {},
 ) {
-    val isProblem = tagOperationIsProblem(operation)
+    val isActive = controller.isTagBuildActive(operation)
+    val isProblem = tagOperationIsProblem(operation, active = isActive)
     val copyRecord: () -> Unit = {
         controller.copyText(tagOperationRecordCopyText(operation), "构建记录已复制")
     }
@@ -397,6 +418,15 @@ private fun TagHistoryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (isActive) {
+                tagOperationInProgressMessage(operation)?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (operation.state == TagOperationState.CONFLICT) {
                 TagConflictActions(
                     controller = controller,
@@ -407,7 +437,7 @@ private fun TagHistoryRow(
             } else if (tagOperationCanResumePartial(operation)) {
                 TagPartialActions(controller, operation)
             }
-            if (tagOperationIsRetryableInterrupted(operation)) {
+            if (tagOperationIsRetryableInterrupted(operation, active = isActive)) {
                 TagInterruptedActions(controller, operation)
             }
             if (tagOperationCanRetag(operation)) {
@@ -487,7 +517,7 @@ private fun TagFailedActions(controller: DesktopApplication, operation: TagOpera
 private fun TagPartialActions(controller: DesktopApplication, operation: TagOperation) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            "上次构建在目标分支推送后中断，本地测试Tag已创建但尚未推送完成。",
+            "测试Tag的创建或推送尚未完成。解决记录中的错误后，可继续使用已记录的Tag和提交构建。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )

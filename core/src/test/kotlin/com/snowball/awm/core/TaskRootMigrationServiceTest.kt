@@ -290,6 +290,117 @@ class TaskRootMigrationServiceTest {
     }
 
     @Test
+    fun `failure after configuration commit keeps target authoritative for journal recovery`() {
+        val fixture = independentFixture("post-commit-failure", "TASK-POST-COMMIT")
+        Files.writeString(fixture.workspace.resolve("user-work.txt"), "keep after commit")
+        val journal = fixture.paths.home.resolve("migrations/task-root.json")
+        val service = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+        )
+
+        val error = assertFailsWith<IllegalStateException> {
+            service.migrate(fixture.store.load(), fixture.targetRoot) { progress ->
+                if (progress.phase == TaskRootMigrationPhase.CLEANING_SOURCE) {
+                    error("synthetic post-commit failure")
+                }
+            }
+        }
+
+        val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
+        assertTrue(error.message.orEmpty().contains("已提交"))
+        assertFalse(fixture.sourceTask.exists())
+        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+        assertEquals(fixture.targetRoot.toAbsolutePath().normalize().toString(), fixture.store.load().taskRoot)
+        assertTrue(journal.exists())
+
+        val recovered = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+        ).recoverInterruptedMigration(fixture.store.load())
+
+        assertTrue(recovered.isEmpty())
+        assertFalse(journal.exists())
+        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+    }
+
+    @Test
+    fun `config write failure with unreadable state keeps migration journal for recovery`() {
+        val fixture = independentFixture("uncertain-commit", "TASK-UNCERTAIN-COMMIT")
+        Files.writeString(fixture.workspace.resolve("user-work.txt"), "keep after uncertain commit")
+        var persisted = fixture.store.load()
+        var failReads = false
+        val uncertainStore = object : ConfigurationRepository {
+            override fun load(): AppConfig {
+                check(!failReads) { "simulated config read failure" }
+                return persisted
+            }
+
+            override fun save(config: AppConfig) {
+                persisted = config
+                failReads = true
+                error("simulated config write acknowledgement failure")
+            }
+        }
+        val journal = fixture.paths.home.resolve("migrations/task-root.json")
+        val service = TaskRootMigrationService(
+            configStore = uncertainStore,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+        )
+
+        val error = assertFailsWith<IllegalStateException> {
+            service.migrate(persisted, fixture.targetRoot)
+        }
+
+        val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
+        assertTrue(error.message.orEmpty().contains("无法确认提交状态"))
+        assertFalse(fixture.sourceTask.exists())
+        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+        assertTrue(journal.exists())
+
+        failReads = false
+        val recovered = TaskRootMigrationService(
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+        ).recoverInterruptedMigration(uncertainStore.load())
+
+        assertTrue(recovered.isEmpty())
+        assertFalse(journal.exists())
+        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+    }
+
+    @Test
+    fun `completed progress failure after cleanup reports completed state`() {
+        val fixture = independentFixture("completed-callback-failure", "TASK-COMPLETED-CALLBACK")
+        val journal = fixture.paths.home.resolve("migrations/task-root.json")
+        val service = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+        )
+
+        val error = assertFailsWith<IllegalStateException> {
+            service.migrate(fixture.store.load(), fixture.targetRoot) { progress ->
+                if (progress.phase == TaskRootMigrationPhase.COMPLETED) {
+                    throw IllegalStateException("synthetic completion callback failure")
+                }
+            }
+        }
+
+        assertTrue(error.message.orEmpty().contains("已完成"))
+        assertFalse(error.message.orEmpty().contains("待清理"))
+        assertFalse(fixture.sourceTask.exists())
+        assertTrue(fixture.targetRoot.resolve(fixture.sourceTask.fileName).exists())
+        assertFalse(journal.exists())
+    }
+
+    @Test
     fun `interrupted rollback is completed from the journal on next startup`() {
         val fixture = independentFixture("interrupted-rollback", "TASK-6")
         val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)

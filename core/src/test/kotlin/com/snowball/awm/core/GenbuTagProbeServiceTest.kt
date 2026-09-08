@@ -1,6 +1,7 @@
 package com.snowball.awm.core
 
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Instant
@@ -151,6 +152,54 @@ class GenbuTagProbeServiceTest {
         probes.probe(config, listOf(task))
 
         assertEquals(listOf("operation-center"), services)
+    }
+
+    @Test
+    fun `late response cannot overwrite a newer operation and deleted record stays deleted`() {
+        val fixture = fixture()
+        val old = operation("1.0.0.1", "2026-08-25 10:00:00")
+        val newer = old.copy(
+            tag = "1.0.0.2",
+            updatedAt = "2026-08-25 10:00:01",
+            message = "newer build",
+        )
+        fixture.store.save(fixture.taskDirectory, old)
+        val directory = fixture.taskDirectory.resolve("tag-operations")
+        val probes = GenbuTagProbeService(fixture.store, GenbuTagStatusProvider { _, _ ->
+            fixture.store.save(fixture.taskDirectory, newer)
+            GenbuTagQueryResult(
+                build = GenbuStageStatus.SUCCESS,
+                uat = GenbuStageStatus.INITIAL,
+                production = GenbuStageStatus.INITIAL,
+            )
+        })
+
+        probes.probeOperation(fixture.config, fixture.task, old.operationId)
+
+        val after = fixture.store.load(fixture.taskDirectory, old.operationId)
+        assertEquals(newer.tag, after.tag)
+        assertEquals(newer.message, after.message)
+
+        val deleteProbe = GenbuTagProbeService(fixture.store, GenbuTagStatusProvider { _, _ ->
+            Files.deleteIfExists(directory.resolve("${old.operationId}.json"))
+            GenbuTagQueryResult(
+                build = GenbuStageStatus.SUCCESS,
+                uat = GenbuStageStatus.INITIAL,
+                production = GenbuStageStatus.INITIAL,
+            )
+        })
+        assertEquals(null, deleteProbe.probeOperation(fixture.config, fixture.task, old.operationId))
+        assertFalse(Files.exists(directory.resolve("${old.operationId}.json")))
+
+        fixture.store.save(fixture.taskDirectory, newer)
+        val removedTask = temporary.resolve("removed-task-backup")
+        val removedTaskProbe = GenbuTagProbeService(fixture.store, GenbuTagStatusProvider { _, _ ->
+            Files.move(fixture.taskDirectory, removedTask)
+            buildingResult()
+        })
+        assertEquals(null, removedTaskProbe.probeOperation(fixture.config, fixture.task, old.operationId))
+        assertFalse(Files.exists(fixture.taskDirectory), "a late probe must not recreate the removed task directory")
+        assertTrue(Files.exists(removedTask.resolve("tag-operations/${old.operationId}.json")))
     }
 
     private fun fixture(

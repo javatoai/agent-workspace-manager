@@ -166,6 +166,83 @@ class BootstrapServiceTest {
         assertFalse(Files.exists(target.resolve("copied.txt")))
     }
 
+    @Test
+    fun `rejects nested target directory links before writing outside the workspace`() {
+        val sourceRepository = Files.createDirectories(temporary.resolve("source-directory-link-target"))
+        val source = Files.createDirectories(sourceRepository.resolve("config/nested"))
+        val workspace = Files.createDirectories(temporary.resolve("workspace-directory-link-target/config"))
+        val outside = Files.createDirectories(temporary.resolve("outside-directory-link-target"))
+        Files.writeString(source.resolve("settings.txt"), "source-replacement")
+        Files.writeString(outside.resolve("settings.txt"), "outside-original")
+        assumeTrue(createDirectoryLink(workspace.resolve("nested"), outside), "directory links are unavailable")
+
+        val result = BootstrapService(runner = RecordingRunner()).initialize(
+            sourceRepository,
+            workspace.parent,
+            BootstrapConfig(copyRules = listOf(BootstrapCopyRule("config", "config", overwrite = true))),
+        )
+
+        assertFalse(result.succeeded)
+        assertEquals("outside-original", Files.readString(outside.resolve("settings.txt")))
+    }
+
+    @Test
+    fun `rejects nested source directory links`() {
+        val sourceRepository = Files.createDirectories(temporary.resolve("source-directory-link-source"))
+        val source = Files.createDirectories(sourceRepository.resolve("config"))
+        val workspace = Files.createDirectories(temporary.resolve("workspace-directory-link-source/config"))
+        val outside = Files.createDirectories(temporary.resolve("outside-directory-link-source"))
+        Files.writeString(outside.resolve("settings.txt"), "outside-original")
+        assumeTrue(createDirectoryLink(source.resolve("nested"), outside), "directory links are unavailable")
+
+        val result = BootstrapService(runner = RecordingRunner()).initialize(
+            sourceRepository,
+            workspace.parent,
+            BootstrapConfig(copyRules = listOf(BootstrapCopyRule("config", "config", overwrite = true))),
+        )
+
+        assertFalse(result.succeeded)
+        assertFalse(Files.exists(workspace.resolve("nested/settings.txt")))
+        assertEquals("outside-original", Files.readString(outside.resolve("settings.txt")))
+    }
+
+    @Test
+    fun `recursive copy does not include nested git metadata`() {
+        val sourceRepository = Files.createDirectories(temporary.resolve("nested-git-source"))
+        val metadata = Files.createDirectories(sourceRepository.resolve("config/.git"))
+        Files.writeString(metadata.resolve("config"), "private repository metadata")
+        val workspace = Files.createDirectories(temporary.resolve("nested-git-workspace"))
+
+        val result = BootstrapService(runner = RecordingRunner()).initialize(
+            sourceRepository,
+            workspace,
+            BootstrapConfig(copyRules = listOf(BootstrapCopyRule("config", "config"))),
+        )
+
+        assertFalse(result.succeeded)
+        assertFalse(Files.exists(workspace.resolve("config/.git")))
+    }
+
+    private fun createDirectoryLink(link: Path, target: Path): Boolean = runCatching {
+        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            val escapedLink = link.toString().replace("'", "''")
+            val escapedTarget = target.toString().replace("'", "''")
+            val result = ProcessCommandRunner().run(
+                listOf(
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "New-Item -ItemType Junction -Path '$escapedLink' -Target '$escapedTarget' | Out-Null",
+                ),
+                timeout = Duration.ofSeconds(10),
+            )
+            result.succeeded
+        } else {
+            Files.createSymbolicLink(link, target)
+            true
+        }
+    }.getOrDefault(false)
+
     private fun assertEqualsCompat(expected: Int, actual: Int) {
         assertTrue(expected == actual, "expected=$expected actual=$actual")
     }

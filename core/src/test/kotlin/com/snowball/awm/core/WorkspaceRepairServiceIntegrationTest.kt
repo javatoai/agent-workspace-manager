@@ -75,6 +75,26 @@ class WorkspaceRepairServiceIntegrationTest {
     }
 
     @Test
+    fun `invalid existing independent clone is backed up before reclone`() {
+        val fixture = fixture("invalid-clone", WorkspaceStrategy.INDEPENDENT_CLONE)
+        val target = fixture.taskDirectory.resolve("service")
+        Files.createDirectories(target)
+        Files.writeString(target.resolve("keep.txt"), "must be backed up")
+        val workspace = fixture.workspace("master", target)
+        fixture.save(workspace)
+
+        val preview = fixture.repairs.inspect(fixture.config, fixture.taskDirectory, workspace.worktreePath)
+
+        assertEquals(WorkspaceRepairAction.RECLONE, preview.action)
+        assertTrue(preview.canRepair)
+        val backup = Path.of(assertNotNull(preview.backupPath))
+        fixture.repairs.repair(fixture.config, fixture.taskDirectory, preview, WorkspaceRepairConfirmation())
+
+        assertTrue(Files.exists(backup.resolve("keep.txt")))
+        assertEquals("master", GitTestSupport.run(target, "branch", "--show-current"))
+    }
+
+    @Test
     fun `wrong branch with local changes is reported but never switched`() {
         val fixture = fixture("dirty-mismatch", WorkspaceStrategy.STANDARD_WORKTREE)
         val repositoryPath = Path.of(fixture.repository.rootPath)

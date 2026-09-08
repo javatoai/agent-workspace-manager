@@ -36,6 +36,7 @@ core/
   application/     用例、端口与工作流编排
   infrastructure/  Git、JSON、文件、进程和外部 CLI 适配
 desktop/            Compose 界面与平台集成
+cli/                只面向 Agent 的 JSON 命令行入口
 ```
 
 Compose 只读取 UI 状态并发出回调；Git、JSON、文件写入、剪贴板和进程调用由 Application/Infrastructure 或 Desktop 平台适配器处理。新增外部工作区工具或交付动作应实现现有注册表接口，而不是在任务创建主流程添加工具专属判断。

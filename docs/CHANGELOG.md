@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 移除 Codex 插件分发形态（`plugins/awm-codex`），Agent 技能统一维护在 `skills/awm`；Tag 构建命令参考拆分为 `skills/awm/references/tag-builds.md` 并由主文档引用。
+- Agent CLI 新增 `awm tag` 命令组（build/status/history/retry/workspace-check）：直接对已有任务执行 Tag 构建，输出包含失败原因、冲突分支与冲突文件、Genbu 三态状态和可执行的修复指引；`retry` 按记录状态自动选择重试路径，Genbu 构建失败可重新打Tag（版本号自动 +1）；`status` 实时刷新 Genbu 构建与发版状态；组或模块已关闭测试Tag 时直接报错不落废记录，重复指定同一模块只构建一次。
 - 需求资料目录的 Sprint 选择规则放宽：本地已有可复用目录时始终复用；需求只关联一个 Sprint 时直接使用它（不再要求进行中）；关联多个 Sprint 时仍要求恰好一个进行中。
 - Genbu Tag 状态切换为 `genbu query-tag --json` 结构化输出，构建、UAT 发版、生产发版三个阶段按 初始/构建中/成功/失败 分类展示；构建失败的记录停止自动轮询。
 - Tag 构建历史形成完整闭环：本地构建失败可“重试构建Tag”，部分完成可“继续构建Tag”，Genbu 构建失败可“重新打Tag”（版本号自动 +1）；所有重试均复用原记录，不产生重复历史行。

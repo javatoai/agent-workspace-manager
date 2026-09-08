@@ -1,6 +1,7 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -139,15 +140,51 @@ class ConfigStore(
             load()
             createBackup()
         }
+        writeConfigUnlocked(config)
+    }
+
+    /** Only explicit restore/import may replace a malformed current document. */
+    private fun replaceCurrentUnlocked(config: AppConfig): AppConfig {
+        if (exists()) {
+            // Reading is deliberately outside the decode catch: an I/O failure must stop recovery.
+            val current = decodeCurrentForRecovery(Files.readString(paths.config))
+            if (current == null) {
+                copyCurrentBackup("config-corrupt-", ".json.bak")
+            } else {
+                createBackup()
+            }
+        }
+        writeConfigUnlocked(config)
+        return load()
+    }
+
+    private fun decodeCurrentForRecovery(content: String): AppConfig? = try {
+        decodeAndValidate(content)
+    } catch (error: UnsupportedConfigVersionException) {
+        throw error
+    } catch (_: SerializationException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    private fun writeConfigUnlocked(config: AppConfig) {
+        require(SchemaVersionCompatibility.isCompatible(config.schemaVersion, CURRENT_APP_CONFIG_SCHEMA_VERSION)) {
+            "不能写入配置版本 ${config.schemaVersion}"
+        }
         paths.home.createDirectories()
         val temporary = Files.createTempFile(paths.home, ".config-", ".json.tmp")
         // Writing always stamps the current PATCH version. This is safe because
         // PATCH releases are only compatible when persisted fields are unchanged.
-        Files.writeString(
-            temporary,
-            json.encodeToString(config.copy(schemaVersion = CURRENT_APP_CONFIG_SCHEMA_VERSION)),
-        )
-        moveAtomically(temporary, paths.config)
+        try {
+            Files.writeString(
+                temporary,
+                json.encodeToString(config.copy(schemaVersion = CURRENT_APP_CONFIG_SCHEMA_VERSION)),
+            )
+            moveAtomically(temporary, paths.config)
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
     }
 
     fun backups(): List<Backup> {
@@ -166,8 +203,7 @@ class ConfigStore(
         require(Files.isRegularFile(normalized)) { "配置备份不存在：$normalized" }
         return withMutationLock {
             val imported = decodeAndValidate(Files.readString(normalized))
-            saveUnlocked(imported)
-            load()
+            replaceCurrentUnlocked(imported)
         }
     }
 
@@ -184,16 +220,19 @@ class ConfigStore(
         require(Files.isRegularFile(source)) { "导入配置不存在：$source" }
         return withMutationLock {
             val imported = decodeAndValidate(Files.readString(source))
-            saveUnlocked(imported)
-            load()
+            replaceCurrentUnlocked(imported)
         }
     }
 
     fun previewImport(source: Path): ImportPreview {
         require(Files.isRegularFile(source)) { "导入配置不存在：$source" }
         val imported = decodeAndValidate(Files.readString(source))
-        val current = load()
+        val current = if (exists()) decodeCurrentForRecovery(Files.readString(paths.config)) else AppConfig()
         val changes = buildList {
+            if (current == null) {
+                add("当前配置已损坏；确认后将先保留原文件，再以导入配置替换")
+                return@buildList
+            }
             if (current.taskRoot != imported.taskRoot) add("任务路径：${current.taskRoot.orEmpty()} → ${imported.taskRoot.orEmpty()}")
             if (current.requirementMaterialsRoot != imported.requirementMaterialsRoot) {
                 add("需求资料根路径：${current.requirementMaterialsRoot.orEmpty()} → ${imported.requirementMaterialsRoot.orEmpty()}")
@@ -213,10 +252,20 @@ class ConfigStore(
     }
 
     private fun createBackup() {
-        paths.backups.createDirectories()
-        val target = paths.backups.resolve("config-${System.currentTimeMillis()}.json")
-        Files.copy(paths.config, target, StandardCopyOption.REPLACE_EXISTING)
+        copyCurrentBackup("config-${System.currentTimeMillis()}-", ".json")
         backups().drop(MAX_BACKUPS).forEach { Files.deleteIfExists(it.path) }
+    }
+
+    private fun copyCurrentBackup(prefix: String, suffix: String) {
+        paths.backups.createDirectories()
+        val temporary = Files.createTempFile(paths.backups, prefix, "$suffix.tmp")
+        val target = temporary.resolveSibling(temporary.fileName.toString().removeSuffix(".tmp"))
+        try {
+            Files.copy(paths.config, temporary, StandardCopyOption.REPLACE_EXISTING)
+            moveAtomically(temporary, target)
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
     }
 
     private fun decodeAndValidate(content: String): AppConfig {

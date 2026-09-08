@@ -12,7 +12,7 @@ import java.util.UUID
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
-private val interruptedRetryableTagStates = setOf(
+internal val interruptedRetryableTagStates = setOf(
     TagOperationState.CREATED,
     TagOperationState.PREFLIGHT_PASSED,
     TagOperationState.SOURCE_BRANCH_PUSHED,
@@ -239,8 +239,14 @@ class TagBuildService(
         taskDirectory: Path,
         operationId: String,
     ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
-        require(previous.state == TagOperationState.SUCCESS && previous.genbuStatus.build == GenbuStageStatus.FAILED) {
+        require(
+            previous.state == TagOperationState.SUCCESS &&
+                previous.genbuStatus.build == GenbuStageStatus.FAILED,
+        ) {
             "只有 Genbu 构建失败的测试Tag可以重新打Tag"
+        }
+        require(previous.genbuStatus.failureReason == null) {
+            "Genbu 实时状态查询失败，请刷新状态后再判断是否重新打Tag"
         }
     }
 
@@ -396,6 +402,16 @@ class TagBuildService(
                 var tag = nextTag(repository, tagCommit)
                 var pushed = false
                 for (attempt in 0..1) {
+                    // Persist the candidate before creating it. A local Tag with
+                    // this name may already exist on an unrelated commit; keeping
+                    // the candidate and commit makes the PARTIAL record resumable
+                    // after that local collision is resolved.
+                    operation = transition(
+                        taskDirectory,
+                        operation,
+                        operation.state,
+                        tag = tag,
+                    )
                     createOrValidateLocalTag(
                         repository,
                         tag,
@@ -439,8 +455,11 @@ class TagBuildService(
                 recordHistory(taskDirectory, operation)
                 operation
             } catch (error: Throwable) {
-                val partial = operation.state == TagOperationState.TARGET_BRANCH_PUSHED ||
-                    operation.state == TagOperationState.LOCAL_TAG_CREATED
+                val partial = operation.tag != null && operation.state in setOf(
+                    TagOperationState.SOURCE_BRANCH_PUSHED,
+                    TagOperationState.TARGET_BRANCH_PUSHED,
+                    TagOperationState.LOCAL_TAG_CREATED,
+                )
                 operation = transition(
                     taskDirectory,
                     operation,

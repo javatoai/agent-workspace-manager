@@ -57,9 +57,9 @@ macOS 构建 DMG：
 ./scripts/build-macos.sh
 ```
 
-## AWM CLI 与 Codex 插件
+## AWM CLI 与 Agent 技能
 
-桌面绿色包内置了只面向 Agent 工作流的 `awm` CLI。它只支持 `awm agent` 下的 JSON 协议命令，不提供任意 Shell 或 Git 操作入口。
+桌面绿色包内置了只面向 Agent 工作流的 `awm` CLI。它支持 `awm agent` 下的 JSON 协议命令与 `awm tag` Tag 构建命令组，不提供任意 Shell 或 Git 操作入口。
 
 ### 安装 CLI
 
@@ -71,16 +71,9 @@ awm --help
 
 macOS/Linux 绿色包同样内置 `resources/cli/bin/awm` 与相邻的 `resources/cli-runtime`。将 `resources/cli/bin` 加入当前用户的 `PATH` 后即可使用；启动脚本会优先使用随包运行时。
 
-### 安装 Codex 插件
+### 安装 Agent 技能
 
-先确认 `awm --help` 在 Codex 新开的终端中可用，再运行以下两条命令安装与当前发布版本绑定的插件：
-
-```powershell
-codex plugin marketplace add https://github.com/javatoai/agent-workspace-manager.git --ref v1.0.2
-codex plugin add awm-codex@agent-workspace-manager
-```
-
-用 `codex plugin list` 确认 `awm-codex@agent-workspace-manager` 为 `installed, enabled`，然后新开一个 Codex 任务并显式输入 `$awm`。插件会让主 Agent 负责澄清和展示计划，并只把受限 JSON CLI 调用委派给 `awm-executor` 子代理；不会自行调用 CLI，也不会代替人工确认创建任务。
+仓库内置了 Agent 技能 [`skills/awm`](skills/awm/SKILL.md)：用户显式输入 `$awm` 时，主 Agent 负责澄清和展示计划，并把受限的 JSON CLI 调用委派给执行者子代理；不会自行调用 CLI，也不会代替人工确认创建任务。将 `skills/awm` 目录安装到所用 Agent 宿主的技能目录（或按宿主方式注册本仓库）即可启用。技能的 Tag 构建参考见 [`skills/awm/references/tag-builds.md`](skills/awm/references/tag-builds.md)。
 
 ## 数据位置
 

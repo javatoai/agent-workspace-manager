@@ -30,6 +30,7 @@ import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.toInfo
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -67,6 +68,17 @@ class AgentInstructionsController internal constructor(
 
     fun readGlobal(): String = read(paths.globalAgents)
     fun readGroup(groupId: String): String = read(paths.groupAgents(groupId))
+
+    /** Reads the authoritative global document without blocking Compose's dispatcher. */
+    suspend fun readGlobalAsync(): String = runInterruptible(ioDispatcher) {
+        monitor.track(paths.globalAgents).content
+    }
+
+    /** Reads the authoritative group document without blocking Compose's dispatcher. */
+    suspend fun readGroupAsync(groupId: String): String = runInterruptible(ioDispatcher) {
+        monitor.track(paths.groupAgents(groupId)).content
+    }
+
     fun markGlobalEdited(content: String) = monitor.markLocalEdit(paths.globalAgents, content)
     fun markGroupEdited(groupId: String, content: String) = monitor.markLocalEdit(paths.groupAgents(groupId), content)
 
@@ -111,6 +123,12 @@ class AgentInstructionsController internal constructor(
         val content = monitor.track(taskDirectory(task).resolve("AGENTS.md")).content
         if (content.isNotBlank()) documents.extractTaskNotes(content) else ""
     }.getOrElse { showError(it); "" }
+
+    /** Reads and parses task-level notes without blocking Compose's dispatcher. */
+    suspend fun readTaskNotesAsync(task: TaskManifest): String = runInterruptible(ioDispatcher) {
+        val content = monitor.track(taskDirectory(task).resolve("AGENTS.md")).content
+        if (content.isNotBlank()) documents.extractTaskNotes(content) else ""
+    }
 
     fun saveTaskNotes(task: TaskManifest, notes: String): Boolean = operations.run("正在保存任务说明…", "任务说明已保存", block = {
         requireNoReservedMarkers(notes)
@@ -166,6 +184,11 @@ class AgentInstructionsController internal constructor(
     /** Renders exactly what [saveTaskNotes] would write, without touching disk. */
     fun previewTask(task: TaskManifest, notes: String): String =
         documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
+
+    /** Renders a task preview away from Compose's dispatcher. */
+    suspend fun previewTaskAsync(task: TaskManifest, notes: String): String = runInterruptible(ioDispatcher) {
+        documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
+    }
 
     fun preview(
         folderName: String,
@@ -225,6 +248,20 @@ class AgentInstructionsController internal constructor(
             groupId = groupId,
         )
         return documents.renderPreview(directory, manifest, config.repositories.map(RepositoryConfig::toInfo), notes)
+    }
+
+    /** Builds a create-task preview away from Compose's dispatcher. */
+    suspend fun previewAsync(
+        folderName: String,
+        branch: String,
+        groupId: String,
+        serviceIds: Set<String>,
+        requirementLink: String,
+        notes: String,
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
+        requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
+    ): String = runInterruptible(ioDispatcher) {
+        preview(folderName, branch, groupId, serviceIds, requirementLink, notes, serviceSelections, requirementMaterials)
     }
 
     private fun read(path: Path): String = runCatching { monitor.track(path).content }.getOrElse { showError(it); "" }

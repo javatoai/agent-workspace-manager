@@ -44,6 +44,7 @@ import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.validateRequirementMaterialsSubdirectory
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -655,24 +656,31 @@ class SettingsController internal constructor(
         }
         remoteBranches = remoteBranches + (key to RemoteBranchesState.Loading(staleBranches))
         if (force) remoteBranchJobs.remove(key)?.cancel()
-        val job = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
             try {
                 val branches = runInterruptible(ioDispatcher) { branchCatalog.list(Path.of(repository.rootPath), remote) }
-                remoteBranches = remoteBranches + (key to RemoteBranchesState.Loaded(branches))
+                if (remoteBranchJobs[key] === currentJob) {
+                    remoteBranches = remoteBranches + (key to RemoteBranchesState.Loaded(branches))
+                }
             } catch (cancelled: CancellationException) {
-                remoteBranches = remoteBranches + (key to (
-                    staleBranches.takeIf(List<String>::isNotEmpty)?.let(RemoteBranchesState::Loaded)
-                        ?: RemoteBranchesState.Idle
-                    ))
+                if (remoteBranchJobs[key] === currentJob) {
+                    remoteBranches = remoteBranches + (key to (
+                        staleBranches.takeIf(List<String>::isNotEmpty)?.let(RemoteBranchesState::Loaded)
+                            ?: RemoteBranchesState.Idle
+                        ))
+                }
                 throw cancelled
             } catch (error: Throwable) {
-                remoteBranches = remoteBranches + (key to RemoteBranchesState.Failed(error.message ?: "远程分支加载失败", staleBranches))
+                if (remoteBranchJobs[key] === currentJob) {
+                    remoteBranches = remoteBranches + (key to RemoteBranchesState.Failed(error.message ?: "远程分支加载失败", staleBranches))
+                }
             } finally {
-                val currentJob = currentCoroutineContext()[Job]
-                if (remoteBranchJobs[key] == currentJob) remoteBranchJobs.remove(key)
+                if (remoteBranchJobs[key] === currentJob) remoteBranchJobs.remove(key)
             }
         }
         remoteBranchJobs[key] = job
+        job.start()
     }
 
     fun loadRepositoryRemotes(repositoryId: String, force: Boolean = false) {
@@ -694,8 +702,9 @@ class SettingsController internal constructor(
         repositoryRemotes[repositoryId] ?: RepositoryRemotesState.Idle
 
     fun cancelRemoteBranchLoads() {
-        remoteBranchJobs.values.forEach(Job::cancel)
+        val jobs = remoteBranchJobs.values.toList()
         remoteBranchJobs.clear()
+        jobs.forEach(Job::cancel)
         remoteBranches = remoteBranches.mapValues { (_, state) ->
             when (state) {
                 is RemoteBranchesState.Loading -> state.staleBranches.takeIf(List<String>::isNotEmpty)

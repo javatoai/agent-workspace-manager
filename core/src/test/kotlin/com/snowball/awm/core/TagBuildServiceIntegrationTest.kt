@@ -475,6 +475,27 @@ Builder: ${System.getProperty("user.name")}
             built.copy(genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED, checkedAt = "2026-09-04 12:00:00")),
         )
 
+        // A failed live status query must never authorize a Git re-Tag from a
+        // stale stored build failure, including through the core service entry.
+        TagOperationStore().save(
+            taskDirectory,
+            built.copy(
+                genbuStatus = GenbuTagProbeStatus(
+                    build = GenbuStageStatus.FAILED,
+                    checkedAt = "2026-09-04 12:00:00",
+                    failureReason = "live query unavailable",
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            builder.retag(config, taskDirectory, built.operationId)
+        }
+
+        TagOperationStore().save(
+            taskDirectory,
+            built.copy(genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED, checkedAt = "2026-09-04 12:00:00")),
+        )
+
         val retagged = builder.retag(config, taskDirectory, built.operationId)
 
         assertEquals(TagOperationState.SUCCESS, retagged.state, retagged.message)

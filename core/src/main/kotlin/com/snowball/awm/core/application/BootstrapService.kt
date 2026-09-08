@@ -3,6 +3,7 @@ package com.snowball.awm.core
 import java.nio.file.FileVisitResult
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
@@ -117,14 +118,14 @@ class BootstrapService(
         rule: BootstrapCopyRule,
         warnings: MutableList<String>,
     ) {
-        val source = resolveSafe(sourceRepository, rule.source, "复制源")
-        val target = resolveSafe(worktree, rule.target, "复制目标")
+        val sourceRoot = safeRoot(sourceRepository, "复制源根目录")
+        val targetRoot = safeRoot(worktree, "复制目标根目录")
+        val source = resolveSafe(sourceRoot, rule.source, "复制源")
+        val target = resolveSafe(targetRoot, rule.target, "复制目标")
         require(source.exists()) { "复制源不存在：$source" }
-        require(source.fileName.toString() != ".git" && !source.startsWith(sourceRepository.resolve(".git"))) {
+        require(source.fileName.toString() != ".git" && !source.startsWith(sourceRoot.path.resolve(".git"))) {
             "禁止复制 .git 内容"
         }
-        require(!Files.isSymbolicLink(source)) { "copy source must not be a symbolic link: $source" }
-        require(!Files.isSymbolicLink(target)) { "copy target must not be a symbolic link: $target" }
         if (target.exists() && !rule.overwrite) {
             throw IllegalStateException("目标已存在且规则禁止覆盖：$target")
         }
@@ -133,33 +134,58 @@ class BootstrapService(
         }
 
         if (source.isDirectory()) {
-            copyDirectory(source, target, rule.overwrite)
+            copyDirectory(source, target, rule.overwrite, sourceRoot, targetRoot)
         } else {
-            copyFileAtomically(source, target, rule.overwrite)
+            copyFileAtomically(source, target, rule.overwrite, sourceRoot, targetRoot)
         }
     }
 
-    private fun copyDirectory(source: Path, target: Path, overwrite: Boolean) {
+    private fun copyDirectory(
+        source: Path,
+        target: Path,
+        overwrite: Boolean,
+        sourceRoot: SafeRoot,
+        targetRoot: SafeRoot,
+    ) {
         Files.walkFileTree(source, object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(
                 directory: Path,
                 attributes: BasicFileAttributes,
             ): FileVisitResult {
-                require(!directory.isSymbolicLink()) { "不支持复制符号链接目录：$directory" }
-                target.resolve(source.relativize(directory)).createDirectories()
+                val destination = target.resolve(source.relativize(directory))
+                validatePath(sourceRoot, directory, "复制源")
+                validatePath(targetRoot, destination, "复制目标")
+                destination.createDirectories()
+                validatePath(targetRoot, destination, "复制目标")
                 return FileVisitResult.CONTINUE
             }
 
             override fun visitFile(file: Path, attributes: BasicFileAttributes): FileVisitResult {
-                require(!file.isSymbolicLink()) { "不支持复制符号链接文件：$file" }
-                copyFileAtomically(file, target.resolve(source.relativize(file)), overwrite)
+                copyFileAtomically(
+                    file,
+                    target.resolve(source.relativize(file)),
+                    overwrite,
+                    sourceRoot,
+                    targetRoot,
+                )
                 return FileVisitResult.CONTINUE
             }
         })
     }
 
-    private fun copyFileAtomically(source: Path, target: Path, overwrite: Boolean) {
+    private fun copyFileAtomically(
+        source: Path,
+        target: Path,
+        overwrite: Boolean,
+        sourceRoot: SafeRoot,
+        targetRoot: SafeRoot,
+    ) {
+        validatePath(sourceRoot, source, "复制源")
+        validatePath(targetRoot, target, "复制目标")
+        validatePath(targetRoot, target.parent, "复制目标")
         target.parent.createDirectories()
+        validatePath(targetRoot, target.parent, "复制目标")
+        validatePath(targetRoot, target, "复制目标")
         if (target.exists() && !overwrite) {
             throw IllegalStateException("目标已存在且规则禁止覆盖：$target")
         }
@@ -193,26 +219,69 @@ class BootstrapService(
         ).succeeded
     }
 
-    private fun resolveSafe(root: Path, relativeValue: String, label: String): Path {
+    private data class SafeRoot(
+        val path: Path,
+        val realPath: Path,
+    )
+
+    private fun safeRoot(root: Path, label: String): SafeRoot {
+        val normalized = root.toAbsolutePath().normalize()
+        val realPath = normalized.toRealPath()
+        require(Files.isDirectory(realPath)) { "$label 必须是目录：$root" }
+        return SafeRoot(normalized, realPath)
+    }
+
+    private fun resolveSafe(root: Path, relativeValue: String, label: String): Path =
+        resolveSafe(safeRoot(root, label), relativeValue, label)
+
+    private fun resolveSafe(root: SafeRoot, relativeValue: String, label: String): Path {
         val relative = Path.of(relativeValue)
         require(!relative.isAbsolute) { "$label 必须是相对路径：$relativeValue" }
         require(relative.none { it.toString() == ".." }) { "$label 禁止包含 ..：$relativeValue" }
-        val normalizedRoot = root.toAbsolutePath().normalize()
-        val resolved = normalizedRoot.resolve(relative).normalize()
-        require(resolved.startsWith(normalizedRoot)) { "$label 超出仓库范围：$relativeValue" }
+        val resolved = root.path.resolve(relative).normalize()
+        require(resolved.startsWith(root.path)) { "$label 超出仓库范围：$relativeValue" }
         require(resolved.none { it.toString() == ".git" }) { "$label 禁止访问 .git：$relativeValue" }
-        val relativeResolved = normalizedRoot.relativize(resolved)
+        val relativeResolved = root.path.relativize(resolved)
         require(relativeResolved.none { it.toString().equals(".git", ignoreCase = true) }) {
             "$label must not access .git: $relativeValue"
         }
-        var current = normalizedRoot
-        relativeResolved.forEach { component ->
-            current = current.resolve(component)
-            require(!Files.isSymbolicLink(current)) {
-                "$label must not traverse symbolic links: $relativeValue"
-            }
-        }
+        validatePath(root, resolved, label)
         return resolved
     }
+
+    /**
+     * Checks every existing component without following links. The root itself
+     * is intentionally allowed to be a symlink (for example macOS /var), but
+     * no child may be a symlink or another reparse point.
+     */
+    private fun validatePath(root: SafeRoot, path: Path, label: String) {
+        require(path.startsWith(root.path)) { "$label 超出仓库范围：$path" }
+        var current = root.path
+        val relative = root.path.relativize(path)
+        require(relative.none { it.toString().equals(".git", ignoreCase = true) }) {
+            "$label 禁止访问 .git：$path"
+        }
+        for (component in relative) {
+            current = current.resolve(component)
+            if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                break
+            }
+            require(!isReparsePoint(current)) {
+                "$label 不支持符号链接或 Windows 重解析点：$current"
+            }
+            val real = current.toRealPath()
+            require(real.startsWith(root.realPath)) {
+                "$label 超出仓库范围：$current"
+            }
+        }
+    }
+
+    private fun isReparsePoint(path: Path): Boolean =
+        Files.isSymbolicLink(path) ||
+            Files.readAttributes(
+                path,
+                BasicFileAttributes::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            ).isOther
 
 }

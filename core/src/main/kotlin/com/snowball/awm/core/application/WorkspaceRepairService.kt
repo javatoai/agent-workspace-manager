@@ -93,9 +93,15 @@ class WorkspaceRepairService(
         if (repository == null) {
             execute()
         } else {
-            val target = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+            // Validate before deriving a fallback lock key. The same validation
+            // is repeated by execute() after the repository lock is acquired.
+            val target = validateRepairTarget(config, taskDirectory, manifest, workspace)
             val lockRoot = if (workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE && Files.exists(target)) {
-                git.commonDirectory(target).toAbsolutePath().normalize()
+                // A damaged clone has no usable Git common directory. Lock the
+                // validated task-local target path until execute() re-inspects it
+                // and moves it to the ownership-checked backup.
+                runCatching { git.commonDirectory(target).toAbsolutePath().normalize() }
+                    .getOrElse { target }
             } else {
                 Path.of(repository.gitCommonDirectory).toAbsolutePath().normalize()
             }

@@ -112,6 +112,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicReference
@@ -496,6 +497,7 @@ class DesktopApplication(
     val errorMessage: String? get() = operationCoordinator.errorMessage
     val tagHistory: List<TagOperation> get() = deliveryController.state.history
     val tagHistoryItems: List<TagHistoryItem> get() = deliveryController.state.historyItems
+    fun isTagBuildActive(operation: TagOperation): Boolean = deliveryController.isTagBuildActive(operation)
     private var tagAnnouncementCopyingGroupIds by mutableStateOf<Set<String>>(emptySet())
     fun tagHistoryRequirementLink(folderName: String): String =
         sessionStore.tasks.firstOrNull { it.folderName == folderName }?.requirementLink.orEmpty()
@@ -749,9 +751,11 @@ class DesktopApplication(
     fun saveAgentTaskTemplate(id: String?, name: String, content: String) = agentInstructionsController.saveTemplate(id, name, content)
     fun deleteAgentTaskTemplate(id: String) = agentInstructionsController.deleteTemplate(id)
     fun readGlobalAgents(): String = agentInstructionsController.readGlobal()
+    suspend fun readGlobalAgentsAsync(): String = agentInstructionsController.readGlobalAsync()
     fun saveGlobalAgents(content: String) = agentInstructionsController.saveGlobal(content)
     fun markGlobalAgentsEdited(content: String) = agentInstructionsController.markGlobalEdited(content)
     fun readGroupAgents(groupId: String): String = agentInstructionsController.readGroup(groupId)
+    suspend fun readGroupAgentsAsync(groupId: String): String = agentInstructionsController.readGroupAsync(groupId)
     fun saveGroupAgents(groupId: String, content: String) = agentInstructionsController.saveGroup(groupId, content)
     fun markGroupAgentsEdited(groupId: String, content: String) = agentInstructionsController.markGroupEdited(groupId, content)
     val requirementMaterialsPreviewState: RequirementMaterialsPreviewState
@@ -777,7 +781,27 @@ class DesktopApplication(
         serviceSelections,
         requirementMaterials,
     )
+    suspend fun previewAgentsAsync(
+        folderName: String,
+        branch: String,
+        groupId: String,
+        serviceIds: Set<String>,
+        requirementLink: String,
+        notes: String,
+        serviceSelections: List<TaskServiceSelection> = emptyList(),
+        requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
+    ): String = agentInstructionsController.previewAsync(
+        folderName,
+        branch,
+        groupId,
+        serviceIds,
+        requirementLink,
+        notes,
+        serviceSelections,
+        requirementMaterials,
+    )
     fun previewTaskAgents(task: TaskManifest, notes: String): String = agentInstructionsController.previewTask(task, notes)
+    suspend fun previewTaskAgentsAsync(task: TaskManifest, notes: String): String = agentInstructionsController.previewTaskAsync(task, notes)
     fun createTask(
         folderName: String,
         branch: String,
@@ -805,6 +829,7 @@ class DesktopApplication(
     fun retryWorkspaceTool(task: TaskManifest, toolId: String) = taskController.retryWorkspaceTool(task, toolId)
 
     fun readTaskNotes(task: TaskManifest): String = agentInstructionsController.readTaskNotes(task)
+    suspend fun readTaskNotesAsync(task: TaskManifest): String = agentInstructionsController.readTaskNotesAsync(task)
     fun saveTaskNotes(task: TaskManifest, notes: String) = agentInstructionsController.saveTaskNotes(task, notes)
     fun markTaskNotesEdited(task: TaskManifest, notes: String) = agentInstructionsController.markTaskNotesEdited(task, notes)
     fun archiveTask(task: TaskManifest, force: Boolean = false, onCompleted: () -> Unit = {}) = taskController.archive(task, onCompleted)
@@ -915,10 +940,12 @@ class DesktopApplication(
     /** Rebuilds a Genbu-failed Tag with the next version on the same history record. */
     fun retagBuildFailedTag(operation: TagOperation): Boolean {
         if (
-            operation.state != com.snowball.awm.core.TagOperationState.SUCCESS ||
-            operation.genbuStatus.build != com.snowball.awm.core.GenbuStageStatus.FAILED
+            com.snowball.awm.core.tagRetryKind(operation) != com.snowball.awm.core.TagRetryKind.RETAG
         ) {
-            showError(IllegalStateException("只有 Genbu 构建失败的测试Tag才能重新打Tag"))
+            showError(IllegalStateException(
+                if (operation.genbuStatus.failureReason != null) "Genbu 实时状态查询失败，请刷新状态后再判断是否重新打Tag"
+                else "只有 Genbu 构建失败的测试Tag才能重新打Tag",
+            ))
             return false
         }
         return withBuildableTagOperation(operation) { task -> deliveryController.retag(task, operation) }
@@ -1013,7 +1040,20 @@ class DesktopApplication(
     }
 
     fun configBackups(): List<ConfigStore.Backup> = runCatching { configStore.backups() }.getOrDefault(emptyList())
+    suspend fun configBackupsAsync(): List<ConfigStore.Backup> = runInterruptible(ioDispatcher) { configStore.backups() }
     fun previewConfigImport(path: String): ConfigStore.ImportPreview = configStore.previewImport(Path.of(path))
+    suspend fun previewConfigImportAsync(path: String): ConfigStore.ImportPreview = runInterruptible(ioDispatcher) {
+        configStore.previewImport(Path.of(path))
+    }
+    suspend fun existingDevelopmentToolPathsAsync(paths: Map<DevelopmentToolType, String>): Set<DevelopmentToolType> =
+        runInterruptible(ioDispatcher) {
+            paths.asSequence()
+                .filter { (_, path) -> path.isNotBlank() && runCatching { java.nio.file.Files.exists(Path.of(path)) }.getOrDefault(false) }
+                .map { (type, _) -> type }
+                .toSet()
+        }
+    internal suspend fun requirementMaterialsActionGroupAsync(path: String?): RequirementMaterialsActionGroup? =
+        runInterruptible(ioDispatcher) { requirementMaterialsActionGroupFor(path) }
 
     fun configurationRecoveryGuidance(): String = recoveryGuidance(
         subject = "系统主配置文件",

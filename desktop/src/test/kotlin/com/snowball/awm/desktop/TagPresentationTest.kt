@@ -54,6 +54,9 @@ class TagPresentationTest {
             genbuStatus = GenbuTagProbeStatus(build = GenbuStageStatus.FAILED),
         )
         assertTrue(tagOperationCanRetag(genbuFailed))
+        assertFalse(tagOperationCanRetag(genbuFailed.copy(
+            genbuStatus = genbuFailed.genbuStatus.copy(failureReason = "live query unavailable"),
+        )))
         assertFalse(tagOperationCanRetag(operation(TagOperationState.SUCCESS)))
         assertFalse(
             tagOperationCanRetag(
@@ -68,6 +71,18 @@ class TagPresentationTest {
     fun `source branch pushed operation is retryable after interruption`() {
         assertTrue(tagOperationIsRetryableInterrupted(operation(TagOperationState.SOURCE_BRANCH_PUSHED)))
         assertFalse(tagOperationIsRetryableInterrupted(operation(TagOperationState.TARGET_BRANCH_PUSHED)))
+    }
+
+    @Test
+    fun `active intermediate Tag state is progress rather than an interruption`() {
+        val sourcePushed = operation(TagOperationState.SOURCE_BRANCH_PUSHED)
+
+        assertFalse(tagOperationIsProblem(sourcePushed, active = true))
+        assertFalse(tagOperationIsRetryableInterrupted(sourcePushed, active = true))
+        assertEquals(
+            "源分支已推送，正在合并目标分支并创建测试Tag。",
+            tagOperationInProgressMessage(sourcePushed),
+        )
     }
 
     @Test

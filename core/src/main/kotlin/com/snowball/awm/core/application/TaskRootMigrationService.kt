@@ -138,6 +138,9 @@ class TaskRootMigrationService(
         val journal = plan.toJournal()
         writeJournal(journal)
         plan.preview.targetRoot.createDirectories()
+        var configUpdateAttempted = false
+        var configUpdated = false
+        var cleanupCompleted = false
         try {
             plan.tasks.forEachIndexed { index, task ->
                 onProgress(
@@ -151,14 +154,41 @@ class TaskRootMigrationService(
                 transferAndVerifyTask(config, plan.preview.mode, task, journal.id)
             }
             onProgress(TaskRootMigrationProgress(TaskRootMigrationPhase.UPDATING_CONFIG, plan.tasks.size, plan.tasks.size))
+            configUpdateAttempted = true
             val updated = updateConfiguredRoot(config.taskRoot, plan.preview.targetRoot)
+            // The configuration update is the transaction commit point. From here
+            // on, the target is authoritative and recovery must only finish source
+            // cleanup; moving the target back would leave config and tasks split.
+            configUpdated = true
             writeJournal(journal.copy(phase = MigrationPhase.CONFIG_UPDATED))
             onProgress(TaskRootMigrationProgress(TaskRootMigrationPhase.CLEANING_SOURCE, plan.tasks.size, plan.tasks.size))
             val cleanupFailures = cleanupSources(journal)
-            if (cleanupFailures.isEmpty()) Files.deleteIfExists(journalPath)
+            if (cleanupFailures.isEmpty()) {
+                Files.deleteIfExists(journalPath)
+                cleanupCompleted = true
+            }
             onProgress(TaskRootMigrationProgress(TaskRootMigrationPhase.COMPLETED, plan.tasks.size, plan.tasks.size))
             return TaskRootMigrationResult(updated, plan.tasks.size, cleanupFailures)
         } catch (error: Throwable) {
+            // Some repository implementations may report an error after their
+            // physical save (for example while reloading the saved document).
+            // Re-read the setting before deciding whether rollback is legal.
+            val configuredRoot = runCatching {
+                configStore.load().taskRoot?.let(Path::of)?.toAbsolutePath()?.normalize() == plan.preview.targetRoot
+            }
+            val commitObserved = configUpdated || configuredRoot.getOrDefault(false)
+            if (commitObserved || (configUpdateAttempted && configuredRoot.isFailure)) {
+                val message = when {
+                    cleanupCompleted -> "任务目录迁移已完成，但完成通知失败"
+                    !commitObserved -> "任务目录迁移已尝试提交，但无法确认提交状态，目录与迁移日志已保留供恢复"
+                    else -> "任务目录迁移已提交，旧目录待清理"
+                }
+                // Keep the migration journal for startup recovery whenever source
+                // cleanup is incomplete. Its phase may still be PREPARED if
+                // persisting CONFIG_UPDATED failed, but the committed taskRoot is
+                // enough to select cleanup recovery.
+                throw IllegalStateException(message, error)
+            }
             val rollbackFailures = rollback(journal, config)
             if (rollbackFailures.isEmpty()) Files.deleteIfExists(journalPath)
             throw IllegalStateException(

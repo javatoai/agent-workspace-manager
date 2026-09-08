@@ -42,29 +42,12 @@ class GenbuTagProbeService(
             val status = candidate.operation.genbuStatus
             if (!force && status.isTerminal()) return@forEachIndexed
             val queried = runCatching { genbu.query(candidate.genbuServiceName, requireNotNull(candidate.operation.tag)) }
-            val updated = queried.fold(
-                onSuccess = { result -> candidate.operation.copy(genbuStatus = status.copy(
-                    build = result.build,
-                    uat = result.uat,
-                    production = result.production,
-                    notFound = result.notFound,
-                    builtCompletedAt = result.builtCompletedAt,
-                    releasedCompletedAt = result.uatReleasedCompletedAt,
-                    productionReleasedCompletedAt = result.productionReleasedCompletedAt,
-                    checkedAt = AwmTime.format(Instant.now(clock)),
-                    failureReason = null,
-                )) },
-                onFailure = { error -> candidate.operation.copy(genbuStatus = status.copy(
-                    notFound = false,
-                    checkedAt = AwmTime.format(Instant.now(clock)),
-                    failureReason = error.message ?: "Genbu 探测失败",
-                )) },
-            )
-            if (updated != candidate.operation) {
-                operations.save(candidate.taskDirectory, updated)
-                changed = true
+            val update = operations.updateIfUnchanged(candidate.taskDirectory, candidate.operation) { current ->
+                current.copy(genbuStatus = refreshed(current.genbuStatus, queried))
             }
-            if (!force && updated.genbuStatus.uat == GenbuStageStatus.SUCCESS) {
+            if (update?.changed == true) changed = true
+            val updated = update?.operation
+            if (!force && update?.changed == true && updated?.genbuStatus?.uat == GenbuStageStatus.SUCCESS) {
                 changed = stopOlderCandidates(candidates.drop(index + 1)) || changed
                 return changed
             }
@@ -72,16 +55,63 @@ class GenbuTagProbeService(
         return changed
     }
 
+    /**
+     * Probes one persisted operation on demand. Unlike background polling this
+     * ignores the terminal-state skip policy: an explicit CLI status query
+     * always asks Genbu for a live answer. Returns the (possibly refreshed)
+     * operation, or null when no such record exists.
+     */
+    fun probeOperation(config: AppConfig, task: TaskManifest, operationId: String): TagOperation? {
+        val taskRoot = config.taskRoot?.takeIf(String::isNotBlank)?.let(Path::of) ?: return null
+        val taskDirectory = taskRoot.resolve(task.taskDirectoryName)
+        val operation = runCatching { operations.load(taskDirectory, operationId) }.getOrNull() ?: return null
+        val group = config.groups.firstOrNull { it.id == task.groupId } ?: return operation
+        val service = group.services.firstOrNull { it.id == operation.groupServiceId } ?: return operation
+        val tag = operation.tag
+        if (!service.genbuProbeEnabled || tag.isNullOrBlank()) return operation
+        val queried = runCatching { genbu.query(service.genbuServiceName.trim(), tag) }
+        val update = operations.updateIfUnchanged(taskDirectory, operation) { current ->
+            current.copy(genbuStatus = refreshed(current.genbuStatus, queried))
+        } ?: return null
+        return update.operation
+    }
+
+    private fun refreshed(status: GenbuTagProbeStatus, queried: Result<GenbuTagQueryResult>): GenbuTagProbeStatus =
+        queried.fold(
+            onSuccess = { result -> status.copy(
+                build = result.build,
+                uat = result.uat,
+                production = result.production,
+                notFound = result.notFound,
+                builtCompletedAt = result.builtCompletedAt,
+                releasedCompletedAt = result.uatReleasedCompletedAt,
+                productionReleasedCompletedAt = result.productionReleasedCompletedAt,
+                checkedAt = AwmTime.format(Instant.now(clock)),
+                failureReason = null,
+            ) },
+            onFailure = { error -> status.copy(
+                notFound = false,
+                checkedAt = AwmTime.format(Instant.now(clock)),
+                failureReason = error.message ?: "Genbu 探测失败",
+            ) },
+        )
+
     private fun stopOlderCandidates(candidates: List<Candidate>): Boolean {
         var changed = false
         candidates.forEach { older ->
             val oldStatus = older.operation.genbuStatus
             if (oldStatus.uat != GenbuStageStatus.SUCCESS && !oldStatus.stoppedByNewerRelease) {
-                operations.save(older.taskDirectory, older.operation.copy(genbuStatus = oldStatus.copy(
-                    stoppedByNewerRelease = true,
-                    failureReason = null,
-                )))
-                changed = true
+                val update = operations.updateIfUnchanged(older.taskDirectory, older.operation) { current ->
+                    if (current.genbuStatus.uat == GenbuStageStatus.SUCCESS || current.genbuStatus.stoppedByNewerRelease) {
+                        current
+                    } else {
+                        current.copy(genbuStatus = current.genbuStatus.copy(
+                            stoppedByNewerRelease = true,
+                            failureReason = null,
+                        ))
+                    }
+                }
+                changed = (update?.changed == true) || changed
             }
         }
         return changed

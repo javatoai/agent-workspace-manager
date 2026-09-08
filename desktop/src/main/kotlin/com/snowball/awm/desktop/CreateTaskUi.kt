@@ -142,26 +142,41 @@ internal fun CreateTaskDialog(
         draft.branchEdited || notes.isNotBlank() || selected.isNotEmpty() || groupId != initialGroup.id ||
         selectedToolIds != initialGroup.defaultWorkspaceToolIds.toSet()
     val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
-    val preview = remember(
+    var preview by remember { mutableStateOf("") }
+    var previewLoading by remember { mutableStateOf(false) }
+    var previewError by remember { mutableStateOf<String?>(null) }
+    val previewSelections = effectiveSelections()
+    LaunchedEffect(
         draft.taskName,
         draft.branch,
         groupId,
         selected,
         draft.requirementLink,
         notes,
-        moduleDraftsByService.toMap(),
+        previewSelections,
         materialsDirectory,
     ) {
-        controller.previewAgents(
-            draft.taskName,
-            draft.branch,
-            groupId,
-            selected,
-            draft.requirementLink,
-            notes,
-            effectiveSelections(),
-            materialsDirectory,
-        )
+        previewLoading = true
+        previewError = null
+        try {
+            preview = controller.previewAgentsAsync(
+                draft.taskName,
+                draft.branch,
+                groupId,
+                selected,
+                draft.requirementLink,
+                notes,
+                previewSelections,
+                materialsDirectory,
+            )
+            previewLoading = false
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            previewError = error.message ?: error::class.simpleName ?: "无法生成 AGENTS.md 预览"
+            controller.showError(error)
+            previewLoading = false
+        }
     }
     LaunchedEffect(draft.requirementLink) {
         val requestedLink = draft.requirementLink
@@ -549,7 +564,23 @@ internal fun CreateTaskDialog(
                                 shape = RoundedCornerShape(14.dp),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             ) {
-                                AgentsMarkdownPreview(preview)
+                                when {
+                                    previewLoading -> Column(
+                                        Modifier.fillMaxSize(),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center,
+                                    ) {
+                                        CircularProgressIndicator()
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("正在生成 AGENTS.md 预览…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    previewError != null -> Text(
+                                        "预览失败：$previewError",
+                                        Modifier.padding(16.dp),
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                    else -> AgentsMarkdownPreview(preview)
+                                }
                             }
                         }
                     }

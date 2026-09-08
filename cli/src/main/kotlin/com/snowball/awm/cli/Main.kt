@@ -3,6 +3,7 @@ package com.snowball.awm.cli
 import com.snowball.awm.core.AgentCreateTaskRequest
 import com.snowball.awm.core.AgentOperationService
 import com.snowball.awm.core.HandoffDocumentWriter
+import com.snowball.awm.core.TagOperationCliFacade
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -37,7 +38,14 @@ fun main(arguments: Array<String>) {
 
 private fun execute(args: List<String>): String {
     if (args.isEmpty() || args.first() in setOf("--help", "-h", "help")) return json.encodeToString(help())
-    require(args.first() == "agent") { "仅支持 `awm agent ...`；运行 `awm --help` 查看受支持命令" }
+    return when (args.first()) {
+        "agent" -> executeAgent(args)
+        "tag" -> executeTag(args)
+        else -> throw IllegalArgumentException("仅支持 `awm agent ...` 与 `awm tag ...`；运行 `awm --help` 查看受支持命令")
+    }
+}
+
+private fun executeAgent(args: List<String>): String {
     val service = AgentOperationService()
     return when (args.getOrNull(1)) {
         "inspect" -> json.encodeToString(service.inspect())
@@ -46,6 +54,24 @@ private fun execute(args: List<String>): String {
         "status" -> json.encodeToString(service.status(args.valueAfter("--operation")))
         "handoff-template" -> json.encodeToString(HandoffTemplate(HandoffDocumentWriter.template()))
         else -> throw IllegalArgumentException("不支持的 agent 子命令；支持 inspect、plan、apply、status、handoff-template")
+    }
+}
+
+private fun executeTag(args: List<String>): String {
+    val facade = TagOperationCliFacade()
+    return when (args.getOrNull(1)) {
+        "build" -> json.encodeToString(
+            facade.build(
+                taskFolder = args.valueAfter("--task"),
+                selectionKeys = args.valuesAfter("--service"),
+                allServices = args.contains("--all-services"),
+            ),
+        )
+        "status" -> json.encodeToString(facade.status(args.valueAfter("--task"), args.valueAfter("--operation")))
+        "history" -> json.encodeToString(facade.history(args.valueAfter("--task")))
+        "retry" -> json.encodeToString(facade.retry(args.valueAfter("--task"), args.valueAfter("--operation")))
+        "workspace-check" -> json.encodeToString(facade.workspaceCheck(args.valueAfter("--task"), args.valueAfter("--operation")))
+        else -> throw IllegalArgumentException("不支持的 tag 子命令；支持 build、status、history、retry、workspace-check")
     }
 }
 
@@ -62,6 +88,12 @@ private fun help(): Help = Help(
         "awm agent plan --request <request.json> --json",
         "awm agent apply --operation <operation-id> --nonce <nonce> --json",
         "awm agent status --operation <operation-id> --json",
+        "awm tag build --task <任务文件夹名> [--service <服务ID:模块ID>]... --json",
+        "awm tag build --task <任务文件夹名> --all-services --json",
+        "awm tag status --task <任务文件夹名> --operation <operation-id> --json",
+        "awm tag history --task <任务文件夹名> --json",
+        "awm tag retry --task <任务文件夹名> --operation <operation-id> --json",
+        "awm tag workspace-check --task <任务文件夹名> --operation <operation-id> --json",
     ),
 )
 
@@ -73,6 +105,16 @@ private fun readRequest(value: String): AgentCreateTaskRequest {
 
 private fun List<String>.valueAfter(flag: String): String {
     val index = indexOf(flag)
-    require(index >= 0 && index + 1 < size) { "缺少参数：$flag" }
-    return this[index + 1]
+    require(index >= 0) { "缺少参数：$flag" }
+    return valueAt(index, flag)
+}
+
+private fun List<String>.valuesAfter(flag: String): List<String> =
+    indices.filter { this[it] == flag }.map { valueAt(it, flag) }
+
+/** A following token that looks like another flag means the value was omitted. */
+private fun List<String>.valueAt(flagIndex: Int, flag: String): String {
+    val value = getOrNull(flagIndex + 1)
+    require(value != null && !value.startsWith("--")) { "缺少参数值：$flag" }
+    return value
 }
