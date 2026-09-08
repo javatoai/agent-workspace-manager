@@ -572,7 +572,12 @@ class GitWorkspaceLifecycle(
         require(Files.isDirectory(target.resolve(".git")) || workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE) {
             "独立克隆不是常规 Git checkout：$target"
         }
-        require(git.topLevel(target).toAbsolutePath().normalize() == target) { "Git 顶层目录不匹配：$target" }
+        // Git may canonicalize a worktree path (for example through macOS's
+        // /var -> /private/var link). Compare resolved paths so an equivalent
+        // spelling cannot make a valid checkout fail identity validation.
+        require(git.topLevel(target).canonicalOrNormalized() == target.canonicalOrNormalized()) {
+            "Git 顶层目录不匹配：$target"
+        }
         if (workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
             val actualOrigin = git.remoteUrl(target)?.trim().orEmpty()
             require(actualOrigin == workspace.originUrl?.trim().orEmpty()) { "独立克隆 origin 与任务记录不匹配" }
