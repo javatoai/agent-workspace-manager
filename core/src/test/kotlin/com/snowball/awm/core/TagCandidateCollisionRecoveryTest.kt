@@ -7,13 +7,13 @@ import org.junit.jupiter.api.io.TempDir
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** Regression for a candidate Tag that already exists locally on another commit. */
+/** Regression for a local-only candidate Tag that is removed by authoritative sync. */
 class TagCandidateCollisionRecoveryTest {
     @TempDir
     lateinit var temporary: Path
 
     @Test
-    fun `candidate collision persists tag and commit for same-operation resume`() {
+    fun `local-only candidate is pruned before the next tag is created`() {
         val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("git"))
         GitTestSupport.run(seed, "branch", "release/test")
         GitTestSupport.run(seed, "push", "origin", "release/test")
@@ -76,32 +76,26 @@ class TagCandidateCollisionRecoveryTest {
 
         val preflight = builder.preflight(config, taskDirectory, repository.id)
         assertEquals("1.0.0.beta-1", preflight.estimatedTag)
-        val partial = builder.build(config, taskDirectory, repository.id)
+        val operation = builder.build(config, taskDirectory, repository.id)
 
-        assertEquals(TagOperationState.PARTIAL, partial.state, partial.message)
-        assertEquals("1.0.0.beta-1", partial.tag)
-        assertTrue(partial.targetSha != null)
+        assertEquals(TagOperationState.SUCCESS, operation.state, operation.message)
+        assertEquals("1.0.0.beta-1", operation.tag)
+        assertTrue(operation.targetSha != null)
         assertTrue(
             GitTestSupport.run(repositoryPath, "ls-remote", "origin", "refs/heads/release/test")
                 .substringBefore('\t')
-                .let { GitClient().isAncestor(repositoryPath, partial.sourceSha!!, it) },
+                .let { GitClient().isAncestor(repositoryPath, operation.sourceSha!!, it) },
         )
 
-        // Resolve only the local name collision; the persisted candidate and
-        // target SHA make this same operation resumable without recomputing it.
-        GitTestSupport.run(repositoryPath, "tag", "-d", "1.0.0.beta-1")
-        val resumed = builder.resumePartial(config, taskDirectory, partial.operationId)
-
-        assertEquals(TagOperationState.SUCCESS, resumed.state, resumed.message)
-        assertEquals(partial.operationId, resumed.operationId)
-        assertEquals(partial.tag, resumed.tag)
         assertEquals(
-            resumed.targetSha,
+            operation.targetSha,
             GitTestSupport.run(repositoryPath, "rev-parse", "refs/tags/1.0.0.beta-1^{}").trim(),
         )
-        assertTrue(
-            GitTestSupport.run(repositoryPath, "ls-remote", "origin", "refs/tags/1.0.0.beta-1")
-                .isNotBlank(),
+        assertEquals(
+            operation.targetSha,
+            GitTestSupport.run(repositoryPath, "ls-remote", "origin", "refs/tags/1.0.0.beta-1^{}")
+                .substringBefore('\t')
+                .trim(),
         )
     }
 }

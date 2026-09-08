@@ -5,7 +5,7 @@
 每个服务构建前会：
 
 1. 检查 Feature Worktree 没有暂存、未提交、未跟踪或进行中的 Git 操作。
-2. 先以 `fetch --prune --no-tags` 刷新分支，再以非强制方式单独同步 Tag；同名 Tag 冲突会停止 Tag 流程。
+2. 先以 `fetch --prune --no-tags` 刷新分支，再以远端为权威单独同步 Tag；同名 Tag 会以远端提交覆盖，远端已删除的本地 Tag 会被清理。
 3. 比较本地和远端 Feature 分支；远端领先或已分叉时停止，不自动 pull/rebase。
 4. 合并模式解析目标分支的精确 SHA；当前分支模式不需要目标分支。
 5. 合并模式在 `~/awm/temp/tag-build` 下创建 Detached 临时 Worktree。
@@ -26,7 +26,7 @@
 8. 推送 Tag，并处理同名 Tag 竞态；最多重新计算并重试一次。
 9. 输出可复制的 `服务：Tag` 清单。
 
-工具明确不会执行：
+Tag 同步的强制覆盖只作用于本地 Tag 引用，不会修改远端 Tag。工具明确不会执行：
 
 - Force Push
 - 自动 Pull / Rebase

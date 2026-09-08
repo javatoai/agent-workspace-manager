@@ -1,6 +1,7 @@
 package com.snowball.awm.core
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -136,6 +137,88 @@ Builder: ${System.getProperty("user.name")}
         assertTrue(
             GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.6.89.beta-12")
                 .isNotBlank(),
+        )
+    }
+
+    @Test
+    fun `remote tags are authoritative before computing and pushing the next beta`() {
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(temporary.resolve("remote-tag-authority"))
+        GitTestSupport.run(seed, "branch", "release/test")
+        GitTestSupport.run(seed, "push", "origin", "release/test")
+        createAnnotatedTag(seed, "3.21.43.beta-3", "2026-09-01T00:00:00Z")
+        createAnnotatedTag(seed, "3.21.43.beta-7", "2026-09-07T00:00:00Z")
+        GitTestSupport.run(seed, "push", "origin", "--tags")
+
+        val repository = GitTestSupport.clone(remote, temporary.resolve("remote-tag-authority-clone"))
+        GitTestSupport.run(repository, "tag", "-a", "3.21.43.beta-99", "-m", "local-only")
+
+        Files.writeString(seed.resolve("remote-tag-target.txt"), "remote tag target\n")
+        GitTestSupport.run(seed, "add", "remote-tag-target.txt")
+        GitTestSupport.run(seed, "commit", "-m", "move remote beta-3")
+        GitTestSupport.run(seed, "tag", "-f", "-a", "3.21.43.beta-3", "-m", "new beta-3")
+        GitTestSupport.run(seed, "push", "--force", "origin", "refs/tags/3.21.43.beta-3")
+        val remoteBeta3 = GitTestSupport.run(seed, "rev-parse", "3.21.43.beta-3^{}").trim()
+
+        val repositoryInfo = GitRepositoryInspector().inspect(repository)
+        val taskDirectory = temporary.resolve("remote-tag-task")
+        val featureWorktree = taskDirectory.resolve("operation-center")
+        Files.createDirectories(featureWorktree.parent)
+        GitClient().addWorktree(repository, featureWorktree, "feature/TAG-AUTHORITY", "origin/master")
+        GitTestSupport.configureIdentity(featureWorktree)
+        Files.writeString(featureWorktree.resolve("feature.txt"), "feature\n")
+        GitTestSupport.run(featureWorktree, "add", "feature.txt")
+        GitTestSupport.run(featureWorktree, "commit", "-m", "feature change")
+
+        val now = Instant.now().toString()
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "remote-tag-task",
+                taskDirectoryName = "remote-tag-task",
+                featureBranch = "feature/TAG-AUTHORITY",
+                requirementLink = "https://example.com/req",
+                createdAt = now,
+                updatedAt = now,
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
+                services = listOf(
+                    ServiceWorkspace(
+                        repositoryId = repositoryInfo.id,
+                        serviceName = "operation-center",
+                        repositoryPath = repository.toString(),
+                        worktreePath = featureWorktree.toString(),
+                        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+                        branch = "feature/TAG-AUTHORITY",
+                        health = WorkspaceHealth.READY,
+                        groupServiceId = "operation-center",
+                        tagEnabled = true,
+                        tagTargetRef = "origin/release/test",
+                    ),
+                ),
+            ),
+        )
+        val service = GroupServiceConfig.standard(
+            id = "operation-center",
+            repositoryId = repositoryInfo.id,
+            displayName = "operation-center",
+        ).copy(modules = listOf(ServiceModuleConfig("default")))
+        val config = AppConfig(
+            taskRoot = temporary.toString(),
+            repositories = listOf(repositoryInfo),
+            groups = listOf(GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, services = listOf(service))),
+        )
+        val builder = TagBuildService(paths = ApplicationPaths(temporary.resolve("remote-tag-authority-app")))
+
+        val preview = builder.preflight(config, taskDirectory, repositoryInfo.id)
+        assertEquals("3.21.43.beta-8", preview.estimatedTag)
+        assertEquals(remoteBeta3, GitClient().resolve(repository, "refs/tags/3.21.43.beta-3"))
+        assertFalse(GitClient().refExists(repository, "refs/tags/3.21.43.beta-99"))
+
+        val result = builder.build(config, taskDirectory, repositoryInfo.id)
+
+        assertEquals(TagOperationState.SUCCESS, result.state, result.message)
+        assertEquals("3.21.43.beta-8", result.tag)
+        assertTrue(
+            GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/3.21.43.beta-8^{}").isNotBlank(),
         )
     }
 

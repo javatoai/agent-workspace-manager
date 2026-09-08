@@ -2,6 +2,11 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 1.0.4
+
+- Tag 预检与合并过程按远端 Tag 集合同步本地引用：同名 Tag 以远端提交为准，远端已删除的 Tag 会清理本地引用；普通分支 Fetch 和 Tag Push 仍保持非强制。
+- 增加远端 Tag 冲突、远端删除本地 Tag、版本计算和完整推送链路的回归覆盖。
+
 ## 1.0.3
 
 - 移除 Codex 插件分发形态（`plugins/awm-codex`），Agent 技能统一维护在 `skills/awm`；Tag 构建命令参考拆分为 `skills/awm/references/tag-builds.md` 并由主文档引用。

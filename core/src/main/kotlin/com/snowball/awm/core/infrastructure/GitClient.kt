@@ -196,9 +196,23 @@ class GitClient(
         run(repository, "fetch", "--prune", "--no-tags", remote, timeout = Duration.ofMinutes(5))
     }
 
-    /** Tag synchronization is explicit and deliberately non-forcing. */
+    /**
+     * Synchronizes local Tag refs from the remote as the authoritative source.
+     *
+     * This may overwrite conflicting local Tag refs and remove local-only tags,
+     * but it never changes a remote ref or any branch/worktree state.
+     */
     fun fetchTags(repository: Path, remote: String = "origin") {
-        run(repository, "fetch", "--tags", "--no-force", remote, timeout = Duration.ofMinutes(5))
+        run(
+            repository,
+            "fetch",
+            "--tags",
+            "--prune",
+            "--prune-tags",
+            "--force",
+            remote,
+            timeout = Duration.ofMinutes(5),
+        )
     }
 
     fun addWorktree(
