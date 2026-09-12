@@ -128,15 +128,26 @@ class DevelopmentToolLaunchCommandTest {
     }
 
     @Test
-    fun `windows batch launch is wrapped as separate command arguments`() {
-        assertEquals(
-            listOf("cmd.exe", "/d", "/c", "C:/tools/code.cmd", "--new-window", target.toAbsolutePath().normalize().toString()),
-            DevelopmentToolLaunchCommand.build(
-                DevelopmentToolType.VISUAL_STUDIO_CODE,
-                "C:/tools/code.cmd",
-                target,
-                "Windows 11",
-            ),
-        )
+    @EnabledOnOs(OS.WINDOWS)
+    fun `batch development tool preserves its option and literal project path`() {
+        val wrapperDirectory = Files.createDirectories(temporary.resolve("tool & %AWM_TEST_EXPANSION% ' !"))
+        val wrapper = createArgumentCapturingBatch(wrapperDirectory.resolve("code wrapper.bat"))
+        val workspace = Files.createDirectories(temporary.resolve("workspace & %AWM_TEST_EXPANSION% ' !AWM_TEST_EXPANSION!"))
+        for ((index, directory) in listOf(workspace, workspace.root).withIndex()) {
+            val output = temporary.resolve("batch-arguments-$index.txt")
+            val result = ProcessCommandRunner().run(
+                DevelopmentToolLaunchCommand.build(
+                    DevelopmentToolType.VISUAL_STUDIO_CODE, wrapper.toString(), directory, "Windows 11",
+                ),
+                timeout = Duration.ofSeconds(15),
+                environment = mapOf(
+                    "AWM_TEST_ARGS_OUT" to output.toString(),
+                    "AWM_TEST_EXPANSION" to "unexpected-expansion",
+                ),
+            )
+
+            assertEquals(0, result.exitCode, result.stderr)
+            assertEquals(listOf("--new-window", directory.toString(), ""), Files.readAllLines(output))
+        }
     }
 }

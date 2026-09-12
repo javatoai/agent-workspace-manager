@@ -135,6 +135,9 @@ class AgentOperationServiceTest {
 
         assertEquals(AgentOperationState.APPLIED, applied.state)
         assertEquals(competingWriteRoot.toString(), taskOperations.createdRequest!!.agentContext!!.documentationDirectory)
+        assertEquals(competingWriteRoot.toString(), applied.documentation.documentationDirectory)
+        assertEquals(competingWriteRoot.toString(), service.status(plan.operationId).documentation.documentationDirectory)
+        assertEquals(competingWriteRoot.toString(), service.apply(plan.operationId, plan.nonce).documentation.documentationDirectory)
         assertTrue(!Files.exists(Path.of(plan.documentation.documentationDirectory).parent))
     }
 

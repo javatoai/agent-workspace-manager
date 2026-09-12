@@ -35,12 +35,11 @@ class OperationRunner internal constructor(
                 val value = runInterruptible(dispatcher, block)
                 runCatching { onSuccess(value) }
                     .onSuccess { coordinator.succeed(successMessage) }
-                    .onFailure { error -> onFailure(error); coordinator.fail(error) }
+                    .onFailure { error -> fail(error, onFailure) }
             } catch (_: CancellationException) {
                 coordinator.cancelled()
             } catch (error: Throwable) {
-                onFailure(error)
-                coordinator.fail(error)
+                fail(error, onFailure)
             } finally {
                 activeJob = null
             }
@@ -54,5 +53,20 @@ class OperationRunner internal constructor(
         coordinator.markCancelling()
         activeJob?.cancel()
         return true
+    }
+
+    /**
+     * A failure callback is UI bookkeeping supplied by a feature controller.
+     * It must not be able to prevent the shared operation state from leaving
+     * the busy state when that bookkeeping itself fails.
+     */
+    private fun fail(error: Throwable, onFailure: (Throwable) -> Unit) {
+        runCatching { onFailure(error) }
+            .onFailure { callbackError ->
+                if (callbackError !== error) {
+                    runCatching { error.addSuppressed(callbackError) }
+                }
+            }
+        coordinator.fail(error)
     }
 }

@@ -2,9 +2,11 @@ package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.time.Duration
 import java.util.Locale
 
@@ -45,24 +47,18 @@ class MeegleRequirementMetadataProvider(
         if (!result.succeeded) return null
         return runCatching {
             val root = json.parseToJsonElement(result.stdout).jsonObject
-            val attributes = root["work_item_attribute"]?.jsonObject
+            val attributes = root["work_item_attribute"] as? JsonObject
             RequirementMetadata(
                 title = sequenceOf(
                     root["name"],
                     root["work_item_name"],
                     attributes?.get("name"),
                     attributes?.get("work_item_name"),
-                ).mapNotNull { element ->
-                    runCatching { element?.jsonPrimitive?.content?.trim()?.ifBlank { null } }.getOrNull()
-                }.firstOrNull(),
-                status = attributes?.get("work_item_status")
-                    ?.jsonObject
+                ).mapNotNull { it.textOrNull() }.firstOrNull(),
+                status = (attributes?.get("work_item_status") as? JsonObject)
                     ?.get("name")
-                    ?.jsonPrimitive
-                    ?.content
-                    ?.trim()
-                    ?.ifBlank { null },
-                participants = participantsFor(workItem.kind, attributes?.get("role_members")?.jsonArray),
+                    .textOrNull(),
+                participants = participantsFor(workItem.kind, attributes?.get("role_members") as? JsonArray),
             ).takeIf { attributes != null || it.title != null || it.status != null || !it.participants.isEmpty }
         }.getOrNull()
     }
@@ -81,16 +77,18 @@ class MeegleRequirementMetadataProvider(
 
     private fun membersFor(roles: JsonArray?, roleName: String): List<RequirementPerson> = roles
         .orEmpty()
-        .filter { role -> role.jsonObject["name"]?.jsonPrimitive?.content == roleName }
-        .flatMap { role -> role.jsonObject["members"]?.jsonArray.orEmpty() }
+        .mapNotNull { it as? JsonObject }
+        .filter { role -> (role["name"] as? JsonPrimitive)?.contentOrNull == roleName }
+        .flatMap { role -> (role["members"] as? JsonArray).orEmpty() }
         .mapNotNull { member ->
-            runCatching {
-                val value = member.jsonObject
-                value["name"]?.jsonPrimitive?.content?.trim()?.takeIf(String::isNotBlank)?.let { name ->
-                    RequirementPerson(name, value["email"]?.jsonPrimitive?.content?.trim()?.ifBlank { null })
-                }
-            }.getOrNull()
+            val value = member as? JsonObject ?: return@mapNotNull null
+            value["name"].textOrNull()?.let { name ->
+                RequirementPerson(name, value["email"].textOrNull())
+            }
         }
+
+    private fun JsonElement?.textOrNull(): String? =
+        (this as? JsonPrimitive)?.contentOrNull?.trim()?.ifBlank { null }
 
     private companion object {
         val json = Json { ignoreUnknownKeys = true }

@@ -208,6 +208,7 @@ class AgentOperationService(
             )
             current.copy(
                 state = AgentOperationState.APPLIED,
+                documentation = materialized.plan,
                 confirmedAt = Instant.now(clock).toString(),
                 handoffPath = Path.of(current.taskDirectory)
                     .resolve(HandoffDocumentWriter.DIRECTORY_NAME)

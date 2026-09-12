@@ -294,6 +294,103 @@ class TaskApplicationServiceTest {
     }
 
     @Test
+    fun `create and preview reject default and explicit ancestor branches before provisioning`() {
+        val root = Files.createTempDirectory("task-branch-ancestor-")
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(standard)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val original = taskConfig(root)
+        val configured = original.groupService("alpha", "standard").copy(
+            modules = listOf(
+                ServiceModuleConfig("release", "release"),
+                ServiceModuleConfig("mobile", "release/mobile"),
+            ),
+        )
+        val config = original.copy(groups = listOf(original.group("alpha").copy(services = listOf(configured))))
+        val defaultRequest = CreateGroupedTaskRequest("TASK", "feature/task", "alpha", listOf("standard"))
+        val explicitRequest = defaultRequest.copy(
+            serviceSelections = listOf(TaskServiceSelection("standard", listOf(
+                TaskModuleSelection("api", "api", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/release/mobile"),
+                TaskModuleSelection("job", "job", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "FEATURE/release"),
+            ))),
+        )
+
+        listOf(defaultRequest, explicitRequest).forEach { request ->
+            val previewError = assertFailsWith<IllegalArgumentException> { application.inspectCreateBranchReuse(config, request) }
+            val createError = assertFailsWith<IllegalArgumentException> { application.create(config, request) }
+            assertTrue(previewError.message.orEmpty().contains("父子路径"))
+            assertTrue(createError.message.orEmpty().contains("父子路径"))
+        }
+        assertTrue(standard.requests.isEmpty())
+        assertTrue(!Files.exists(root.resolve("TASK")))
+    }
+
+    @Test
+    fun `branches in different repositories may have an ancestor relationship`() {
+        val root = Files.createTempDirectory("task-branch-separate-repositories-")
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(standard)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val original = taskConfig(root)
+        val config = original.copy(groups = listOf(original.group("alpha").copy(services = listOf(
+            GroupServiceConfig.standard("standard", "repo-a", "Repo A"),
+            GroupServiceConfig.standard("other", "repo-b", "Repo B"),
+        ))))
+
+        val manifest = application.create(config, CreateGroupedTaskRequest(
+            "TASK", "feature/task", "alpha", listOf("standard", "other"),
+            serviceSelections = listOf(
+                TaskServiceSelection("standard", listOf(TaskModuleSelection("default", "default", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/release"))),
+                TaskServiceSelection("other", listOf(TaskModuleSelection("default", "default", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "feature/release/mobile"))),
+            ),
+        ))
+
+        assertEquals(listOf("feature/release", "feature/release/mobile"), manifest.services.map { it.targetBranch })
+        assertEquals(2, standard.requests.size)
+    }
+
+    @Test
+    fun `adding a module rejects ancestors of existing repository branches before mutation`() {
+        val root = Files.createTempDirectory("task-add-branch-ancestor-")
+        val taskDirectory = root.resolve("TASK")
+        val store = ManifestStore()
+        val existing = warningWorkspace(taskDirectory.resolve("Repo-A-existing"), WorkspaceHealth.READY, emptyList()).copy(
+            moduleId = "existing",
+            moduleName = "existing",
+            branch = "feature/release/mobile",
+            targetBranch = "feature/release/mobile",
+        )
+        val original = emptyManifest(TaskLifecycleStatus.ACTIVE).copy(groupId = "alpha", services = listOf(existing))
+        store.save(taskDirectory, original)
+        val standard = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            manifests = store,
+            provisioning = WorkspaceProvisioningService(listOf(standard)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val request = AddTaskModulesRequest("standard", listOf(
+            TaskModuleSelection("new", "new", WorkspaceStrategy.STANDARD_WORKTREE, "origin/master", targetBranch = "FEATURE/release"),
+        ))
+
+        val previewError = assertFailsWith<IllegalArgumentException> {
+            application.inspectAddModulesBranchReuse(taskConfig(root), taskDirectory, request)
+        }
+        val createError = assertFailsWith<IllegalArgumentException> { application.addModules(taskConfig(root), taskDirectory, request) }
+
+        assertTrue(previewError.message.orEmpty().contains("父子路径"))
+        assertTrue(createError.message.orEmpty().contains("父子路径"))
+        assertTrue(standard.requests.isEmpty())
+        assertEquals(original, store.load(taskDirectory))
+    }
+
+    @Test
     fun `adding a module rejects existing module name and directory aliases`() {
         val root = Files.createTempDirectory("task-add-module-name-")
         val taskDirectory = root.resolve("TASK")

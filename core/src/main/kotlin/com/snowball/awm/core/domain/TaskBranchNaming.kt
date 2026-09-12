@@ -59,9 +59,25 @@ object TaskBranchNaming {
             explicitBranches[moduleId]?.trim()?.also { require(it.isNotBlank()) { "模块任务分支不能为空" } }
                 ?: defaultBranch
         }
-        val duplicates = resolved.values.groupBy(String::lowercase).filterValues { it.size > 1 }.keys
-        require(duplicates.isEmpty()) { "同一仓库的模块目标分支不能重复：${duplicates.joinToString()}" }
+        requireNoConflicts(resolved.values)
         return resolved
+    }
+
+    /** Validates final targets in one repository; Git cannot store both a ref and its descendants. */
+    fun requireNoConflicts(branches: Collection<String>) {
+        val grouped = branches.groupBy(String::lowercase)
+        val duplicates = grouped.filterValues { it.size > 1 }.keys
+        require(duplicates.isEmpty()) { "同一仓库的模块目标分支不能重复：${duplicates.joinToString()}" }
+        grouped.forEach { (branch, originals) ->
+            val parent = branch.indices
+                .filter { branch[it] == '/' }
+                .map { branch.substring(0, it) }
+                .firstOrNull(grouped::containsKey)
+                ?.let { grouped.getValue(it).single() }
+            require(parent == null) {
+                "同一仓库的模块目标分支不能互为父子路径：$parent 与 ${originals.single()}"
+            }
+        }
     }
 
     /** Canonical identity used to decide whether modules may share one physical Worktree. */

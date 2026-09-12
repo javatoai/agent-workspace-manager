@@ -44,6 +44,7 @@ import com.snowball.awm.core.info
 import com.snowball.awm.core.toInfo
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -105,6 +106,7 @@ class TaskController internal constructor(
     private var gitStatusJob: Job? = null
     private var branchCandidateRevision = 0L
     private var branchCandidateJob: Job? = null
+    private val createBranchReuseInspection = CreateTaskBranchReuseInspection(scope, ioDispatcher, onError)
     private var gitHealth by mutableStateOf<Map<String, WorkspaceGitHealth>>(emptyMap())
     private var deleteRisks by mutableStateOf<Map<String, DeleteRiskInspection>>(emptyMap())
     var repairPreview by mutableStateOf<WorkspaceRepairPreview?>(null)
@@ -276,20 +278,20 @@ class TaskController internal constructor(
     ): Boolean {
         if (isBusy()) return false
         val config = session.config
-        scope.launch {
-            val result = withContext(ioDispatcher) {
-                runCatching {
-                    tasks.inspectCreateBranchReuse(
-                        config,
-                        CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, serviceSelections = serviceSelections),
-                    )
-                }
-            }
-            result.onSuccess(onResolved).onFailure(onError)
-            onFinished()
-        }
+        createBranchReuseInspection.start(
+            inspect = {
+                tasks.inspectCreateBranchReuse(
+                    config,
+                    CreateGroupedTaskRequest(name, branch, groupId, serviceIds, link, notes, serviceSelections = serviceSelections),
+                )
+            },
+            onResolved = onResolved,
+            onFinished = onFinished,
+        )
         return true
     }
+
+    fun cancelCreateBranchReuseInspection() = createBranchReuseInspection.cancel()
 
     fun inspectAddServicesBranchReuse(
         task: TaskManifest,
@@ -631,3 +633,41 @@ private data class LoadedTaskSnapshot(
     val manifests: List<TaskManifest>,
     val warning: String? = null,
 )
+
+/** A dismissed or replaced create request must never advance from preflight to creation. */
+internal class CreateTaskBranchReuseInspection(
+    private val scope: CoroutineScope,
+    private val ioDispatcher: CoroutineDispatcher,
+    private val onError: (Throwable) -> Unit,
+) {
+    private var generation = 0L
+    private var job: Job? = null
+
+    fun start(
+        inspect: suspend () -> List<BranchReuseConflict>,
+        onResolved: (List<BranchReuseConflict>) -> Unit,
+        onFinished: () -> Unit,
+    ) {
+        cancel()
+        val requestGeneration = generation
+        job = scope.launch {
+            val result = try {
+                Result.success(withContext(ioDispatcher) { inspect() })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Result.failure(error)
+            }
+            if (requestGeneration != generation) return@launch
+            job = null
+            result.onSuccess(onResolved).onFailure(onError)
+            onFinished()
+        }
+    }
+
+    fun cancel() {
+        generation++
+        job?.cancel()
+        job = null
+    }
+}

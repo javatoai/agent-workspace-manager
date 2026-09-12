@@ -240,4 +240,60 @@ class WorkspaceGitStatusTest {
         assertEquals(3, invocations.size)
         assertTrue(invocations.all { "--no-optional-locks" in it })
     }
+
+    @Test
+    fun `reader accepts filesystem aliases returned by Git`() {
+        val real = Files.createDirectories(temporary.resolve("alias-real"))
+        val checkout = Files.createDirectories(real.resolve("checkout"))
+        Files.createDirectories(checkout.resolve(".git"))
+        val aliasRoot = temporary.resolve("alias-root")
+        DirectoryAliasTestSupport.create(temporary, aliasRoot, real)
+        val aliasedCheckout = aliasRoot.resolve("checkout")
+        val branch = "feature/alias"
+        val runner = object : CommandRunner {
+            override fun run(
+                command: List<String>,
+                workingDirectory: Path?,
+                timeout: Duration,
+                environment: Map<String, String>,
+            ): CommandResult = when {
+                "--show-toplevel" in command -> CommandResult(
+                    0,
+                    listOf(
+                        checkout.toAbsolutePath().normalize(),
+                        checkout.resolve(".git").toAbsolutePath().normalize(),
+                        checkout.resolve(".git").toAbsolutePath().normalize(),
+                    ).joinToString("\n"),
+                    "",
+                )
+                "--get" in command -> CommandResult(0, "origin-url\n", "")
+                "--porcelain=v2" in command -> CommandResult(
+                    0,
+                    listOf(
+                        "# branch.head $branch",
+                        "# branch.upstream origin/$branch",
+                        "# branch.ab +0 -0",
+                        "",
+                    ).joinToString("\u0000"),
+                    "",
+                )
+                else -> error("unexpected Git command: ${command.joinToString(" ")}")
+            }
+        }
+        val workspace = ServiceWorkspace(
+            repositoryId = "repo",
+            serviceName = "service",
+            repositoryPath = aliasedCheckout.toString(),
+            worktreePath = aliasedCheckout.toString(),
+            developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+            branch = branch,
+            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+            originUrl = "origin-url",
+        )
+
+        val health = GitWorkspaceGitStatusReader(GitClient(runner)).read(workspace)
+
+        assertEquals(WorkspaceGitHealthState.READY, health.state)
+        assertEquals(branch, health.actualBranch)
+    }
 }

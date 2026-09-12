@@ -8,6 +8,76 @@ import java.time.Duration
 
 class MeegleRequirementMetadataProviderTest {
     @Test
+    fun `null titles do not hide a usable fallback title`() {
+        val outputs = listOf(
+            """{"name":null,"work_item_name":"正确标题"}""",
+            """{"name":null,"work_item_name":null,"work_item_attribute":{"name":null,"work_item_name":"正确标题"}}""",
+        )
+        outputs.forEach { output ->
+            val provider = MeegleRequirementMetadataProvider(
+                RecordingRunner(CommandResult(0, output, "")),
+                isWindows = false,
+            )
+
+            assertEquals("正确标题", provider.fetch("https://project.feishu.cn/obt/userstory/detail/1")?.title)
+        }
+        val empty = MeegleRequirementMetadataProvider(
+            RecordingRunner(CommandResult(0, """{"name":null,"work_item_name":null}""", "")),
+            isWindows = false,
+        )
+        assertNull(empty.fetch("https://project.feishu.cn/obt/userstory/detail/1"))
+    }
+
+    @Test
+    fun `null or malformed optional containers preserve the title`() {
+        val outputs = listOf(
+            """{"name":"正确标题","work_item_attribute":null}""",
+            """{"name":"正确标题","work_item_attribute":[]}""",
+            """{"name":"正确标题","work_item_attribute":{"work_item_status":null,"role_members":null}}""",
+            """{"name":"正确标题","work_item_attribute":{"work_item_status":[],"role_members":{}}}""",
+        )
+        outputs.forEach { output ->
+            val provider = MeegleRequirementMetadataProvider(
+                RecordingRunner(CommandResult(0, output, "")),
+                isWindows = false,
+            )
+
+            assertEquals(
+                RequirementMetadata(title = "正确标题", status = null),
+                provider.fetch("https://project.feishu.cn/obt/userstory/detail/1"),
+            )
+        }
+    }
+
+    @Test
+    fun `null status and malformed members do not discard valid participants`() {
+        val provider = MeegleRequirementMetadataProvider(
+            RecordingRunner(CommandResult(0, """
+                {
+                  "work_item_attribute": {
+                    "work_item_status": {"name":null},
+                    "role_members": [
+                      null,
+                      {"name":"QC Owner","members":null},
+                      {"name":"QC Owner","members":{}},
+                      {"name":"QC Owner","members":[null,{"name":null},{"name":{}},{"name":" 测试 ","email":null}]}
+                    ]
+                  }
+                }
+            """.trimIndent(), "")),
+            isWindows = false,
+        )
+
+        assertEquals(
+            RequirementMetadata(
+                status = null,
+                participants = RequirementParticipants(qcOwners = listOf(RequirementPerson("测试"))),
+            ),
+            provider.fetch("https://project.feishu.cn/obt/userstory/detail/1"),
+        )
+    }
+
+    @Test
     fun `reads title using documented compatibility priority`() {
         val topLevel = MeegleRequirementMetadataProvider(
             RecordingRunner(CommandResult(0, """{"name":"顶层标题","work_item_name":"备用","work_item_attribute":{"name":"嵌套"}}""", "")),

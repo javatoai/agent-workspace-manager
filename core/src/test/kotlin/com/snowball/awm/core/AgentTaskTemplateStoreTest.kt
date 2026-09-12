@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertFailsWith
 
 class AgentTaskTemplateStoreTest {
@@ -46,6 +50,44 @@ class AgentTaskTemplateStoreTest {
     }
 
     @Test
+    fun `concurrent updates from separate stores preserve both additions`() {
+        store().saveAll(listOf(template("a", "alpha")))
+
+        runConcurrentUpdates(
+            { current -> current + template("b", "beta") },
+            { current -> current + template("c", "gamma") },
+        )
+
+        assertEquals(setOf("a", "b", "c"), store().list().map { it.id }.toSet())
+    }
+
+    @Test
+    fun `concurrent updates from separate stores preserve addition and deletion`() {
+        store().saveAll(listOf(template("keep", "保留"), template("remove", "删除")))
+
+        runConcurrentUpdates(
+            { current -> current + template("new", "新增") },
+            { current -> current.filterNot { it.id == "remove" } },
+        )
+
+        assertEquals(setOf("keep", "new"), store().list().map { it.id }.toSet())
+    }
+
+    @Test
+    fun `failed update validation preserves the existing library`() {
+        val store = store()
+        val original = listOf(template("a", "重复"))
+        store.saveAll(original)
+
+        assertFailsWith<IllegalArgumentException> {
+            store.update { current -> current + template("b", "重复") }
+        }
+
+        assertEquals(original, store.list())
+        assertEquals(listOf("a", "c"), store.update { it + template("c", "新增") }.map { it.id }.sorted())
+    }
+
+    @Test
     fun `duplicate template names are rejected`() {
         assertFailsWith<IllegalArgumentException> {
             store().saveAll(listOf(template("a", "重复"), template("b", "重复")))
@@ -72,5 +114,42 @@ class AgentTaskTemplateStoreTest {
         Files.writeString(paths.agentTaskTemplates, "{ not json")
 
         assertFailsWith<SerializationException> { AgentTaskTemplateStore(paths).list() }
+    }
+
+    private fun runConcurrentUpdates(
+        first: (List<AgentTaskTemplate>) -> List<AgentTaskTemplate>,
+        second: (List<AgentTaskTemplate>) -> List<AgentTaskTemplate>,
+    ) {
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val activeTransforms = AtomicInteger()
+        val maximumConcurrentTransforms = AtomicInteger()
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val futures = listOf(first, second).map { transform ->
+                val independentStore = store()
+                executor.submit<List<AgentTaskTemplate>> {
+                    ready.countDown()
+                    check(start.await(5, TimeUnit.SECONDS))
+                    independentStore.update { current ->
+                        val active = activeTransforms.incrementAndGet()
+                        maximumConcurrentTransforms.accumulateAndGet(active, ::maxOf)
+                        try {
+                            Thread.sleep(100)
+                            transform(current)
+                        } finally {
+                            activeTransforms.decrementAndGet()
+                        }
+                    }
+                }
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+            assertEquals(1, maximumConcurrentTransforms.get())
+        } finally {
+            start.countDown()
+            executor.shutdownNow()
+        }
     }
 }

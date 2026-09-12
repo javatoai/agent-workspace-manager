@@ -203,6 +203,9 @@ object TerminalLaunchCommand {
         return when {
             configured != null && osName.startsWith("Mac", ignoreCase = true) && configured.endsWith(".app", ignoreCase = true) ->
                 listOf("open", "-a", configured, normalizedTarget)
+            configured != null && osName.startsWith("Windows", ignoreCase = true) &&
+                (configured.endsWith(".cmd", ignoreCase = true) || configured.endsWith(".bat", ignoreCase = true)) ->
+                WindowsBatchLaunchCommand.build(configured, listOf(normalizedTarget))
             configured != null -> listOf(configured, normalizedTarget)
             osName.startsWith("Windows", ignoreCase = true) && windowsTerminalAvailable ->
                 listOf("wt.exe", "-d", normalizedTarget)
@@ -368,7 +371,7 @@ object DevelopmentToolLaunchCommand {
         return if (osName.startsWith("Windows", ignoreCase = true) &&
             (normalizedPath.endsWith(".cmd", true) || normalizedPath.endsWith(".bat", true))
         ) {
-            listOf("cmd.exe", "/d", "/c", normalizedPath) + arguments
+            WindowsBatchLaunchCommand.build(normalizedPath, arguments)
         } else if (osName.startsWith("Windows", ignoreCase = true) && type in JETBRAINS_TOOL_TYPES) {
             windowsShellLaunch(normalizedPath, arguments)
         } else {
@@ -419,4 +422,41 @@ object DevelopmentToolLaunchCommand {
         DevelopmentToolType.ANDROID_STUDIO,
         DevelopmentToolType.DEVECO_STUDIO,
     )
+}
+
+/** Preserves literal filesystem paths through cmd's separate command-line parser. */
+private object WindowsBatchLaunchCommand {
+    fun build(application: String, arguments: List<String>): List<String> {
+        // Quoting alone does not stop cmd from expanding %NAME% in a path.
+        // Expand child-only environment variables once, inside quotes, and
+        // disable delayed expansion so &, %, ! and apostrophes remain data.
+        val executableVariable = "AWM_BATCH_EXECUTABLE"
+        val argumentVariables = arguments.indices.map { "AWM_BATCH_ARGUMENT_$it" }
+        val command = (listOf(executableVariable) + argumentVariables)
+            .joinToString(" ") { "\"%$it%\"" }
+        val script = buildString {
+            appendLine("${'$'}ErrorActionPreference = 'Stop'")
+            appendLine("${'$'}ProgressPreference = 'SilentlyContinue'")
+            appendLine("${'$'}startInfo = New-Object System.Diagnostics.ProcessStartInfo")
+            appendLine("${'$'}startInfo.FileName = 'cmd.exe'")
+            appendLine("${'$'}startInfo.UseShellExecute = ${'$'}false")
+            appendLine("${'$'}startInfo.CreateNoWindow = ${'$'}true")
+            appendLine("${'$'}startInfo.EnvironmentVariables['$executableVariable'] = ${powerShellLiteral(application)}")
+            arguments.forEachIndexed { index, argument ->
+                appendLine("${'$'}startInfo.EnvironmentVariables['${argumentVariables[index]}'] = ${powerShellLiteral(argument)}")
+            }
+            // ProcessStartInfo accepts this exact command line without another
+            // PowerShell native-argument quoting pass. /s consumes the outer pair.
+            appendLine("${'$'}startInfo.Arguments = ${powerShellLiteral("/d /v:off /s /c \"$command\"")}")
+            appendLine("${'$'}process = [System.Diagnostics.Process]::Start(${'$'}startInfo)")
+            appendLine("${'$'}process.WaitForExit()")
+            appendLine("exit ${'$'}process.ExitCode")
+        }
+        return listOf(
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+            Base64.getEncoder().encodeToString(script.toByteArray(StandardCharsets.UTF_16LE)),
+        )
+    }
+
+    private fun powerShellLiteral(value: String): String = "'${value.replace("'", "''")}'"
 }

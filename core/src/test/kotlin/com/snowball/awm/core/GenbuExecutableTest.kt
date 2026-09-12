@@ -3,6 +3,14 @@ package com.snowball.awm.core
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission.GROUP_EXECUTE
+import java.nio.file.attribute.PosixFilePermission.GROUP_READ
+import java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE
+import java.nio.file.attribute.PosixFilePermission.OWNER_READ
+import java.nio.file.attribute.PosixFilePermission.OWNER_WRITE
+import java.nio.file.attribute.PosixFilePermission.OTHERS_EXECUTE
+import java.nio.file.attribute.PosixFilePermission.OTHERS_READ
 import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,8 +21,30 @@ class GenbuExecutableTest {
     lateinit var temporary: Path
 
     @Test
+    fun `non executable candidates do not hide a runnable Genbu on POSIX`() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+            Files.getFileAttributeView(temporary, PosixFileAttributeView::class.java) != null,
+            "requires POSIX execute permissions",
+        )
+        val bundledDirectory = Files.createDirectories(temporary.resolve("bundled"))
+        val unusable = Files.createFile(bundledDirectory.resolve("genbu"))
+        Files.setPosixFilePermissions(unusable, setOf(OWNER_READ, OWNER_WRITE))
+        val executable = createExecutable(temporary.resolve("runnable-genbu"))
+        val runner = RecordingRunner(CommandResult(0, "$unusable\n$executable\n", ""))
+        val genbu = ConfiguredGenbuExecutable(
+            configuredPath = { null },
+            runner = runner,
+            osName = "Mac OS X",
+            bundledDirectories = { listOf(bundledDirectory) },
+        )
+
+        assertEquals(executable.toString(), genbu.probe())
+        assertEquals(1, runner.calls)
+    }
+
+    @Test
     fun `configured absolute executable wins without probing`() {
-        val executable = Files.createFile(temporary.resolve("configured-genbu.exe"))
+        val executable = createExecutable(temporary.resolve("configured-genbu.exe"))
         val runner = RecordingRunner(CommandResult(1, "", "must not run"))
         val genbu = ConfiguredGenbuExecutable(
             configuredPath = { executable.toString() },
@@ -31,7 +61,7 @@ class GenbuExecutableTest {
     @Test
     fun `portable executable in a candidate directory is automatically detected`() {
         val directory = Files.createDirectories(temporary.resolve("Downloads"))
-        val executable = Files.createFile(directory.resolve("genbu.exe"))
+        val executable = createExecutable(directory.resolve("genbu.exe"))
         val genbu = ConfiguredGenbuExecutable(
             configuredPath = { null },
             runner = RecordingRunner(CommandResult(1, "", "not on PATH")),
@@ -45,7 +75,7 @@ class GenbuExecutableTest {
 
     @Test
     fun `PATH probing accepts only an existing absolute executable`() {
-        val executable = Files.createFile(temporary.resolve("genbu.exe"))
+        val executable = createExecutable(temporary.resolve("genbu.exe"))
         val genbu = ConfiguredGenbuExecutable(
             configuredPath = { null },
             runner = RecordingRunner(CommandResult(0, "C:\\missing\\genbu.exe\n$executable\n", "")),
@@ -72,9 +102,9 @@ class GenbuExecutableTest {
 
     @Test
     fun `detect rescans locations and ignores a still-valid configured path`() {
-        val configured = Files.createFile(temporary.resolve("configured-genbu.exe"))
+        val configured = createExecutable(temporary.resolve("configured-genbu.exe"))
         val directory = Files.createDirectories(temporary.resolve("Downloads"))
-        val moved = Files.createFile(directory.resolve("genbu.exe"))
+        val moved = createExecutable(directory.resolve("genbu.exe"))
         val genbu = ConfiguredGenbuExecutable(
             configuredPath = { configured.toString() },
             runner = RecordingRunner(CommandResult(1, "", "not found")),
@@ -117,6 +147,29 @@ class GenbuExecutableTest {
         assertFailsWith<IllegalArgumentException> { normalizeGenbuExecutablePath("genbu.exe") }
         assertFailsWith<IllegalArgumentException> { normalizeGenbuExecutablePath(temporary.resolve("missing.exe").toString()) }
         assertEquals(null, normalizeGenbuExecutablePath(" "))
+    }
+
+    private fun createExecutable(path: Path): Path {
+        Files.createFile(path)
+        if (Files.getFileAttributeView(path, PosixFileAttributeView::class.java) != null) {
+            Files.setPosixFilePermissions(
+                path,
+                setOf(
+                    OWNER_READ,
+                    OWNER_WRITE,
+                    OWNER_EXECUTE,
+                    GROUP_READ,
+                    GROUP_EXECUTE,
+                    OTHERS_READ,
+                    OTHERS_EXECUTE,
+                ),
+            )
+        } else {
+            // Windows has no POSIX permission view; .exe files are executable by type.
+            path.toFile().setExecutable(true, false)
+        }
+        check(Files.isExecutable(path)) { "Test fixture was not executable: $path" }
+        return path
     }
 
     private class RecordingRunner(private val result: CommandResult) : CommandRunner {

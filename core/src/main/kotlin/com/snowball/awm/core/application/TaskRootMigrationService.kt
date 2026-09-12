@@ -204,6 +204,10 @@ class TaskRootMigrationService(
         task: PlannedTask,
         migrationId: String,
     ) {
+        val clones = task.workspaces.filter { it.workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }
+        clones.forEach { planned ->
+            IndependentCloneWorkspaceSafety.requireOwned(planned.sourcePath, cloneOwnership(task.sourceDirectory, planned.workspace))
+        }
         val snapshots = task.workspaces.associateWith { planned -> snapshot(planned.workspace, planned.sourcePath) }
         when (mode) {
             TaskRootMigrationMode.SAME_FILE_STORE -> {
@@ -217,13 +221,27 @@ class TaskRootMigrationService(
             }
             TaskRootMigrationMode.DIRECT_SWITCH -> error("有任务时不能直接切换目录")
         }
+        clones.forEach { planned ->
+            IndependentCloneWorkspaceSafety.reassignOwnership(
+                planned.targetPath,
+                cloneOwnership(task.sourceDirectory, planned.workspace),
+                cloneOwnership(task.targetDirectory, planned.workspace),
+            )
+        }
         task.workspaces.filter { it.workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE }.forEach { planned ->
             repairRegisteredWorktree(Path.of(planned.workspace.repositoryPath), planned.targetPath)
         }
         val migrated = task.manifest.copy(
             updatedAt = AwmTime.format(Instant.now(clock)),
             services = task.workspaces.map { planned ->
-                planned.workspace.copy(worktreePath = planned.targetPath.toString())
+                planned.workspace.copy(
+                    worktreePath = planned.targetPath.toString(),
+                    repositoryPath = if (planned.workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
+                        planned.targetPath.toString()
+                    } else {
+                        planned.workspace.repositoryPath
+                    },
+                )
             },
         )
         manifests.save(task.targetDirectory, migrated)
@@ -305,6 +323,15 @@ class TaskRootMigrationService(
                     blockers += "工作区不存在：$sourcePath"
                     return@mapNotNull null
                 }
+                if (workspace.strategy == WorkspaceStrategy.INDEPENDENT_CLONE) {
+                    val ownershipCheck = runCatching {
+                        IndependentCloneWorkspaceSafety.requireOwned(sourcePath, cloneOwnership(normalizedTask, workspace))
+                    }
+                    if (ownershipCheck.isFailure) {
+                        blockers += ownershipCheck.exceptionOrNull()?.message ?: "无法验证独立克隆所有权：$sourcePath"
+                        return@mapNotNull null
+                    }
+                }
                 val relative = normalizedTask.relativize(sourcePath)
                 PlannedWorkspace(workspace, sourcePath, targetTask.resolve(relative).normalize(), relative.toString())
             }
@@ -355,6 +382,23 @@ class TaskRootMigrationService(
     private fun sameFile(left: Path, right: Path): Boolean =
         runCatching { Files.isSameFile(left, right) }.getOrDefault(false)
 
+    private fun cloneOwnership(taskDirectory: Path, workspace: ServiceWorkspace): String =
+        IndependentCloneWorkspaceSafety.ownership(
+            taskDirectory, workspace.repositoryId, workspace.groupServiceId, workspace.moduleId,
+        )
+
+    private fun restoreCloneOwnership(task: JournalTask, source: Path, target: Path) {
+        task.originalManifest.services.filter { it.strategy == WorkspaceStrategy.INDEPENDENT_CLONE }.forEach { workspace ->
+            val clone = Path.of(workspace.worktreePath).toAbsolutePath().normalize()
+            require(clone != source && clone.startsWith(source)) { "迁移日志中的独立克隆路径越界：$clone" }
+            val originalOwnership = cloneOwnership(source, workspace)
+            // A copy leaves the source unchanged; a move may have failed before or after rebinding.
+            if (runCatching { IndependentCloneWorkspaceSafety.requireOwned(clone, originalOwnership) }.isFailure) {
+                IndependentCloneWorkspaceSafety.reassignOwnership(clone, cloneOwnership(target, workspace), originalOwnership)
+            }
+        }
+    }
+
     private fun repairRegisteredWorktree(repository: Path, worktree: Path) {
         repositoryLock.withLock(git.commonDirectory(repository)) {
             repairWorktree(repository, worktree)
@@ -382,6 +426,7 @@ class TaskRootMigrationService(
                     }
                 }
                 if (source.exists()) {
+                    restoreCloneOwnership(task, source, target)
                     task.workspaces.filter { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }.forEach { workspace ->
                         repairRegisteredWorktree(Path.of(workspace.repositoryPath), source.resolve(workspace.relativePath))
                     }

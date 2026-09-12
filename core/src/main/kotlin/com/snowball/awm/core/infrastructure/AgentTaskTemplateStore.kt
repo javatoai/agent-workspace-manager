@@ -1,11 +1,7 @@
 package com.snowball.awm.core
 
 import kotlinx.serialization.json.Json
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
 /**
@@ -28,18 +24,25 @@ class AgentTaskTemplateStore(
         return json.decodeFromString<List<AgentTaskTemplate>>(content).sortedBy { it.name }
     }
 
-    fun saveAll(templates: List<AgentTaskTemplate>) {
-        validate(templates)
-        val target = paths.agentTaskTemplates
-        target.parent.createDirectories()
-        val temporary = Files.createTempFile(target.parent, ".${target.fileName}-", ".tmp")
-        Files.writeString(temporary, json.encodeToString(templates))
-        try {
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
-        }
+    fun saveAll(templates: List<AgentTaskTemplate>) = withMutationLock {
+        saveAllUnlocked(templates)
     }
+
+    /** Serializes the complete read-modify-write operation across AWM instances. */
+    fun update(transform: (List<AgentTaskTemplate>) -> List<AgentTaskTemplate>): List<AgentTaskTemplate> =
+        withMutationLock {
+            val updated = transform(list())
+            saveAllUnlocked(updated)
+            list()
+        }
+
+    private fun saveAllUnlocked(templates: List<AgentTaskTemplate>) {
+        validate(templates)
+        AtomicFileWriter.write(paths.agentTaskTemplates, json.encodeToString(templates))
+    }
+
+    private fun <T> withMutationLock(block: () -> T): T =
+        FileLocking.withExclusiveLockWaiting(paths.locks.resolve("agent-task-templates.lock"), block)
 
     private fun validate(templates: List<AgentTaskTemplate>) {
         val names = templates.map { it.name.trim() }

@@ -399,42 +399,19 @@ class TagBuildService(
                     preview.sourceSha
                 }
 
-                var tag = nextTag(repository, tagCommit)
-                var pushed = false
-                for (attempt in 0..1) {
-                    // Persist the candidate before creating it. A local Tag with
-                    // this name may already exist on an unrelated commit; keeping
-                    // the candidate and commit makes the PARTIAL record resumable
-                    // after that local collision is resolved.
-                    operation = transition(
-                        taskDirectory,
-                        operation,
-                        operation.state,
-                        tag = tag,
-                    )
-                    createOrValidateLocalTag(
-                        repository,
-                        tag,
-                        tagCommit,
-                        auditMessage(manifest, workspace, service, preview.sourceSha, tagCommit),
-                    )
-                    operation = transition(
-                        taskDirectory,
-                        operation,
-                        TagOperationState.LOCAL_TAG_CREATED,
-                        tag = tag,
-                    )
-                    try {
-                        pushTag(repository, service.remote, tag, tagCommit)
-                        pushed = true
-                        break
-                    } catch (collision: TagCollisionException) {
-                        if (attempt == 1) throw collision
-                        git.run(repository, "tag", "-d", tag)
-                        tag = TagVersioning.next(tag)
-                    }
-                }
-                check(pushed) { "测试Tag推送未完成" }
+                val tag = createAndPushTag(
+                    repository = repository,
+                    remote = service.remote,
+                    initialTag = nextTag(repository, tagCommit),
+                    commit = tagCommit,
+                    message = auditMessage(manifest, workspace, service, preview.sourceSha, tagCommit),
+                    onCandidate = { candidate ->
+                        operation = transition(taskDirectory, operation, operation.state, tag = candidate)
+                    },
+                    onCreated = { candidate ->
+                        operation = transition(taskDirectory, operation, TagOperationState.LOCAL_TAG_CREATED, tag = candidate)
+                    },
+                )
                 operation = transition(taskDirectory, operation, TagOperationState.TAG_PUSHED)
                 operation = transition(
                     taskDirectory,
@@ -493,19 +470,25 @@ class TagBuildService(
 
         withRepositoryLock(repository) {
             try {
-                createOrValidateLocalTag(
-                    repository,
-                    tag,
-                    tagCommit,
-                    auditMessage(manifest, workspace, service, operation.sourceSha.orEmpty(), tagCommit),
+                val pushedTag = createAndPushTag(
+                    repository = repository,
+                    remote = service.remote,
+                    initialTag = tag,
+                    commit = tagCommit,
+                    message = auditMessage(manifest, workspace, service, operation.sourceSha.orEmpty(), tagCommit),
+                    onCandidate = { candidate ->
+                        operation = transition(taskDirectory, operation, operation.state, tag = candidate)
+                    },
+                    onCreated = { candidate ->
+                        operation = transition(taskDirectory, operation, TagOperationState.LOCAL_TAG_CREATED, tag = candidate)
+                    },
                 )
-                pushTag(repository, service.remote, tag, tagCommit)
                 operation = transition(taskDirectory, operation, TagOperationState.TAG_PUSHED)
                 operation = transition(
                     taskDirectory,
                     operation,
                     TagOperationState.SUCCESS,
-                    message = "${workspace.serviceName}：$tag",
+                    message = "${workspace.serviceName}：$pushedTag",
                 )
                 recordHistory(taskDirectory, operation)
                 operation
@@ -757,6 +740,35 @@ class TagBuildService(
         throw IllegalStateException("仓库没有可用的历史测试Tag，无法计算下一版本；请先在仓库创建并推送一个符合版本规则的测试Tag")
     }
 
+    private fun createAndPushTag(
+        repository: Path,
+        remote: String,
+        initialTag: String,
+        commit: String,
+        message: String,
+        onCandidate: (String) -> Unit,
+        onCreated: (String) -> Unit,
+    ): String {
+        var tag = initialTag
+        for (attempt in 0..1) {
+            // Save each candidate before its Git write so a failed attempt can
+            // resume the same Tag. Only a confirmed collision advances it.
+            onCandidate(tag)
+            try {
+                createOrValidateLocalTag(repository, tag, commit, message)
+                onCreated(tag)
+                pushTag(repository, remote, tag, commit)
+                return tag
+            } catch (collision: TagCollisionException) {
+                if (attempt == 1) throw collision
+                // The occupied ref may belong to another task. Leave it intact
+                // and try the next name, including during PARTIAL recovery.
+                tag = TagVersioning.next(tag)
+            }
+        }
+        error("测试Tag推送未完成")
+    }
+
     private fun createOrValidateLocalTag(
         repository: Path,
         tag: String,
@@ -765,7 +777,9 @@ class TagBuildService(
     ) {
         val existing = git.run(repository, "rev-parse", "--verify", "refs/tags/$tag^{commit}", check = false)
         if (existing.succeeded) {
-            require(existing.stdout.trim() == commit) { "本地测试Tag $tag 已指向其他提交" }
+            if (existing.stdout.trim() != commit) {
+                throw TagCollisionException(tag, existing.stdout.trim(), commit, location = "本地")
+            }
             return
         }
         git.run(repository, "tag", "-a", tag, commit, "-m", message)
@@ -909,4 +923,5 @@ class TagCollisionException(
     tag: String,
     remoteCommit: String,
     expectedCommit: String,
-) : RuntimeException("远端测试Tag $tag 已指向 $remoteCommit，预期为 $expectedCommit")
+    location: String = "远端",
+) : RuntimeException("${location}测试Tag $tag 已指向 $remoteCommit，预期为 $expectedCommit")

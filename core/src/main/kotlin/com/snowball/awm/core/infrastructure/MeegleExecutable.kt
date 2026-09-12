@@ -114,7 +114,7 @@ class ConfiguredMeegleExecutable(
 ) : MeegleExecutable {
     @Volatile private var probedPath: String? = null
     @Volatile private var probeAttempted = false
-    private val loginShellPath: Lazy<String?> = lazy(loginShellPathProvider)
+    @Volatile private var loginShellPath: Lazy<String?> = lazy(loginShellPathProvider)
 
     override fun resolve(): String = synchronized(this) {
         configured()?.let { return it }
@@ -146,6 +146,7 @@ class ConfiguredMeegleExecutable(
     }
 
     override fun probe(): String = synchronized(this) {
+        loginShellPath = lazy(loginShellPathProvider)
         configured()?.let {
             probedPath = null
             probeAttempted = false
@@ -186,7 +187,7 @@ class ConfiguredMeegleExecutable(
 
 /**
  * Finder-launched applications do not inherit the interactive terminal PATH.
- * Read the user's macOS login-shell PATH once so Node-backed CLI scripts can
+ * Cache the user's macOS login-shell PATH until explicit re-detection so Node-backed CLI scripts can
  * resolve their `#!/usr/bin/env node` interpreter.
  */
 private fun loadMacLoginShellPath(): String? = runCatching {

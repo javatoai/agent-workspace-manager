@@ -53,7 +53,7 @@ jobs:
         run: |
           perl -pi -e 's/\r$//' ./gradlew
           chmod +x ./gradlew
-          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests -PskipMacOsGenbuPermissionFixtureTests
+          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
 
   windows:
     name: Windows packages
@@ -142,7 +142,6 @@ jobs:
       - name: Build macOS distributables
         env:
           AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
-          AWM_RELEASE_SKIP_MACOS_GENBU_PERMISSION_FIXTURE_TESTS: "true"
         run: |
           # These files may be checked out with CRLF from a Windows workspace.
           # Normalize them before executing them on the macOS runner.
@@ -213,6 +212,40 @@ jobs:
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
           fi
           ls -la release-assets
+
+      - name: Point continuous tag at the packaged commit
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Only this prerelease tag is mutable; version tags never enter this step.
+          api_root="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git"
+          github_api() {
+            curl --silent --show-error \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "Content-Type: application/json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" "$@"
+          }
+          status=$(github_api --output /dev/null --write-out '%{http_code}' \
+            "${api_root}/ref/tags/continuous")
+          case "$status" in
+            200)
+              github_api --fail-with-body --request PATCH \
+                "${api_root}/refs/tags/continuous" \
+                --data "{\"sha\":\"${GITHUB_SHA}\",\"force\":true}"
+              ;;
+            404)
+              github_api --fail-with-body --request POST "${api_root}/refs" \
+                --data "{\"ref\":\"refs/tags/continuous\",\"sha\":\"${GITHUB_SHA}\"}"
+              ;;
+            *)
+              echo "Cannot inspect continuous tag (HTTP ${status}); refusing to publish." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2

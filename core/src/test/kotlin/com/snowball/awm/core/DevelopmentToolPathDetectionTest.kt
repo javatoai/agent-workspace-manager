@@ -118,6 +118,40 @@ class DevelopmentToolPathDetectionTest {
     }
 
     @Test
+    fun `macOS PATH lookup uses the login shell visible to GUI launches`() {
+        val executable = file(temporary.resolve("homebrew/bin/code"))
+        val commands = mutableListOf<List<String>>()
+        val lookup = CommandDevelopmentToolPathLookup(
+            osName = "Mac OS X",
+            runner = object : CommandRunner {
+                override fun run(
+                    command: List<String>,
+                    workingDirectory: Path?,
+                    timeout: java.time.Duration,
+                    environment: Map<String, String>,
+                ): CommandResult {
+                    commands += command
+                    return if (command.last() == "command -v code") {
+                        CommandResult(0, "${executable}\n", "")
+                    } else {
+                        CommandResult(1, "", "not found")
+                    }
+                }
+            },
+        )
+
+        assertEquals(executable.toAbsolutePath().normalize(), lookup.find(DevelopmentToolType.VISUAL_STUDIO_CODE))
+        assertEquals(
+            listOf(
+                listOf("/bin/zsh", "-lc", "command -v Code.exe"),
+                listOf("/bin/zsh", "-lc", "command -v code.cmd"),
+                listOf("/bin/zsh", "-lc", "command -v code"),
+            ),
+            commands,
+        )
+    }
+
+    @Test
     fun `atomic persistence preserves existing and concurrently entered paths while filling empty types`() {
         val paths = ApplicationPaths(temporary.resolve("persist/home"))
         val store = ConfigStore(paths)

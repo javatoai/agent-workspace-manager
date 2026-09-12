@@ -132,10 +132,10 @@ class WorkspaceBranchReuseInspector(
         val repositoryPath = Path.of(repository.rootPath).toAbsolutePath().normalize()
         val commonDirectory = git.commonDirectory(repositoryPath).toAbsolutePath().normalize()
         return repositoryLock.withLock(commonDirectory) {
-            require(git.topLevel(repositoryPath).toAbsolutePath().normalize() == repositoryPath) {
+            require(git.topLevel(repositoryPath).canonicalOrNormalized() == repositoryPath.canonicalOrNormalized()) {
                 "配置的仓库路径已不再是 Git 顶层目录：$repositoryPath"
             }
-            require(commonDirectory == Path.of(repository.gitCommonDirectory).toAbsolutePath().normalize()) {
+            require(commonDirectory.canonicalOrNormalized() == Path.of(repository.gitCommonDirectory).canonicalOrNormalized()) {
                 "配置的仓库 Git 身份已变化：$repositoryPath"
             }
             git.pruneWorktrees(repositoryPath)
@@ -238,10 +238,13 @@ class StandardWorktreeProvisioner(
     }
 
     private fun provisionLocked(request: WorkspaceProvisionRequest, repositoryPath: Path): List<ServiceWorkspace> {
-        require(git.topLevel(repositoryPath).toAbsolutePath().normalize() == repositoryPath) {
+        require(git.topLevel(repositoryPath).canonicalOrNormalized() == repositoryPath.canonicalOrNormalized()) {
             "配置的仓库路径已不再是 Git 顶层目录：$repositoryPath"
         }
-        require(git.commonDirectory(repositoryPath).toAbsolutePath().normalize() == Path.of(request.repository.gitCommonDirectory).toAbsolutePath().normalize()) {
+        require(
+            git.commonDirectory(repositoryPath).canonicalOrNormalized() ==
+                Path.of(request.repository.gitCommonDirectory).canonicalOrNormalized(),
+        ) {
             "仓库 Git 身份已变化，请先手动刷新并检查配置"
         }
         git.pruneWorktrees(repositoryPath)

@@ -643,14 +643,11 @@ class TaskApplicationService(
                 it.strategy == WorkspaceStrategy.STANDARD_WORKTREE &&
                     it.repositoryId == configuredService.repositoryId
             }
-            .map { (it.targetBranch ?: it.branch).lowercase() }
-            .toSet()
-        require(
-            modules.none { module ->
-                module.strategy == WorkspaceStrategy.STANDARD_WORKTREE &&
-                    module.targetBranch?.trim()?.lowercase() in existingWorktreeTargets
-            },
-        ) { "新增 Worktree 模块的目标分支不能与任务中已有 Worktree 模块重复" }
+            .map { it.targetBranch ?: it.branch }
+        val newWorktreeTargets = modules
+            .filter { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }
+            .mapNotNull { it.targetBranch?.trim()?.takeIf(String::isNotBlank) }
+        TaskBranchNaming.requireNoConflicts(existingWorktreeTargets + newWorktreeTargets)
     }
 
     /** Re-provisions complete failed service entries while keeping successful workspaces untouched. */
@@ -928,9 +925,7 @@ class TaskApplicationService(
             val worktreeTargets = selection.modules
                 .filter { it.strategy == WorkspaceStrategy.STANDARD_WORKTREE }
                 .mapNotNull { branches[it.id]?.takeIf(String::isNotBlank) }
-            require(worktreeTargets.map(String::lowercase).distinct().size == worktreeTargets.size) {
-                "同一服务的 Worktree 模块目标分支不能重复"
-            }
+            TaskBranchNaming.requireNoConflicts(worktreeTargets)
             EffectiveServiceConfiguration(
                 service = configured.copy(modules = modules),
                 moduleBranches = branches,
@@ -979,15 +974,12 @@ class TaskApplicationService(
                 )
             }
         }
-        val duplicateTargets = (existingTargets + plannedTargets)
-            .groupBy { (repositoryId, branch, _) -> repositoryId.lowercase() to branch.lowercase() }
-            .filterValues { it.size > 1 }
+        (existingTargets + plannedTargets)
+            .groupBy { (repositoryId, _, _) -> repositoryId.lowercase() }
             .values
-        require(duplicateTargets.isEmpty()) {
-            "同一仓库的 Worktree 模块目标分支不能重复：" + duplicateTargets.joinToString { entries ->
-                entries.joinToString { (_, branch, moduleName) -> "$moduleName ($branch)" }
+            .forEach { targets ->
+                TaskBranchNaming.requireNoConflicts(targets.map { (_, branch, _) -> branch })
             }
-        }
         require(duplicates.isEmpty()) {
             "任务内工作区目录不能重复（忽略大小写）：${duplicates.joinToString()}"
         }

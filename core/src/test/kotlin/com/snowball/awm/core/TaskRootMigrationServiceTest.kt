@@ -136,43 +136,171 @@ class TaskRootMigrationServiceTest {
 
     @Test
     fun `cross file store migration copies independent clone before removing source`() {
-        val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("clone"))
-        val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("clone/source"))
-        val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val sourceRoot = Files.createDirectories(temporary.resolve("clone/tasks"))
-        val sourceTask = Files.createDirectories(sourceRoot.resolve("TASK-2"))
-        val clone = GitTestSupport.clone(remote, sourceTask.resolve("service/clone"))
-        Files.writeString(clone.resolve("untracked.txt"), "preserve\n")
-        val manifest = manifest(
-            taskName = "TASK-2",
-            repository = repository,
-            workspacePath = clone,
-            strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            branch = "master",
-        )
-        ManifestStore().save(sourceTask, manifest)
-        val paths = ApplicationPaths(temporary.resolve("clone/home"))
-        val configStore = ConfigStore(paths).also {
-            it.save(AppConfig(taskRoot = sourceRoot.toString(), repositories = listOf(repository)))
-        }
-        val targetRoot = temporary.resolve("clone/new-tasks")
+        val fixture = independentFixture("clone", "TASK-2")
+        Files.writeString(fixture.workspace.resolve("untracked.txt"), "preserve\n")
+        assertIndependentOwnership(fixture.sourceTask)
         val service = TaskRootMigrationService(
-            configStore = configStore,
-            paths = paths,
-            agentDocuments = AgentDocumentService(paths),
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
             sameFileStore = { _, _ -> false },
         )
 
-        assertEquals(TaskRootMigrationMode.CROSS_FILE_STORE, service.preview(configStore.load(), targetRoot).mode)
-        val result = service.migrate(configStore.load(), targetRoot)
-        val migratedTask = targetRoot.resolve("TASK-2")
-        val migratedClone = migratedTask.resolve("service/clone")
+        assertEquals(TaskRootMigrationMode.CROSS_FILE_STORE, service.preview(fixture.store.load(), fixture.targetRoot).mode)
+        val result = service.migrate(fixture.store.load(), fixture.targetRoot)
+        val migratedTask = fixture.targetRoot.resolve("TASK-2")
+        val migratedClone = migratedTask.resolve(fixture.workspace.fileName)
 
         assertEquals(1, result.migratedTasks)
-        assertFalse(sourceTask.exists())
+        assertFalse(fixture.sourceTask.exists())
         assertTrue(migratedClone.resolve("untracked.txt").exists())
         assertEquals("master", GitClient().currentBranch(migratedClone))
-        assertEquals(migratedClone.toAbsolutePath().normalize().toString(), ManifestStore().load(migratedTask).services.single().worktreePath)
+        val migrated = ManifestStore().load(migratedTask).services.single()
+        assertEquals(migratedClone.toAbsolutePath().normalize().toString(), migrated.worktreePath)
+        assertEquals(migrated.worktreePath, migrated.repositoryPath)
+        assertIndependentOwnership(migratedTask)
+        IndependentCloneWorkspaceSafety.deleteOwned(migratedTask, migratedClone, ownership(migratedTask, migrated))
+        assertFalse(migratedClone.exists())
+    }
+
+    @Test
+    fun `same file store migration rebinds provisioned clone ownership for safe deletion`() {
+        val fixture = independentFixture("move-clone-owner", "TASK-MOVE-OWNER")
+        assertIndependentOwnership(fixture.sourceTask)
+        val service = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+        )
+
+        service.migrate(fixture.store.load(), fixture.targetRoot)
+
+        val migratedTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
+        val migrated = ManifestStore().load(migratedTask).services.single()
+        val migratedClone = Path.of(migrated.worktreePath)
+        assertFalse(fixture.sourceTask.exists())
+        assertEquals(migrated.worktreePath, migrated.repositoryPath)
+        assertIndependentOwnership(migratedTask)
+        IndependentCloneWorkspaceSafety.deleteOwned(migratedTask, migratedClone, ownership(migratedTask, migrated))
+        assertFalse(migratedClone.exists())
+    }
+
+    @Test
+    fun `migration does not grant ownership to missing or incorrect clone markers`() {
+        listOf(true, false).forEach { sameStore ->
+            listOf<String?>(null, "not-the-original-owner").forEachIndexed { index, marker ->
+                val fixture = independentFixture("invalid-owner-$sameStore-$index", "TASK-INVALID-OWNER")
+                val ownerFile = fixture.workspace.resolve(".git/awm-owner")
+                if (marker == null) Files.delete(ownerFile) else Files.writeString(ownerFile, marker)
+                val service = TaskRootMigrationService(
+                    configStore = fixture.store,
+                    paths = fixture.paths,
+                    sameFileStore = { _, _ -> sameStore },
+                )
+
+                assertFalse(service.preview(fixture.store.load(), fixture.targetRoot).canMigrate)
+                assertFailsWith<IllegalArgumentException> { service.migrate(fixture.store.load(), fixture.targetRoot) }
+
+                assertTrue(fixture.workspace.exists())
+                assertFalse(fixture.targetRoot.exists())
+                assertEquals(fixture.sourceRoot.toString(), fixture.store.load().taskRoot)
+                if (marker == null) assertFalse(ownerFile.exists()) else assertEquals(marker, Files.readString(ownerFile))
+            }
+        }
+    }
+
+    @Test
+    fun `same file store rollback restores original clone ownership`() {
+        val fixture = independentFixture("rollback-clone-owner", "TASK-ROLLBACK-OWNER")
+        val original = ManifestStore().load(fixture.sourceTask)
+        val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
+        val service = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            service.migrate(fixture.store.load(), fixture.targetRoot) { progress ->
+                if (progress.phase == TaskRootMigrationPhase.UPDATING_CONFIG) {
+                    assertIndependentOwnership(targetTask)
+                    error("simulated failure after ownership rebinding")
+                }
+            }
+        }
+
+        assertTrue(failure.message.orEmpty().contains("已恢复原目录"))
+        assertFalse(targetTask.exists())
+        assertEquals(original, ManifestStore().load(fixture.sourceTask))
+        assertIndependentOwnership(fixture.sourceTask)
+        IndependentCloneWorkspaceSafety.deleteOwned(
+            fixture.sourceTask, fixture.workspace, ownership(fixture.sourceTask, original.services.single()),
+        )
+        assertFalse(fixture.workspace.exists())
+    }
+
+    @Test
+    fun `journal recovery restores clone ownership after interrupted move rollback`() {
+        val fixture = independentFixture("recover-clone-owner", "TASK-RECOVER-OWNER")
+        val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
+        val journal = fixture.paths.home.resolve("migrations/task-root.json")
+        val failing = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+            moveTaskDirectory = { source, target ->
+                check(source == fixture.sourceTask) { "simulated locked target during rollback" }
+                Files.move(source, target)
+            },
+        )
+
+        assertFailsWith<IllegalStateException> {
+            failing.migrate(fixture.store.load(), fixture.targetRoot) { progress ->
+                if (progress.phase == TaskRootMigrationPhase.UPDATING_CONFIG) error("simulated pre-commit failure")
+            }
+        }
+        assertTrue(journal.exists())
+        assertIndependentOwnership(targetTask)
+
+        val recovered = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+        ).recoverInterruptedMigration(fixture.store.load())
+
+        assertTrue(recovered.isEmpty())
+        assertFalse(targetTask.exists())
+        assertFalse(journal.exists())
+        assertIndependentOwnership(fixture.sourceTask)
+    }
+
+    @Test
+    fun `rollback preserves an invalid clone marker instead of granting ownership`() {
+        val fixture = independentFixture("rollback-invalid-owner", "TASK-ROLLBACK-INVALID")
+        val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
+        val service = TaskRootMigrationService(
+            configStore = fixture.store,
+            paths = fixture.paths,
+            agentDocuments = AgentDocumentService(fixture.paths),
+            sameFileStore = { _, _ -> true },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            service.migrate(fixture.store.load(), fixture.targetRoot) { progress ->
+                if (progress.phase == TaskRootMigrationPhase.UPDATING_CONFIG) {
+                    Files.writeString(targetTask.resolve(fixture.workspace.fileName).resolve(".git/awm-owner"), "changed-owner")
+                    error("simulated marker change before rollback")
+                }
+            }
+        }
+
+        assertTrue(failure.message.orEmpty().contains("自动回滚未完成"))
+        assertEquals("changed-owner", Files.readString(fixture.workspace.resolve(".git/awm-owner")))
+        assertTrue(fixture.paths.home.resolve("migrations/task-root.json").exists())
+        assertFailsWith<IllegalArgumentException> { assertIndependentOwnership(fixture.sourceTask) }
     }
 
     @Test
@@ -287,6 +415,7 @@ class TaskRootMigrationServiceTest {
         val restoredAgents = Files.readString(fixture.sourceTask.resolve("AGENTS.md"))
         assertTrue(restoredAgents.contains(fixture.workspace.toString()))
         assertTrue(restoredAgents.contains("保留人工说明"))
+        assertIndependentOwnership(fixture.sourceTask)
     }
 
     @Test
@@ -312,7 +441,7 @@ class TaskRootMigrationServiceTest {
         val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
         assertTrue(error.message.orEmpty().contains("已提交"))
         assertFalse(fixture.sourceTask.exists())
-        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+        assertTrue(targetTask.resolve(fixture.workspace.fileName).resolve("user-work.txt").exists())
         assertEquals(fixture.targetRoot.toAbsolutePath().normalize().toString(), fixture.store.load().taskRoot)
         assertTrue(journal.exists())
 
@@ -324,7 +453,8 @@ class TaskRootMigrationServiceTest {
 
         assertTrue(recovered.isEmpty())
         assertFalse(journal.exists())
-        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+        assertTrue(targetTask.resolve(fixture.workspace.fileName).resolve("user-work.txt").exists())
+        assertIndependentOwnership(targetTask)
     }
 
     @Test
@@ -360,7 +490,7 @@ class TaskRootMigrationServiceTest {
         val targetTask = fixture.targetRoot.resolve(fixture.sourceTask.fileName)
         assertTrue(error.message.orEmpty().contains("无法确认提交状态"))
         assertFalse(fixture.sourceTask.exists())
-        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+        assertTrue(targetTask.resolve(fixture.workspace.fileName).resolve("user-work.txt").exists())
         assertTrue(journal.exists())
 
         failReads = false
@@ -371,7 +501,8 @@ class TaskRootMigrationServiceTest {
 
         assertTrue(recovered.isEmpty())
         assertFalse(journal.exists())
-        assertTrue(targetTask.resolve("service/clone/user-work.txt").exists())
+        assertTrue(targetTask.resolve(fixture.workspace.fileName).resolve("user-work.txt").exists())
+        assertIndependentOwnership(targetTask)
     }
 
     @Test
@@ -433,6 +564,7 @@ class TaskRootMigrationServiceTest {
         assertTrue(fixture.sourceTask.exists())
         assertFalse(targetTask.exists())
         assertFalse(fixture.paths.home.resolve("migrations/task-root.json").exists())
+        assertIndependentOwnership(fixture.sourceTask)
     }
 
     @Test
@@ -476,10 +608,18 @@ class TaskRootMigrationServiceTest {
         val repository = GitRepositoryInspector().inspect(repositoryPath)
         val sourceRoot = Files.createDirectories(base.resolve("tasks"))
         val sourceTask = Files.createDirectories(sourceRoot.resolve(taskName))
-        val workspace = GitTestSupport.clone(remote, sourceTask.resolve("service/clone"))
+        val module = ServiceModuleConfig(
+            "clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false,
+        )
+        val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
+        val provisioned = IndependentCloneProvisioner().provision(
+            WorkspaceProvisionRequest(sourceTask, repository, service, moduleBranches = mapOf("clone" to "")),
+        ).single()
+        val workspace = Path.of(provisioned.worktreePath)
         ManifestStore().save(
             sourceTask,
-            manifest(taskName, repository, workspace, WorkspaceStrategy.INDEPENDENT_CLONE, "master"),
+            manifest(taskName, repository, workspace, WorkspaceStrategy.INDEPENDENT_CLONE, "master")
+                .copy(services = listOf(provisioned)),
         )
         val paths = ApplicationPaths(base.resolve("home"))
         val store = ConfigStore(paths).also {
@@ -487,6 +627,16 @@ class TaskRootMigrationServiceTest {
         }
         return IndependentFixture(paths, store, repository, sourceRoot, sourceTask, workspace, base.resolve("new-tasks"))
     }
+
+    private fun assertIndependentOwnership(taskDirectory: Path) {
+        val workspace = ManifestStore().load(taskDirectory).services.single()
+        IndependentCloneWorkspaceSafety.requireOwned(Path.of(workspace.worktreePath), ownership(taskDirectory, workspace))
+    }
+
+    private fun ownership(taskDirectory: Path, workspace: ServiceWorkspace): String =
+        IndependentCloneWorkspaceSafety.ownership(
+            taskDirectory, workspace.repositoryId, workspace.groupServiceId, workspace.moduleId,
+        )
 
     private data class IndependentFixture(
         val paths: ApplicationPaths,

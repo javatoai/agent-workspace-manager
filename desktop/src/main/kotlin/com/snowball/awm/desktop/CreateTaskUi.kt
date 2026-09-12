@@ -57,6 +57,7 @@ import com.snowball.awm.core.AgentTaskTemplate
 import com.snowball.awm.core.BranchPrefixResolver
 import com.snowball.awm.core.BranchReuseConflict
 import com.snowball.awm.core.BranchReuseKey
+import com.snowball.awm.core.CreateGroupedTaskRequest
 import com.snowball.awm.core.ModuleBaseOverride
 import com.snowball.awm.core.RequirementMaterialsDirectory
 import com.snowball.awm.core.RequirementMaterialsResult
@@ -80,11 +81,34 @@ internal fun taskInformationLayout(): TaskInformationLayout = TaskInformationLay
 
 internal fun taskNameSupportingMessage(error: String?): String? = error
 
+internal typealias CreateTaskAction = (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>, List<TaskServiceSelection>) -> Unit
+
+/** Owns the exact draft checked by preflight, including through a reuse-confirmation dialog. */
+internal class CreateTaskSubmissionSnapshot(request: CreateGroupedTaskRequest, toolIds: List<String>) {
+    val request = request.copy(
+        serviceIds = request.serviceIds.toList(),
+        serviceSelections = request.serviceSelections.map { it.copy(modules = it.modules.toList()) },
+    )
+    private val toolIds = toolIds.toList()
+
+    fun submit(keys: Set<BranchReuseKey>, onCreate: CreateTaskAction) = onCreate(
+        request.folderName,
+        request.featureBranch,
+        request.groupId,
+        request.serviceIds,
+        request.requirementLink,
+        request.taskNotes,
+        toolIds,
+        keys,
+        request.serviceSelections,
+    )
+}
+
 @Composable
 internal fun CreateTaskDialog(
     controller: DesktopApplication,
     onDismiss: () -> Unit,
-    onCreate: (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>, List<TaskServiceSelection>) -> Unit,
+    onCreate: CreateTaskAction,
 ) {
     val initialGroup = controller.config.groups.first()
     var draft by remember {
@@ -103,6 +127,7 @@ internal fun CreateTaskDialog(
     var confirmDiscard by remember { mutableStateOf(false) }
     var checkingBranchReuse by remember { mutableStateOf(false) }
     var branchConflicts by remember { mutableStateOf<List<BranchReuseConflict>?>(null) }
+    var pendingCreation by remember { mutableStateOf<CreateTaskSubmissionSnapshot?>(null) }
     val baseOverrideValues = remember(groupId) { mutableStateMapOf<String, String>() }
     val targetBranchValues = remember(groupId) { mutableStateMapOf<String, String>() }
     val moduleDraftsByService = remember(groupId) { mutableStateMapOf<String, List<TaskModuleUiDraft>>() }
@@ -141,7 +166,13 @@ internal fun CreateTaskDialog(
     val hasDraftChanges = draft.requirementLink.isNotBlank() || draft.taskName.isNotBlank() ||
         draft.branchEdited || notes.isNotBlank() || selected.isNotEmpty() || groupId != initialGroup.id ||
         selectedToolIds != initialGroup.defaultWorkspaceToolIds.toSet()
-    val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
+    val requestDismiss = {
+        controller.taskController.cancelCreateBranchReuseInspection()
+        checkingBranchReuse = false
+        pendingCreation = null
+        branchConflicts = null
+        if (hasDraftChanges) confirmDiscard = true else onDismiss()
+    }
     var preview by remember { mutableStateOf("") }
     var previewLoading by remember { mutableStateOf(false) }
     var previewError by remember { mutableStateOf<String?>(null) }
@@ -196,6 +227,8 @@ internal fun CreateTaskDialog(
     LaunchedEffect(Unit) { controller.requirementController.loadCandidates() }
     DisposableEffect(Unit) {
         onDispose {
+            controller.taskController.cancelCreateBranchReuseInspection()
+            pendingCreation = null
             controller.cancelRemoteBranchLoads()
             controller.requirementController.clearMaterialsPreview()
         }
@@ -615,34 +648,44 @@ internal fun CreateTaskDialog(
                         Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = {
-                                val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
+                                val submission = CreateTaskSubmissionSnapshot(
+                                    request = CreateGroupedTaskRequest(
+                                        folderName = draft.taskName,
+                                        featureBranch = draft.branch,
+                                        groupId = groupId,
+                                        serviceIds = selected.toList(),
+                                        requirementLink = draft.requirementLink,
+                                        taskNotes = notes,
+                                        serviceSelections = effectiveSelections(),
+                                    ),
+                                    toolIds = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true },
+                                )
+                                pendingCreation = submission
+                                val request = submission.request
                                 checkingBranchReuse = controller.taskController.inspectCreateBranchReuse(
-                                    name = draft.taskName,
-                                    branch = draft.branch,
-                                    groupId = groupId,
-                                    serviceIds = selected.toList(),
-                                    link = draft.requirementLink,
-                                    notes = notes,
-                                    serviceSelections = effectiveSelections(),
+                                    name = request.folderName,
+                                    branch = request.featureBranch,
+                                    groupId = request.groupId,
+                                    serviceIds = request.serviceIds,
+                                    link = request.requirementLink,
+                                    notes = request.taskNotes,
+                                    serviceSelections = request.serviceSelections,
                                     onResolved = { conflicts ->
-                                        if (conflicts.isEmpty()) {
-                                            onCreate(
-                                                draft.taskName,
-                                                draft.branch,
-                                                groupId,
-                                                selected.toList(),
-                                                draft.requirementLink,
-                                                notes,
-                                                availableTools,
-                                                emptySet(),
-                                                effectiveSelections(),
-                                            )
-                                        } else {
-                                            branchConflicts = conflicts
+                                        if (pendingCreation === submission) {
+                                            if (conflicts.isEmpty()) {
+                                                pendingCreation = null
+                                                submission.submit(emptySet(), onCreate)
+                                            } else {
+                                                branchConflicts = conflicts
+                                            }
                                         }
                                     },
-                                    onFinished = { checkingBranchReuse = false },
+                                    onFinished = {
+                                        checkingBranchReuse = false
+                                        if (branchConflicts == null) pendingCreation = null
+                                    },
                                 )
+                                if (!checkingBranchReuse) pendingCreation = null
                             },
                             enabled = !taskNameMissing && taskNameError == null && draft.branch.isNotBlank() &&
                                 !unresolvedBranch &&
@@ -677,21 +720,12 @@ internal fun CreateTaskDialog(
     branchConflicts?.let { conflicts ->
         BranchReuseConfirmationDialog(
             conflicts = conflicts,
-            onDismiss = { branchConflicts = null },
+            onDismiss = { branchConflicts = null; pendingCreation = null },
             onConfirm = { keys ->
                 branchConflicts = null
-                val availableTools = selectedToolIds.filter { id -> toolOptions.firstOrNull { it.id == id }?.available == true }
-                onCreate(
-                    draft.taskName,
-                    draft.branch,
-                    groupId,
-                    selected.toList(),
-                    draft.requirementLink,
-                    notes,
-                    availableTools,
-                    keys,
-                    effectiveSelections(),
-                )
+                val submission = pendingCreation
+                pendingCreation = null
+                submission?.submit(keys, onCreate)
             },
         )
     }

@@ -97,6 +97,34 @@ class MeegleExecutableTest {
     }
 
     @Test
+    fun `explicit probe retries a missing macOS login shell path while ordinary reads stay cached`() {
+        listOf(null, "/custom/meegle").forEach { configuredPath ->
+            var providerCalls = 0
+            var shellPath: String? = null
+            val executable = ConfiguredMeegleExecutable(
+                configuredPath = { configuredPath },
+                runner = RecordingRunner(CommandResult(0, "/custom/meegle\n", "")),
+                osName = "Mac OS X",
+                loginShellPathProvider = { providerCalls += 1; shellPath },
+            )
+
+            executable.resolve()
+            val initialEnvironment = executable.environment()
+            shellPath = "/awm-fixture-node/bin"
+            executable.resolve()
+            assertEquals(initialEnvironment, executable.environment())
+            assertEquals(1, providerCalls)
+
+            assertEquals("/custom/meegle", executable.probe())
+            val refreshedEnvironment = executable.environment()
+            assertTrue(refreshedEnvironment["PATH"].orEmpty().split(":").contains("/awm-fixture-node/bin"))
+            assertEquals(2, providerCalls)
+            assertEquals(refreshedEnvironment, executable.environment())
+            assertEquals(2, providerCalls)
+        }
+    }
+
+    @Test
     fun `unconfigured resolution probes once and caches the result`() {
         val runner = RecordingRunner(CommandResult(0, "/opt/homebrew/bin/meegle\n", ""))
         val executable = ConfiguredMeegleExecutable({ null }, runner, osName = "Mac OS X")

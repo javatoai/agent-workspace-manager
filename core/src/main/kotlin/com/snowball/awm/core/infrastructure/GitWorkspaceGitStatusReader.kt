@@ -38,7 +38,7 @@ class GitWorkspaceGitStatusReader(
             val topLevel = Path.of(repositoryLines[0]).toAbsolutePath().normalize()
             val gitDirectory = Path.of(repositoryLines[1]).toAbsolutePath().normalize()
             val commonDirectory = Path.of(repositoryLines[2]).toAbsolutePath().normalize()
-            if (topLevel != worktreePath) return WorkspaceGitHealth(
+            if (topLevel.canonicalOrNormalized() != worktreePath.canonicalOrNormalized()) return WorkspaceGitHealth(
                 state = WorkspaceGitHealthState.FAILED,
                 issue = WorkspaceGitIssue.NOT_GIT,
                 expectedBranch = workspace.branch,
@@ -53,7 +53,7 @@ class GitWorkspaceGitStatusReader(
                         "--path-format=absolute",
                         "--git-common-dir",
                     ).stdout.trim().let(Path::of).toAbsolutePath().normalize()
-                    commonDirectory == expectedCommonDirectory
+                    commonDirectory.canonicalOrNormalized() == expectedCommonDirectory.canonicalOrNormalized()
                 }.getOrDefault(false)
                 WorkspaceStrategy.INDEPENDENT_CLONE ->
                     git.readOnly(

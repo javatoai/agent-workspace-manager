@@ -1,12 +1,70 @@
 package com.snowball.awm.core
 
 import java.nio.file.Path
+import java.nio.file.Files
+import java.time.Duration
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
+import org.junit.jupiter.api.io.TempDir
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class TerminalLaunchCommandTest {
+    @TempDir lateinit var temporary: Path
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    fun `batch terminal preserves spaces and shell metacharacters in paths`() {
+        val wrapperDirectory = Files.createDirectories(temporary.resolve("wrapper & %AWM_TEST_EXPANSION% ' !"))
+        val wrapper = createArgumentCapturingBatch(wrapperDirectory.resolve("terminal wrapper.cmd"))
+        val targets = listOf(
+            "target with spaces",
+            "中文任务 (工作区)",
+            "target&literal",
+            "target%AWM_TEST_EXPANSION%",
+            "target'apostrophe",
+            "target!AWM_TEST_EXPANSION!^literal",
+        ).map { Files.createDirectories(temporary.resolve(it)) }
+        val runner = ProcessCommandRunner()
+        for ((index, target) in targets.withIndex()) {
+            val output = temporary.resolve("arguments-$index.txt")
+            val result = runner.run(
+                TerminalLaunchCommand.build(wrapper.toString(), target, "Windows 11"),
+                timeout = Duration.ofSeconds(15),
+                environment = mapOf(
+                    "AWM_TEST_ARGS_OUT" to output.toString(),
+                    "AWM_TEST_EXPANSION" to "unexpected-expansion",
+                ),
+            )
+
+            assertEquals(0, result.exitCode, result.stderr)
+            assertEquals(listOf(target.toString(), "", ""), Files.readAllLines(output))
+        }
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    fun `batch terminal can be resolved from PATH`() {
+        val wrapperDirectory = Files.createDirectories(temporary.resolve("terminal path"))
+        val wrapper = createArgumentCapturingBatch(wrapperDirectory.resolve("awm-test-terminal.cmd"))
+        val target = Files.createDirectories(temporary.resolve("target directory"))
+        val output = temporary.resolve("path-arguments.txt")
+        val pathEntry = System.getenv().entries.first { it.key.equals("PATH", ignoreCase = true) }
+        val result = ProcessCommandRunner().run(
+            TerminalLaunchCommand.build(wrapper.fileName.toString(), target, "Windows 11"),
+            timeout = Duration.ofSeconds(15),
+            environment = mapOf(
+                pathEntry.key to "$wrapperDirectory;${pathEntry.value}",
+                "AWM_TEST_ARGS_OUT" to output.toString(),
+            ),
+        )
+
+        assertEquals(0, result.exitCode, result.stderr)
+        assertEquals(listOf(target.toString(), "", ""), Files.readAllLines(output))
+    }
+
     @Test
     fun `terminal resolution exposes configured and automatic Windows choices`() {
         assertEquals(
@@ -212,4 +270,19 @@ class TerminalLaunchCommandTest {
             TerminalLaunchCommand.buildSystemCommand(" ", osName = "Linux")
         }
     }
+}
+
+internal fun createArgumentCapturingBatch(path: Path): Path {
+    Files.writeString(
+        path,
+        """
+            @echo off
+            set "AWM_TEST_ARG_1=%~1"
+            set "AWM_TEST_ARG_2=%~2"
+            set "AWM_TEST_ARG_3=%~3"
+            powershell.exe -NoProfile -NonInteractive -Command "[IO.File]::WriteAllLines(${'$'}env:AWM_TEST_ARGS_OUT, @(${'$'}env:AWM_TEST_ARG_1, ${'$'}env:AWM_TEST_ARG_2, ${'$'}env:AWM_TEST_ARG_3))"
+            exit /b %errorlevel%
+        """.trimIndent(),
+    )
+    return path
 }

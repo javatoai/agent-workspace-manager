@@ -109,13 +109,20 @@ class WorkspaceModuleRemovalService(
             WorkspaceStrategy.INDEPENDENT_CLONE -> git.commonDirectory(target).toAbsolutePath().normalize()
         }
         val inspectRepository = {
-            require(git.topLevel(target) == target) { "路径存在但不是有效的 Git 工作区，禁止自动删除：$target" }
+            require(git.topLevel(target).canonicalOrNormalized() == target.canonicalOrNormalized()) {
+                "路径存在但不是有效的 Git 工作区，禁止自动删除：$target"
+            }
             when (workspace.strategy) {
                 WorkspaceStrategy.STANDARD_WORKTREE -> {
                     val repositoryRoot = Path.of(repository.rootPath).toAbsolutePath().normalize()
-                    require(git.commonDirectory(target) == git.commonDirectory(repositoryRoot)) { "Worktree Git 身份与任务记录不一致" }
+                    require(
+                        git.commonDirectory(target).canonicalOrNormalized() ==
+                            git.commonDirectory(repositoryRoot).canonicalOrNormalized(),
+                    ) { "Worktree Git 身份与任务记录不一致" }
                     git.pruneWorktrees(repositoryRoot)
-                    val record = git.worktrees(repositoryRoot).firstOrNull { it.path.toAbsolutePath().normalize() == target }
+                    val record = git.worktrees(repositoryRoot).firstOrNull {
+                        it.path.canonicalOrNormalized() == target.canonicalOrNormalized()
+                    }
                     require(record != null) { "Git 未登记该 Worktree，禁止自动删除" }
                     require(!record.locked) { "Worktree 已锁定，请先手工 unlock" }
                 }

@@ -122,6 +122,58 @@ class TaskBranchNamingTest {
     }
 
     @Test
+    fun `default module target branches cannot be ancestors of each other`() {
+        val modules = listOf(
+            ServiceModuleConfig(id = "release", name = "release"),
+            ServiceModuleConfig(id = "mobile", name = "release/mobile"),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            TaskBranchNaming.resolve("feature/task", modules)
+        }
+    }
+
+    @Test
+    fun `explicit target branches reject ancestors regardless of order and case`() {
+        val modules = listOf(
+            ServiceModuleConfig(id = "api", name = "api"),
+            ServiceModuleConfig(id = "job", name = "job"),
+        )
+        val branches = listOf("feature/release", "FEATURE/release/mobile")
+
+        listOf(branches, branches.reversed()).forEach { targets ->
+            assertThrows(IllegalArgumentException::class.java) {
+                TaskBranchNaming.resolve("feature/task", modules, mapOf("api" to targets[0], "job" to targets[1]))
+            }
+        }
+    }
+
+    @Test
+    fun `explicit target can resolve a conflict between default branch names`() {
+        val modules = listOf(
+            ServiceModuleConfig(id = "release", name = "release"),
+            ServiceModuleConfig(id = "mobile", name = "release/mobile"),
+        )
+
+        assertEquals(
+            mapOf("release" to "feature/task-release", "mobile" to "feature/mobile"),
+            TaskBranchNaming.resolve("feature/task", modules, mapOf("mobile" to "feature/mobile")),
+        )
+    }
+
+    @Test
+    fun `target branches may share a textual prefix without a slash boundary`() {
+        val modules = listOf(
+            ServiceModuleConfig(id = "api", name = "api"),
+            ServiceModuleConfig(id = "job", name = "job"),
+        )
+        listOf("feature/release-mobile", "feature/release2").forEach { other ->
+            val targets = mapOf("api" to "feature/release", "job" to other)
+            assertEquals(targets, TaskBranchNaming.resolve("feature/task", modules, targets))
+        }
+    }
+
+    @Test
     fun `base ref qualification does not replace the configured module suffix`() {
         val modules = listOf(
             ServiceModuleConfig(id = "release", name = "release", baseRef = "origin/release/test"),

@@ -87,4 +87,58 @@ class AgentFileMonitorTest {
             assertFalse(Files.exists(taskDirectory))
         }
     }
+
+    @Test
+    fun `local resolution validates the displayed disk version before a custom writer runs`() {
+        val root = Files.createTempDirectory("agent-resolve-race-")
+        val file = root.resolve("AGENTS.md")
+        Files.writeString(file, "initial")
+        val changes = mutableListOf<AgentFileChange>()
+        AgentFileMonitor(changes::add, startWatchThread = false).use { monitor ->
+            monitor.track(file)
+            monitor.markLocalEdit(file, "local")
+            Files.writeString(file, "first external")
+            monitor.checkNow()
+            val displayed = assertIs<AgentFileChange.Conflict>(changes.last())
+
+            Files.writeString(file, "second external")
+            // A watcher may update its pending hash before the UI handles that event.
+            monitor.checkNow()
+            var writerCalled = false
+            assertFailsWith<AgentDocumentConflictException> {
+                monitor.resolve(file, AgentConflictResolution.USE_LOCAL, displayed.diskContent) {
+                    writerCalled = true
+                    Files.writeString(file, it)
+                }
+            }
+
+            assertFalse(writerCalled)
+            assertEquals("second external", Files.readString(file))
+            assertEquals("local", monitor.snapshot(file)?.content)
+            assertTrue(monitor.snapshot(file)?.dirty == true)
+        }
+    }
+
+    @Test
+    fun `custom local resolution tracks the regenerated document`() {
+        val root = Files.createTempDirectory("agent-resolve-writer-")
+        val file = root.resolve("AGENTS.md")
+        Files.writeString(file, "initial")
+        AgentFileMonitor({}, startWatchThread = false).use { monitor ->
+            monitor.track(file)
+            monitor.markLocalEdit(file, "local notes")
+            Files.writeString(file, "external")
+            monitor.checkNow()
+
+            val resolved = monitor.resolve(file, AgentConflictResolution.USE_LOCAL, "external") { local ->
+                Files.writeString(file, "regenerated: $local")
+            }
+
+            assertEquals("regenerated: local notes", resolved.content)
+            assertFalse(resolved.dirty)
+            // The next save must compare against the generated content's hash.
+            monitor.save(file, "next edit")
+            assertEquals("next edit", Files.readString(file))
+        }
+    }
 }

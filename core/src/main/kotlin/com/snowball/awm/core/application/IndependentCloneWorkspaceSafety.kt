@@ -68,6 +68,12 @@ internal object IndependentCloneWorkspaceSafety {
         }
     }
 
+    /** Rebinds an already owned clone without granting ownership to an unmarked directory. */
+    fun reassignOwnership(target: Path, expectedOwnership: String, ownership: String) {
+        requireOwned(target, expectedOwnership)
+        AtomicFileWriter.write(marker(target), ownership)
+    }
+
     private fun marker(clone: Path): Path = clone.resolve(".git").resolve("awm-owner")
 
     private fun deleteStaging(task: Path, root: Path, marker: Path, ownership: String) {

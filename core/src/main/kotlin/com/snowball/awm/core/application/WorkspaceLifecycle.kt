@@ -240,7 +240,7 @@ class GitWorkspaceLifecycle(
     private fun isLinkedWorktree(candidate: Path): Boolean = runCatching {
         val gitDirectory = Path.of(git.run(candidate, "rev-parse", "--absolute-git-dir").stdout.trim())
             .toAbsolutePath().normalize()
-        git.commonDirectory(candidate).toAbsolutePath().normalize() != gitDirectory
+        git.commonDirectory(candidate).canonicalOrNormalized() != gitDirectory.canonicalOrNormalized()
     }.getOrDefault(true)
 
     private fun requireDeleteClean(workspaces: List<ServiceWorkspace>, taskDirectory: Path) {

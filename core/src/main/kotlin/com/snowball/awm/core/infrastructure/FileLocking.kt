@@ -3,6 +3,7 @@ package com.snowball.awm.core
 import java.nio.channels.FileChannel
 import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
@@ -60,7 +61,31 @@ internal object FileLocking {
     }
 
     fun stablePathHash(path: Path, length: Int = 16): String =
-        stableTextHash(path.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT), length)
+        stableTextHash(stablePathIdentity(path), length)
+
+    /**
+     * Lock names must identify the filesystem object rather than the spelling
+     * used by the caller. This matters for macOS `/var` aliases, Windows
+     * junctions, and task paths that are resolved through a symlink. The
+     * lowercased identity intentionally keeps the historical conservative
+     * behavior on filesystems whose case sensitivity is unknown.
+     */
+    private fun stablePathIdentity(path: Path): String {
+        val normalized = path.toAbsolutePath().normalize()
+        var existing = normalized
+        while (!Files.exists(existing) && existing.parent != null) {
+            existing = existing.parent
+        }
+        val realExisting = runCatching { existing.toRealPath() }.getOrNull()
+        val identity = if (realExisting == null) {
+            normalized.toString()
+        } else if (existing == normalized) {
+            realExisting.toString()
+        } else {
+            realExisting.resolve(existing.relativize(normalized)).normalize().toString()
+        }
+        return identity.lowercase(Locale.ROOT)
+    }
 
     fun stableTextHash(value: String, length: Int = 16): String =
         MessageDigest.getInstance("SHA-256")

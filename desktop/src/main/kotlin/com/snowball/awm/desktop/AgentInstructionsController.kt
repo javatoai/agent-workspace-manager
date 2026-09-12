@@ -63,6 +63,7 @@ class AgentInstructionsController internal constructor(
 ) {
     private var revision by mutableStateOf(0L)
     private var conflict by mutableStateOf<AgentFileChange.Conflict?>(null)
+    private val pendingConflicts = linkedMapOf<Path, AgentFileChange.Conflict>()
     private var templates by mutableStateOf(runCatching { templateStore.list() }.getOrDefault(emptyList()))
     val state: AgentInstructionsUiState get() = AgentInstructionsUiState(revision, conflict, templates)
 
@@ -100,18 +101,18 @@ class AgentInstructionsController internal constructor(
             val trimmedContent = content.trim()
             requireNoReservedMarkers(trimmedContent)
             val now = AwmTime.format(Instant.now())
-            val current = templateStore.list()
-            val updated = if (id == null || current.none { it.id == id }) {
-                current + AgentTaskTemplate(UUID.randomUUID().toString(), trimmedName, trimmedContent, now)
-            } else {
-                current.map { if (it.id == id) it.copy(name = trimmedName, content = trimmedContent, updatedAt = now) else it }
+            templateStore.update { current ->
+                if (id == null || current.none { it.id == id }) {
+                    current + AgentTaskTemplate(UUID.randomUUID().toString(), trimmedName, trimmedContent, now)
+                } else {
+                    current.map { if (it.id == id) it.copy(name = trimmedName, content = trimmedContent, updatedAt = now) else it }
+                }
             }
-            templateStore.saveAll(updated)
         }, onSuccess = { refreshTemplates() })
 
     fun deleteTemplate(id: String): Boolean =
         operations.run("正在删除模板…", "模板已删除", block = {
-            templateStore.saveAll(templateStore.list().filterNot { it.id == id })
+            templateStore.update { current -> current.filterNot { it.id == id } }
         }, onSuccess = { refreshTemplates() })
 
     private fun refreshTemplates() {
@@ -160,15 +161,17 @@ class AgentInstructionsController internal constructor(
         }
         return operations.run("正在处理 Agent 文件冲突…", "Agent 文件冲突已处理", block = {
             if (resolution == AgentConflictResolution.USE_LOCAL && task != null) {
-                val notes = documents.extractTaskNotes(current.localContent)
-                monitor.resolve(current.path, AgentConflictResolution.USE_DISK)
-                tasks.saveTaskNotes(session.config, taskDirectory(task), notes)
-                monitor.checkNow()
+                monitor.resolve(current.path, resolution, expectedDiskContent = current.diskContent) { localContent ->
+                    val notes = documents.extractTaskNotes(localContent)
+                    tasks.saveTaskNotes(session.config, taskDirectory(task), notes)
+                }
             } else {
-                monitor.resolve(current.path, resolution)
+                monitor.resolve(current.path, resolution, expectedDiskContent = current.diskContent)
             }
         }, onSuccess = {
-            conflict = null
+            val normalized = current.path.toAbsolutePath().normalize()
+            if (pendingConflicts[normalized] === current) pendingConflicts.remove(normalized)
+            conflict = pendingConflicts.values.firstOrNull()
             revision++
             if (resolution == AgentConflictResolution.USE_LOCAL && task == null) synchronize(current.path)
         })
@@ -176,7 +179,10 @@ class AgentInstructionsController internal constructor(
 
     fun handleFileChange(change: AgentFileChange) {
         when (change) {
-            is AgentFileChange.Conflict -> conflict = change
+            is AgentFileChange.Conflict -> {
+                pendingConflicts[change.path.toAbsolutePath().normalize()] = change
+                conflict = pendingConflicts.values.firstOrNull()
+            }
             is AgentFileChange.Reloaded -> { revision++; synchronize(change.path) }
         }
     }

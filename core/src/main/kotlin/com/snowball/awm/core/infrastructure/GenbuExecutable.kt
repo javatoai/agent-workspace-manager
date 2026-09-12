@@ -87,7 +87,7 @@ class ConfiguredGenbuExecutable(
         val bundled = bundledDirectories()
             .asSequence()
             .map { it.resolve(executableName).toAbsolutePath().normalize() }
-            .firstOrNull(Files::isRegularFile)
+            .firstOrNull { Files.isRegularFile(it) && Files.isExecutable(it) }
             ?.toString()
         val fromPath = if (bundled == null) runCatching {
             val command = when {
@@ -98,7 +98,10 @@ class ConfiguredGenbuExecutable(
             }
             val result = runner.run(command, timeout = probeTimeout)
             result.takeIf(CommandResult::succeeded)?.stdout?.lineSequence()?.map(String::trim)?.firstOrNull { line ->
-                runCatching { Path.of(line).isAbsolute && Files.isRegularFile(Path.of(line)) }.getOrDefault(false)
+                runCatching {
+                    val path = Path.of(line)
+                    path.isAbsolute && Files.isRegularFile(path) && Files.isExecutable(path)
+                }.getOrDefault(false)
             }
         }.getOrNull() else null
         probedPath = bundled ?: fromPath

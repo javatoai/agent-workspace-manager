@@ -241,6 +241,7 @@ class SettingsController internal constructor(
     /** Lightweight window-focus refresh: detects once, persists a first-time result, writes no audit. */
     fun refreshGenbuCommandResolution() {
         val existingGenbuPath = session.config.genbuExecutablePath
+        val existingAutoDetected = session.config.genbuExecutableAutoDetected
         val shouldAutoDetect = existingGenbuPath.isNullOrBlank()
         scope.launch {
             val (autoSave, resolution) = withContext(ioDispatcher) {
@@ -252,7 +253,7 @@ class SettingsController internal constructor(
                 }
             }
             autoSave?.let {
-                applyConfig(it.config)
+                applyGenbuAutoSave(it, existingGenbuPath, existingAutoDetected)
                 if (it.savedDetectedPath) {
                     setSaveState("genbu", SettingsSaveState.SAVED)
                     showStatus("已自动检测并保存 Genbu 命令路径")
@@ -285,6 +286,7 @@ class SettingsController internal constructor(
         if (!force && genbu is GenbuSettingsState.Loading) return
         if (force) genbuJob?.cancel()
         val existingGenbuPath = session.config.genbuExecutablePath
+        val existingAutoDetected = session.config.genbuExecutableAutoDetected
         val shouldAutoDetect = existingGenbuPath.isNullOrBlank() ||
             session.config.genbuExecutableAutoDetected
         genbu = GenbuSettingsState.Loading
@@ -305,7 +307,7 @@ class SettingsController internal constructor(
                 }
             }
             autoSave?.let {
-                applyConfig(it.config)
+                applyGenbuAutoSave(it, existingGenbuPath, existingAutoDetected)
                 if (it.savedDetectedPath) {
                     setSaveState("genbu", SettingsSaveState.SAVED)
                     showStatus("已自动检测并保存 Genbu 命令路径")
@@ -327,6 +329,16 @@ class SettingsController internal constructor(
 
     private fun readCliVersion(command: String): CommandVersionStatus =
         CommandVersionProbe.probe(command, cliVersionRunner)
+
+    private fun applyGenbuAutoSave(saved: GenbuExecutableAutoSave, expectedPath: String?, expectedAutoDetected: Boolean) {
+        val current = session.config
+        if (current.genbuExecutablePath == expectedPath && current.genbuExecutableAutoDetected == expectedAutoDetected) {
+            applyConfig(current.copy(
+                genbuExecutablePath = saved.config.genbuExecutablePath,
+                genbuExecutableAutoDetected = saved.config.genbuExecutableAutoDetected,
+            ))
+        }
+    }
 
     private fun autoSaveGenbuExecutablePath(shouldAutoDetect: Boolean, existingPath: String?): GenbuExecutableAutoSave? {
         if (!shouldAutoDetect) return null
@@ -504,7 +516,8 @@ class SettingsController internal constructor(
     fun refreshLocalGit(force: Boolean = false) {
         if (!force && localGit is LocalGitSettingsState.Loading) return
         localGitJob?.cancel()
-        val shouldAutoDetect = session.config.gitExecutablePath.isNullOrBlank()
+        val existingGitPath = session.config.gitExecutablePath
+        val shouldAutoDetect = existingGitPath.isNullOrBlank()
         localGit = LocalGitSettingsState.Loading((localGit as? LocalGitSettingsState.Loaded)?.snapshot)
         localGitJob = scope.launch {
             val (autoSave, result) = withContext(ioDispatcher) {
@@ -516,7 +529,10 @@ class SettingsController internal constructor(
                 }
             }
             autoSave?.let {
-                applyConfig(it.config)
+                val current = session.config
+                if (current.gitExecutablePath == existingGitPath) {
+                    applyConfig(current.copy(gitExecutablePath = it.config.gitExecutablePath))
+                }
                 if (it.savedDetectedPath) {
                     setSaveState("git", SettingsSaveState.SAVED)
                     showStatus("已自动检测并保存 Git 命令路径")
@@ -571,7 +587,8 @@ class SettingsController internal constructor(
 
     fun refreshMeegleStatus(force: Boolean = false) {
         if (!force && meegleCli is MeegleCliState.Loading) return
-        val shouldAutoDetect = session.config.meegleExecutablePath.isNullOrBlank()
+        val existingMeeglePath = session.config.meegleExecutablePath
+        val shouldAutoDetect = existingMeeglePath.isNullOrBlank()
         meegleCli = MeegleCliState.Loading((meegleCli as? MeegleCliState.Ready)?.status)
         scope.launch {
             val (autoSave, result) = withContext(ioDispatcher) {
@@ -583,7 +600,10 @@ class SettingsController internal constructor(
                 }
             }
             autoSave?.let {
-                applyConfig(it.config)
+                val current = session.config
+                if (current.meegleExecutablePath == existingMeeglePath) {
+                    applyConfig(current.copy(meegleExecutablePath = it.config.meegleExecutablePath))
+                }
                 if (it.savedDetectedPath) {
                     setSaveState("feishu", SettingsSaveState.SAVED)
                     showStatus("已自动检测并保存 Meegle 命令路径")

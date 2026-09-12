@@ -313,6 +313,7 @@ Builder: ${System.getProperty("user.name")}
 
         assertEquals(TagOperationState.PARTIAL, partial.state, partial.message)
         assertEquals("1.0.0.beta-1", partial.tag)
+        val pendingTagObject = GitTestSupport.run(repository, "rev-parse", "refs/tags/${partial.tag}")
         val remoteTestSha = GitTestSupport.run(
             repository,
             "ls-remote",
@@ -331,6 +332,11 @@ Builder: ${System.getProperty("user.name")}
         assertEquals(TagOperationState.SUCCESS, resumed.state, resumed.message)
         assertEquals(partial.operationId, resumed.operationId)
         assertEquals(partial.tag, resumed.tag)
+        assertEquals(pendingTagObject, GitTestSupport.run(repository, "rev-parse", "refs/tags/${resumed.tag}"))
+        assertEquals(
+            pendingTagObject,
+            GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/${resumed.tag}").substringBefore('\t'),
+        )
         assertTrue(
             GitTestSupport.run(repository, "ls-remote", "origin", "refs/tags/1.0.0.beta-1")
                 .isNotBlank(),

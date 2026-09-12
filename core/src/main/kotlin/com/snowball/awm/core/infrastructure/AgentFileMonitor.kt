@@ -129,7 +129,12 @@ class AgentFileMonitor(
     }
 
     @Synchronized
-    fun resolve(path: Path, resolution: AgentConflictResolution): AgentEditorSnapshot {
+    fun resolve(
+        path: Path,
+        resolution: AgentConflictResolution,
+        expectedDiskContent: String? = null,
+        writeLocal: ((String) -> Unit)? = null,
+    ): AgentEditorSnapshot {
         val normalized = path.toAbsolutePath().normalize()
         val state = tracked[normalized] ?: error("文件未被监控：$normalized")
         when (resolution) {
@@ -145,14 +150,22 @@ class AgentFileMonitor(
             AgentConflictResolution.USE_LOCAL -> {
                 val latestDisk = readOrEmpty(normalized)
                 val latestHash = hash(latestDisk)
-                if (state.pendingDiskHash != null && latestHash != state.pendingDiskHash) {
+                val expectedHash = expectedDiskContent?.let(::hash) ?: state.pendingDiskHash
+                if (expectedHash != null && latestHash != expectedHash) {
                     val change = AgentFileChange.Conflict(normalized, latestDisk, state.content)
                     state.pendingDiskContent = latestDisk
                     state.pendingDiskHash = latestHash
                     onChange(change)
                     throw AgentDocumentConflictException(change)
                 }
-                writeAtomically(normalized, state.content)
+                if (writeLocal == null) {
+                    writeAtomically(normalized, state.content)
+                } else {
+                    // Task documents regenerate their system section under the task
+                    // lock, but must pass the same conflict check as other files.
+                    writeLocal(state.content)
+                    state.content = readOrEmpty(normalized)
+                }
                 state.diskHash = hash(state.content)
                 state.dirty = false
                 state.pendingDiskContent = null

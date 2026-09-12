@@ -4,14 +4,31 @@ import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
-import org.gradle.api.tasks.Copy
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.TaskAction
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.Comparator
+
+abstract class WritePortableCliVersion : DefaultTask() {
+    @get:Input
+    abstract val versionText: Property<String>
+
+    @get:OutputFile
+    abstract val destination: RegularFileProperty
+
+    @TaskAction
+    fun write() {
+        val output = destination.get().asFile.toPath()
+        Files.createDirectories(output.parent)
+        Files.writeString(output, "${versionText.get()}\n", StandardCharsets.UTF_8)
+    }
+}
 
 abstract class CreateJlinkRuntime : DefaultTask() {
     @get:InputFile
@@ -61,11 +78,9 @@ val portableCliJlink = javaToolchains.launcherFor {
     launcher.metadata.installationPath.file("bin/$jlinkFileName")
 }
 
-val writePortableCliVersion = tasks.register<Copy>("writePortableCliVersion") {
-    from(resources.text.fromString("$portableCliVersionText\n")) {
-        rename(".*", "VERSION")
-    }
-    into(portableCliVersion.map { it.asFile.parentFile })
+val writePortableCliVersion = tasks.register<WritePortableCliVersion>("writePortableCliVersion") {
+    versionText.set(portableCliVersionText)
+    destination.set(portableCliVersion)
 }
 
 /** Creates a compact runtime with `java` retained specifically for the CLI. */

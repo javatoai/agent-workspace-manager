@@ -50,13 +50,9 @@ class CommandDevelopmentToolPathLookup(
     private val timeout: Duration = Duration.ofSeconds(3),
 ) : DevelopmentToolPathLookup {
     override fun find(type: DevelopmentToolType): Path? {
-        val probe = when {
-            osName.startsWith("Windows", ignoreCase = true) -> "where.exe"
-            osName.startsWith("Mac", ignoreCase = true) -> "/usr/bin/which"
-            else -> return null
-        }
         return pathCommandNames(type).firstNotNullOfOrNull { command ->
-            runCatching { runner.run(listOf(probe, command), timeout = timeout) }
+            val probe = probeCommand(command) ?: return@firstNotNullOfOrNull null
+            runCatching { runner.run(probe, timeout = timeout) }
                 .getOrNull()
                 ?.takeIf(CommandResult::succeeded)
                 ?.stdout
@@ -67,6 +63,15 @@ class CommandDevelopmentToolPathLookup(
                 ?.mapNotNull { runCatching { Path.of(it).toAbsolutePath().normalize() }.getOrNull() }
                 ?.firstOrNull(Files::exists)
         }
+    }
+
+    private fun probeCommand(command: String): List<String>? = when {
+        osName.startsWith("Windows", ignoreCase = true) -> listOf("where.exe", command)
+        // A desktop app launched by Finder does not inherit the user's login
+        // shell PATH.  Run the lookup in zsh so Homebrew and other paths from
+        // ~/.zprofile remain visible to development-tool auto detection.
+        osName.startsWith("Mac", ignoreCase = true) -> listOf("/bin/zsh", "-lc", "command -v $command")
+        else -> null
     }
 }
 

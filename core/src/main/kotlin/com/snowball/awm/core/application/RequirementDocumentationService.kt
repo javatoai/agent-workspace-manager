@@ -205,7 +205,6 @@ class RequirementDocumentationService(
             val requirementDirectory = context.requirementDirectory
             val writeRoot = context.writeRoot
             val iterationDirectory = context.iterationDirectory
-            val sprint = context.sprint
             val title = if (existingContext != null) {
                 plan.requirementTitle.takeIf(String::isNotBlank) ?: directoryTitle(requirementDirectory, plan.identity.workItemId)
             } else {
@@ -218,7 +217,7 @@ class RequirementDocumentationService(
                 }
                 require(!files.isSymbolicLink(requirementDirectory)) { "需求目录不能是符号链接：$requirementDirectory" }
             }
-            ensureIteration(iterationDirectory, sprint)
+            val sprint = ensureIteration(iterationDirectory, context.sprint)
             materials.ensureMaterialsDirectory(root, requirementDirectory)
             materials.ensureMaterialsDirectory(root, writeRoot)
 
@@ -232,7 +231,10 @@ class RequirementDocumentationService(
                 updatedAt = now,
             )
             files.write(writeRoot.resolve(REQUIREMENT_MANIFEST), files.encodeRequirement(manifest))
-            files.write(writeRoot.resolve(REQUIREMENT_OVERVIEW), renderRequirementOverview(manifest))
+            val overview = writeRoot.resolve(REQUIREMENT_OVERVIEW)
+            if (!files.exists(overview)) {
+                files.write(overview, renderRequirementOverview(manifest))
+            }
             appendIterationOverview(iterationDirectory, manifest, subdirectory)
             files.updateIndex(root, requirementDirectory, manifest)
             materialization(
@@ -290,15 +292,24 @@ class RequirementDocumentationService(
         return materials.buildRequirementDirectory(root, sprintLabel, id, folderName)
     }
 
-    private fun ensureIteration(directory: Path, sprint: RequirementSprintSnapshot) {
+    private fun ensureIteration(directory: Path, sprint: RequirementSprintSnapshot): RequirementSprintSnapshot {
         val manifestPath = directory.resolve(ITERATION_MANIFEST)
         if (files.exists(directory)) {
             require(files.isDirectory(directory)) { "迭代路径不是目录：$directory" }
             require(!files.isSymbolicLink(directory)) { "迭代目录不能是符号链接：$directory" }
             if (files.isRegularFile(manifestPath)) {
                 val existing = files.readIteration(manifestPath)
-                require(existing.sprint == sprint) { "迭代目录与当前 Sprint 不匹配，已停止写入：$directory" }
-                return
+                require(existing.sprint.label == sprint.label &&
+                    (existing.sprint.id.isBlank() || sprint.id.isBlank() || existing.sprint.id == sprint.id)) {
+                    "迭代目录与当前 Sprint 不匹配，已停止写入：$directory"
+                }
+                // Desktop reuse only knows the label. Enrich its marker when a
+                // later requirement resolves the ID, without losing a known ID.
+                val mergedSprint = if (existing.sprint.id.isBlank()) sprint else existing.sprint
+                if (mergedSprint != existing.sprint) {
+                    files.write(manifestPath, files.encodeIteration(existing.copy(sprint = mergedSprint)))
+                }
+                return mergedSprint
             }
             // Desktop materials directories predate the Agent process marker;
             // bootstrap it without replacing any human-owned overview.
@@ -313,7 +324,7 @@ class RequirementDocumentationService(
                         "本目录由 AWM Agent CLI 创建；每个需求的过程文档位于其独立子目录。\n",
                 )
             }
-            return
+            return sprint
         }
         val parent = directory.parent ?: throw IllegalArgumentException("迭代目录缺少父目录：$directory")
         materials.ensureMaterialsDirectory(parent, directory)
@@ -324,6 +335,7 @@ class RequirementDocumentationService(
             "# ${sprint.label} 迭代任务总览\n\n" +
                 "本目录由 AWM Agent CLI 创建；每个需求的过程文档位于其独立子目录。\n",
         )
+        return sprint
     }
 
     private fun appendIterationOverview(directory: Path, manifest: RequirementDocumentationManifest, subdirectory: String) {

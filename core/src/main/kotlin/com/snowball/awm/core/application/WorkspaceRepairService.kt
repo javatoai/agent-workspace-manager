@@ -139,13 +139,20 @@ class WorkspaceRepairService(
         val repositoryPath = repository?.rootPath?.let(Path::of)?.toAbsolutePath()?.normalize()
             ?: return manual(workspace, health, "任务记录对应的原仓库配置不存在")
         runCatching {
-            require(git.topLevel(repositoryPath).toAbsolutePath().normalize() == repositoryPath)
-            require(git.commonDirectory(repositoryPath).toAbsolutePath().normalize() == Path.of(repository.gitCommonDirectory).toAbsolutePath().normalize())
+            require(git.topLevel(repositoryPath).canonicalOrNormalized() == repositoryPath.canonicalOrNormalized())
+            require(
+                git.commonDirectory(repositoryPath).canonicalOrNormalized() ==
+                    Path.of(repository.gitCommonDirectory).canonicalOrNormalized(),
+            )
         }.getOrElse { return manual(workspace, health, "原仓库 Git 身份已失效，无法自动修复 Worktree") }
         val localExists = git.refExists(repositoryPath, "refs/heads/${workspace.branch}")
         val remoteSha = remoteBranchSha(repositoryPath, workspace.pushRemote, workspace.branch)
         val remoteExists = remoteSha != null
-        val occupied = if (localExists) git.worktrees(repositoryPath).filter { it.branch == workspace.branch && it.path.toAbsolutePath().normalize() != target } else emptyList()
+        val occupied = if (localExists) {
+            git.worktrees(repositoryPath).filter {
+                it.branch == workspace.branch && it.path.canonicalOrNormalized() != target.canonicalOrNormalized()
+            }
+        } else emptyList()
         val locked = occupied.filter(WorktreeRecord::locked)
         val fingerprint = fingerprint(workspace, health, target, localExists, remoteSha, occupied)
         if (locked.isNotEmpty()) return preview(

@@ -68,6 +68,68 @@ class RequirementDocumentationServiceTest {
     }
 
     @Test
+    fun `preserves a user overview when adding Agent documents to a desktop materials directory`() {
+        val root = Files.createDirectories(temporary.resolve("shared-user-overview"))
+        val existingWriteRoot = Files.createDirectories(
+            root.resolve("OBT-20260817--20260828").resolve("7064764629-桌面任务").resolve("研发"),
+        )
+        val overview = existingWriteRoot.resolve("00-需求总览.md")
+        val userContent = "# 用户需求资料\r\n\r\n保留已有结论与 SQL 说明。\r\n"
+        Files.writeString(overview, userContent)
+        val config = materialsConfig(root)
+        val service = RequirementDocumentationService(iterations = FixedIterations(singleActive))
+
+        val plan = service.plan(config, link, "Agent 标题", directoryFolderName = "另一个任务名")
+        service.materialize(config, plan)
+
+        assertEquals(userContent, Files.readString(overview))
+        assertTrue(Files.isRegularFile(existingWriteRoot.resolve(".awm-requirement.json")))
+        assertTrue(Files.readString(root.resolve(".awm-requirement-index.jsonl")).contains("7064764629"))
+    }
+
+    @Test
+    fun `enriches a desktop Sprint marker with a real ID and preserves known identity`() {
+        val root = Files.createDirectories(temporary.resolve("shared-sprint-identity"))
+        val iterationDirectory = root.resolve("OBT-20260817--20260828")
+        Files.createDirectories(iterationDirectory.resolve("7064764629-桌面任务").resolve("研发"))
+        val config = materialsConfig(root)
+        val service = RequirementDocumentationService(iterations = FixedIterations(singleActive))
+        val files = RequirementDocumentationFileStore()
+        val iterationManifest = iterationDirectory.resolve(".awm-iteration.json")
+        service.materialize(config, service.plan(config, link, "桌面任务"))
+        val original = files.readIteration(iterationManifest)
+        assertEquals("", original.sprint.id)
+
+        val secondPlan = service.plan(
+            config, link.replace("7064764629", "7064764630"), "新需求", directoryFolderName = "新任务",
+        )
+        val second = service.materialize(config, secondPlan)
+
+        assertEquals("7070412889", files.readIteration(iterationManifest).sprint.id)
+        assertEquals(original.createdAt, files.readIteration(iterationManifest).createdAt)
+        assertEquals(secondPlan.sprint, second.plan.sprint)
+        assertEquals(
+            secondPlan.sprint,
+            files.readRequirement(Path.of(secondPlan.documentationDirectory).resolve(".awm-requirement.json")).sprint,
+        )
+
+        val unknownIdPlan = service.plan(
+            config, link.replace("7064764629", "7064764631"), "后续需求", directoryFolderName = "后续任务",
+        ).let { it.copy(sprint = it.sprint.copy(id = "")) }
+        val later = service.materialize(config, unknownIdPlan)
+        assertEquals(secondPlan.sprint, files.readIteration(iterationManifest).sprint)
+        assertEquals(secondPlan.sprint, later.plan.sprint)
+
+        val conflictingPlan = service.plan(
+            config, link.replace("7064764629", "7064764632"), "冲突需求", directoryFolderName = "冲突任务",
+        ).let { it.copy(sprint = it.sprint.copy(id = "9999999999")) }
+        val error = assertFailsWith<IllegalArgumentException> { service.materialize(config, conflictingPlan) }
+        assertTrue(error.message.orEmpty().contains("Sprint 不匹配"))
+        assertEquals(secondPlan.sprint, files.readIteration(iterationManifest).sprint)
+        assertTrue(!Files.exists(Path.of(conflictingPlan.documentationDirectory)))
+    }
+
+    @Test
     fun `keeps a legacy requirement-root manifest as an identity marker and writes Agent docs below subdirectory`() {
         val root = Files.createDirectories(temporary.resolve("legacy-root-manifest"))
         val requirementDirectory = Files.createDirectories(root.resolve("已结束 Sprint").resolve("7064764629-桌面任务"))

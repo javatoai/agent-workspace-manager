@@ -369,10 +369,15 @@ class WorkspaceGitOperationService(
 
     /** In-lock recheck that skips the user config already proven during preflight. */
     private fun revalidateLocked(workspace: ServiceWorkspace, target: Path) {
-        require(git.topLevel(target) == target) { "工作区路径不再是 Git 顶层目录：$target" }
+        require(git.topLevel(target).canonicalOrNormalized() == target.canonicalOrNormalized()) {
+            "工作区路径不再是 Git 顶层目录：$target"
+        }
         val recordedRepository = Path.of(workspace.repositoryPath).toAbsolutePath().normalize()
         when (workspace.strategy) {
-            WorkspaceStrategy.STANDARD_WORKTREE -> require(git.commonDirectory(target) == git.commonDirectory(recordedRepository)) { "Worktree Git 身份与任务记录不一致" }
+            WorkspaceStrategy.STANDARD_WORKTREE -> require(
+                git.commonDirectory(target).canonicalOrNormalized() ==
+                    git.commonDirectory(recordedRepository).canonicalOrNormalized(),
+            ) { "Worktree Git 身份与任务记录不一致" }
             WorkspaceStrategy.INDEPENDENT_CLONE -> require(git.remoteUrl(target)?.trim() == workspace.originUrl?.trim()) { "独立克隆 origin 与任务记录不一致" }
         }
         require(git.currentBranch(target) == workspace.branch) { "当前分支与任务记录不一致" }

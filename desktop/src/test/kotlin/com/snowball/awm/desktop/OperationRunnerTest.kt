@@ -41,6 +41,29 @@ class OperationRunnerTest {
     }
 
     @Test
+    fun `failure callback cannot leave operation busy`() = runTest {
+        val recorded = mutableListOf<Throwable>()
+        val coordinator = OperationCoordinator(onError = recorded::add)
+        val runner = OperationRunner(coordinator, this, StandardTestDispatcher(testScheduler))
+
+        runner.run(
+            activeMessage = "进行中",
+            successMessage = "不应完成",
+            block = { error("执行失败") },
+            onFailure = { error("失败回调也失败") },
+        )
+        testScheduler.advanceUntilIdle()
+
+        assertFalse(coordinator.busy)
+        // Coroutine stack-trace recovery may retain the original exception as
+        // an extra cause; the callback failure must survive either representation.
+        assertEquals("执行失败", recorded.single().message)
+        assertEquals(listOf("失败回调也失败"), recorded.single().suppressed.map { it.message })
+        assertTrue(coordinator.errorMessage!!.startsWith("执行失败"))
+        assertTrue(coordinator.errorMessage!!.contains("附加失败：失败回调也失败"))
+    }
+
+    @Test
     fun `rejected operation invokes failure callback so an auto save draft can roll back`() = runTest {
         val coordinator = OperationCoordinator()
         val runner = OperationRunner(coordinator, this, Dispatchers.IO)
