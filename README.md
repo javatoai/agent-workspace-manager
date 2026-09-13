@@ -57,9 +57,9 @@ macOS 构建 DMG：
 ./scripts/build-macos.sh
 ```
 
-## AWM CLI 与 Agent 技能
+## AWM CLI 与 Tag Skill
 
-桌面绿色包内置了只面向 Agent 工作流的 `awm` CLI。它支持 `awm agent` 下的 JSON 协议命令与 `awm tag` Tag 构建命令组，不提供任意 Shell 或 Git 操作入口。
+桌面绿色包内置了 `awm` CLI。它提供受控的 Tag 构建命令组，不提供任意 Shell 或 Git 操作入口。
 
 ### 安装 CLI
 
@@ -71,9 +71,9 @@ awm --help
 
 macOS/Linux 绿色包同样内置 `resources/cli/bin/awm` 与相邻的 `resources/cli-runtime`。将 `resources/cli/bin` 加入当前用户的 `PATH` 后即可使用；启动脚本会优先使用随包运行时。
 
-### 安装 Agent 技能
+### 安装 Tag Skill
 
-仓库内置了 Agent 技能 [`skills/awm`](skills/awm/SKILL.md)：用户显式输入 `$awm` 时，主 Agent 负责澄清和展示计划，并把受限的 JSON CLI 调用委派给执行者子代理；不会自行调用 CLI，也不会代替人工确认创建任务。将 `skills/awm` 目录安装到所用 Agent 宿主的技能目录（或按宿主方式注册本仓库）即可启用。技能的 Tag 构建参考见 [`skills/awm/references/tag-builds.md`](skills/awm/references/tag-builds.md)。
+仓库内置了 Tag Skill [`skills/awm`](skills/awm/SKILL.md)。用户显式输入 `$awm` 时，它只处理已有任务的测试 Tag 构建、状态查询、历史查询、工作区检查和重试。打开桌面端 **设置 → AWM CLI**，点击“安装 Tag Skill”即可将它复制到当前用户的 `~/.agent/skills/awm`；更新会覆盖同名目录。技能的完整命令与结果说明见 [`skills/awm/references/tag-builds.md`](skills/awm/references/tag-builds.md)。
 
 ## 数据位置
 

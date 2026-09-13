@@ -432,6 +432,45 @@ class DesktopApplicationTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `task area tool group visibility saves all seven preferences together`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-task-area-tool-groups")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            controller.updateTaskAreaToolGroupVisibility(
+                taskGit = true,
+                taskPath = false,
+                workspaceGit = true,
+                workspacePath = false,
+                branchCopyIcons = false,
+                requirementCopyIcons = true,
+                projectNameCopyIcons = false,
+            )
+            assertEquals(SettingsSaveState.SAVING, controller.settingsSaveState("task-area"))
+
+            advanceUntilIdle()
+
+            assertTrue(controller.config.showTaskDetailGitActionGroup)
+            assertFalse(controller.config.showTaskDetailPathActionGroup)
+            assertTrue(controller.config.showWorkspaceGitActionGroup)
+            assertFalse(controller.config.showWorkspacePathActionGroup)
+            assertTrue(controller.config.showTaskAreaCopyIcons)
+            assertFalse(controller.config.showTaskAreaBranchCopyIcons)
+            assertTrue(controller.config.showTaskAreaRequirementCopyIcons)
+            assertFalse(controller.config.showTaskAreaProjectNameCopyIcons)
+            assertEquals(controller.config, store.load())
+            assertEquals(SettingsSaveState.SAVED, controller.settingsSaveState("task-area"))
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `requirement materials settings save independently and normalize values`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)

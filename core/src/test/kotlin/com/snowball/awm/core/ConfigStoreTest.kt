@@ -191,7 +191,14 @@ class ConfigStoreTest {
             ),
             defaultDevelopmentTool = DevelopmentToolType.VISUAL_STUDIO_CODE,
             allowTemporaryDevelopmentToolSelection = true,
-            hiddenTaskDetailBranches = listOf("master", "develop"),
+            showTaskDetailGitActionGroup = true,
+            showTaskDetailPathActionGroup = true,
+            showWorkspaceGitActionGroup = true,
+            showWorkspacePathActionGroup = true,
+            showTaskAreaCopyIcons = false,
+            showTaskAreaBranchCopyIcons = false,
+            showTaskAreaRequirementCopyIcons = true,
+            showTaskAreaProjectNameCopyIcons = false,
             repositories = listOf(repository),
             groups = listOf(
                 GroupConfig(
@@ -223,6 +230,42 @@ class ConfigStoreTest {
         assertEquals(listOf("payments", "growth"), store.load().groups.map { it.id })
         assertEquals("feature/pay-", store.load().groups.first().defaultBranchPrefix)
         assertEquals(listOf("codex", "cursor"), store.load().groups.first().defaultWorkspaceToolIds)
+    }
+
+    @Test
+    fun `task area tool groups default disabled and inline copy icons enabled when older configuration omits them`() {
+        val defaults = AppConfig()
+        assertFalse(defaults.showTaskDetailGitActionGroup)
+        assertFalse(defaults.showTaskDetailPathActionGroup)
+        assertFalse(defaults.showWorkspaceGitActionGroup)
+        assertFalse(defaults.showWorkspacePathActionGroup)
+        assertTrue(defaults.showTaskAreaCopyIcons)
+        assertTrue(defaults.showTaskAreaBranchCopyIcons)
+        assertTrue(defaults.showTaskAreaRequirementCopyIcons)
+        assertTrue(defaults.showTaskAreaProjectNameCopyIcons)
+
+        val paths = ApplicationPaths(temporary.resolve("task-area-tool-groups"))
+        Files.createDirectories(paths.home)
+        Files.writeString(
+            paths.config,
+            """
+            {
+              "schemaVersion": "$CURRENT_APP_CONFIG_SCHEMA_VERSION",
+              "groups": [{"id":"default","name":"默认组","services":[]}]
+            }
+            """.trimIndent(),
+        )
+
+        val config = ConfigStore(paths).load()
+
+        assertFalse(config.showTaskDetailGitActionGroup)
+        assertFalse(config.showTaskDetailPathActionGroup)
+        assertFalse(config.showWorkspaceGitActionGroup)
+        assertFalse(config.showWorkspacePathActionGroup)
+        assertTrue(config.showTaskAreaCopyIcons)
+        assertTrue(config.showTaskAreaBranchCopyIcons)
+        assertTrue(config.showTaskAreaRequirementCopyIcons)
+        assertTrue(config.showTaskAreaProjectNameCopyIcons)
     }
 
     @Test

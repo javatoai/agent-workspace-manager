@@ -489,16 +489,35 @@ class SettingsController internal constructor(
         )
     }
 
-    fun updateHiddenTaskDetailBranches(branches: List<String>, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
-        "正在保存分支显示规则…",
-        "分支显示规则已保存",
+    /** Persists all task-area action and inline-information visibility preferences together. */
+    fun updateTaskAreaToolGroupVisibility(
+        taskGit: Boolean,
+        taskPath: Boolean,
+        workspaceGit: Boolean,
+        workspacePath: Boolean,
+        branchCopyIcons: Boolean,
+        requirementCopyIcons: Boolean,
+        projectNameCopyIcons: Boolean,
+        onFailure: (Throwable) -> Unit = {},
+    ): Boolean = mutate(
+        "正在保存任务区工具栏设置…",
+        "任务区工具栏设置已保存",
         onFailure,
-        "branches",
+        "task-area",
         settingsOperations,
-    ) { config ->
-        val normalized = branches.map(String::trim).filter(String::isNotEmpty)
-        require(normalized.distinct().size == normalized.size) { "不展示分支名不能重复" }
-        config.copy(hiddenTaskDetailBranches = normalized)
+    ) {
+        it.copy(
+            showTaskDetailGitActionGroup = taskGit,
+            showTaskDetailPathActionGroup = taskPath,
+            showWorkspaceGitActionGroup = workspaceGit,
+            showWorkspacePathActionGroup = workspacePath,
+            // Saving the individual controls upgrades a legacy global-off choice into
+            // equivalent per-group values, so the user can selectively re-enable one.
+            showTaskAreaCopyIcons = true,
+            showTaskAreaBranchCopyIcons = branchCopyIcons,
+            showTaskAreaRequirementCopyIcons = requirementCopyIcons,
+            showTaskAreaProjectNameCopyIcons = projectNameCopyIcons,
+        )
     }
 
     fun updateBlockedGitWriteBranches(branches: List<String>, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(

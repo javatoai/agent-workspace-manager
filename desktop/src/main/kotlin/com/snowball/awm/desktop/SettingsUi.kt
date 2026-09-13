@@ -120,14 +120,38 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var defaultDevelopmentTool by remember(controller.config.defaultDevelopmentTool) {
         mutableStateOf(controller.config.defaultDevelopmentTool)
     }
-    var allowTemporaryDevelopmentToolSelection by remember(controller.config.allowTemporaryDevelopmentToolSelection) {
-        mutableStateOf(controller.config.allowTemporaryDevelopmentToolSelection)
+    var showTaskDetailGitActionGroup by remember(controller.config.showTaskDetailGitActionGroup) {
+        mutableStateOf(controller.config.showTaskDetailGitActionGroup)
+    }
+    var showTaskDetailPathActionGroup by remember(controller.config.showTaskDetailPathActionGroup) {
+        mutableStateOf(controller.config.showTaskDetailPathActionGroup)
+    }
+    var showWorkspaceGitActionGroup by remember(controller.config.showWorkspaceGitActionGroup) {
+        mutableStateOf(controller.config.showWorkspaceGitActionGroup)
+    }
+    var showWorkspacePathActionGroup by remember(controller.config.showWorkspacePathActionGroup) {
+        mutableStateOf(controller.config.showWorkspacePathActionGroup)
+    }
+    val taskAreaCopyIconPresentation = taskAreaCopyIconPresentationFor(controller.config)
+    var showTaskAreaBranchCopyIcons by remember(
+        controller.config.showTaskAreaCopyIcons,
+        controller.config.showTaskAreaBranchCopyIcons,
+    ) {
+        mutableStateOf(taskAreaCopyIconPresentation.showBranchNameCopyIcons)
+    }
+    var showTaskAreaRequirementCopyIcons by remember(
+        controller.config.showTaskAreaCopyIcons,
+        controller.config.showTaskAreaRequirementCopyIcons,
+    ) {
+        mutableStateOf(taskAreaCopyIconPresentation.showRequirementCopyIcons)
+    }
+    var showTaskAreaProjectNameCopyIcons by remember(
+        controller.config.showTaskAreaCopyIcons,
+        controller.config.showTaskAreaProjectNameCopyIcons,
+    ) {
+        mutableStateOf(taskAreaCopyIconPresentation.showProjectNameCopyIcons)
     }
     var terminal by remember(controller.config.terminalExecutable) { mutableStateOf(controller.config.terminalExecutable.orEmpty()) }
-    var hiddenBranchInput by remember { mutableStateOf("") }
-    var hiddenTaskDetailBranches by remember(controller.config.hiddenTaskDetailBranches) {
-        mutableStateOf(controller.config.hiddenTaskDetailBranches)
-    }
     var blockedGitBranchInput by remember { mutableStateOf("") }
     var blockedGitWriteBranches by remember(controller.config.blockedGitWriteBranches) {
         mutableStateOf(controller.config.blockedGitWriteBranches)
@@ -183,27 +207,60 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             currentToolConfigs(),
             defaultDevelopmentTool,
             terminal,
-            allowTemporaryDevelopmentToolSelection,
+            controller.config.allowTemporaryDevelopmentToolSelection,
         ) {
             DevelopmentToolType.entries.forEach { type ->
                 developmentToolPaths[type] = controller.config.developmentTools.firstOrNull { it.type == type }?.path.orEmpty()
             }
             defaultDevelopmentTool = controller.config.defaultDevelopmentTool
-            allowTemporaryDevelopmentToolSelection = controller.config.allowTemporaryDevelopmentToolSelection
             terminal = controller.config.terminalExecutable.orEmpty()
+        }
+    }
+    fun saveTaskAreaToolGroupVisibility(
+        taskGit: Boolean = showTaskDetailGitActionGroup,
+        taskPath: Boolean = showTaskDetailPathActionGroup,
+        workspaceGit: Boolean = showWorkspaceGitActionGroup,
+        workspacePath: Boolean = showWorkspacePathActionGroup,
+        branchCopyIcons: Boolean = showTaskAreaBranchCopyIcons,
+        requirementCopyIcons: Boolean = showTaskAreaRequirementCopyIcons,
+        projectNameCopyIcons: Boolean = showTaskAreaProjectNameCopyIcons,
+    ) {
+        val previousTaskGit = showTaskDetailGitActionGroup
+        val previousTaskPath = showTaskDetailPathActionGroup
+        val previousWorkspaceGit = showWorkspaceGitActionGroup
+        val previousWorkspacePath = showWorkspacePathActionGroup
+        val previousBranchCopyIcons = showTaskAreaBranchCopyIcons
+        val previousRequirementCopyIcons = showTaskAreaRequirementCopyIcons
+        val previousProjectNameCopyIcons = showTaskAreaProjectNameCopyIcons
+        showTaskDetailGitActionGroup = taskGit
+        showTaskDetailPathActionGroup = taskPath
+        showWorkspaceGitActionGroup = workspaceGit
+        showWorkspacePathActionGroup = workspacePath
+        showTaskAreaBranchCopyIcons = branchCopyIcons
+        showTaskAreaRequirementCopyIcons = requirementCopyIcons
+        showTaskAreaProjectNameCopyIcons = projectNameCopyIcons
+        controller.updateTaskAreaToolGroupVisibility(
+            taskGit,
+            taskPath,
+            workspaceGit,
+            workspacePath,
+            branchCopyIcons,
+            requirementCopyIcons,
+            projectNameCopyIcons,
+        ) {
+            showTaskDetailGitActionGroup = previousTaskGit
+            showTaskDetailPathActionGroup = previousTaskPath
+            showWorkspaceGitActionGroup = previousWorkspaceGit
+            showWorkspacePathActionGroup = previousWorkspacePath
+            showTaskAreaBranchCopyIcons = previousBranchCopyIcons
+            showTaskAreaRequirementCopyIcons = previousRequirementCopyIcons
+            showTaskAreaProjectNameCopyIcons = previousProjectNameCopyIcons
         }
     }
     fun saveMeegleProjects() {
         controller.updateMeegleProjects(meegleProjects.toSortedMap().values.toList()) {
             meegleProjects.clear()
             controller.config.meegleProjects.forEachIndexed { index, project -> meegleProjects[index] = project }
-        }
-    }
-    fun saveHiddenBranches(updated: List<String>) {
-        val previous = hiddenTaskDetailBranches
-        hiddenTaskDetailBranches = updated
-        controller.updateHiddenTaskDetailBranches(updated) {
-            hiddenTaskDetailBranches = previous
         }
     }
     fun saveBlockedGitBranches(updated: List<String>) {
@@ -382,12 +439,30 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     developmentToolPaths = developmentToolPaths,
                     defaultDevelopmentTool = defaultDevelopmentTool,
                     onDefaultDevelopmentToolChange = { defaultDevelopmentTool = it },
-                    allowTemporaryDevelopmentToolSelection = allowTemporaryDevelopmentToolSelection,
-                    onAllowTemporaryDevelopmentToolSelectionChange = { allowTemporaryDevelopmentToolSelection = it },
                     terminal = terminal,
                     onTerminalChange = { terminal = it },
                     saving = saving("tools"),
                     onSaveDevelopmentTools = ::saveDevelopmentTools,
+                )
+            }
+            if (selectedSection == "task-area") item {
+                SettingsTaskAreaSection(
+                    controller = controller,
+                    showTaskDetailGitActionGroup = showTaskDetailGitActionGroup,
+                    onShowTaskDetailGitActionGroupChange = { saveTaskAreaToolGroupVisibility(taskGit = it) },
+                    showTaskDetailPathActionGroup = showTaskDetailPathActionGroup,
+                    onShowTaskDetailPathActionGroupChange = { saveTaskAreaToolGroupVisibility(taskPath = it) },
+                    showWorkspaceGitActionGroup = showWorkspaceGitActionGroup,
+                    onShowWorkspaceGitActionGroupChange = { saveTaskAreaToolGroupVisibility(workspaceGit = it) },
+                    showWorkspacePathActionGroup = showWorkspacePathActionGroup,
+                    onShowWorkspacePathActionGroupChange = { saveTaskAreaToolGroupVisibility(workspacePath = it) },
+                    showTaskAreaBranchCopyIcons = showTaskAreaBranchCopyIcons,
+                    onShowTaskAreaBranchCopyIconsChange = { saveTaskAreaToolGroupVisibility(branchCopyIcons = it) },
+                    showTaskAreaRequirementCopyIcons = showTaskAreaRequirementCopyIcons,
+                    onShowTaskAreaRequirementCopyIconsChange = { saveTaskAreaToolGroupVisibility(requirementCopyIcons = it) },
+                    showTaskAreaProjectNameCopyIcons = showTaskAreaProjectNameCopyIcons,
+                    onShowTaskAreaProjectNameCopyIconsChange = { saveTaskAreaToolGroupVisibility(projectNameCopyIcons = it) },
+                    saving = saving("task-area"),
                 )
             }
             if (selectedSection == "cli") item {
@@ -401,16 +476,6 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     blockedGitWriteBranches = blockedGitWriteBranches,
                     saving = saving("git-write-policy"),
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
-                )
-            }
-            if (selectedSection == "git") item {
-                SettingsBranchesSection(
-                    controller = controller,
-                    hiddenBranchInput = hiddenBranchInput,
-                    onHiddenBranchInputChange = { hiddenBranchInput = it },
-                    hiddenTaskDetailBranches = hiddenTaskDetailBranches,
-                    saving = saving("branches"),
-                    onSaveHiddenBranches = ::saveHiddenBranches,
                 )
             }
             if (selectedSection == "genbu") item {
@@ -580,7 +645,6 @@ private fun formatByteSize(bytes: Long): String = when {
 
 internal fun normalizeSettingsSection(stored: String, supported: Set<String>): String = when (stored) {
     "advanced" -> "feishu"
-    "branches" -> if ("git" in supported) "git" else "basic"
     "genbu" -> if ("genbu" in supported) "genbu" else "basic"
     in supported -> stored
     else -> "basic"
@@ -947,8 +1011,11 @@ private fun SettingsPathsSection(
 @Composable
 private fun SettingsCliSection(controller: DesktopApplication) {
     val status = controller.cliInstallationStatus
+    val tagSkillStatus = controller.tagSkillInstallationStatus
     var confirmUninstall by remember { mutableStateOf(false) }
-    SettingsCard("AWM CLI", "将绿色包内置的 Agent CLI 安装为当前用户可用的 awm 命令。") {
+    var confirmTagSkillOverwrite by remember { mutableStateOf(false) }
+    var confirmTagSkillUninstall by remember { mutableStateOf(false) }
+    SettingsCard("AWM CLI", "将绿色包内置的 AWM CLI 安装为当前用户可用的 awm 命令。") {
         Text("安装状态", style = MaterialTheme.typography.titleSmall)
         SelectionContainer {
             Text(status.message, style = MaterialTheme.typography.bodyMedium)
@@ -964,7 +1031,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
         }
         if (status.supported) {
             Text(
-                "安装会复制绿色包中的 CLI 与 Java 运行时至当前用户的 LOCALAPPDATA，并将其命令目录加入用户 PATH；不需要管理员权限。完成后请重开终端；若从 Codex、IDE 或 Windows Terminal 打开终端，请重启对应应用。",
+                "安装会将绿色包中的 CLI 与 Java 运行时复制到当前用户目录，并将 awm 命令加入用户终端环境；不需要管理员权限。完成后请重开终端；若从 Codex 或 IDE 打开终端，请重启对应应用。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -993,10 +1060,57 @@ private fun SettingsCliSection(controller: DesktopApplication) {
             }
         } else {
             Text(
-                "macOS/Linux 的绿色包内提供 bin/awm；该一键安装入口目前只适用于 Windows。",
+                "当前系统暂不支持一键安装；可使用绿色包内的 bin/awm。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+    SettingsCard("AWM Tag Skill", "安装仅包含测试 Tag 操作的 \$awm Skill，不包含任务创建流程。") {
+        Text("安装状态", style = MaterialTheme.typography.titleSmall)
+        SelectionContainer {
+            Text(tagSkillStatus.message, style = MaterialTheme.typography.bodyMedium)
+        }
+        SelectionContainer {
+            Text(
+                "安装位置：${tagSkillStatus.destination}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            "安装会完整覆盖同名 Skill，以清理旧版遗留文件；不会安装或更新 awm CLI。完成后请重新打开或刷新 Skill 宿主。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    if (tagSkillStatus.destinationOccupied) confirmTagSkillOverwrite = true
+                    else controller.installTagSkill()
+                },
+                enabled = tagSkillStatus.bundledPayloadAvailable && !controller.settingsBusy,
+            ) {
+                Icon(Icons.Outlined.Description, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text(if (tagSkillStatus.installed) "更新 Tag Skill" else "安装 Tag Skill")
+            }
+            OutlinedButton(
+                onClick = controller::refreshTagSkillInstallationStatus,
+                enabled = !controller.settingsBusy,
+            ) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("刷新状态")
+            }
+            OutlinedButton(
+                onClick = { confirmTagSkillUninstall = true },
+                enabled = tagSkillStatus.uninstallAvailable && !controller.settingsBusy,
+            ) {
+                Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("卸载 Tag Skill")
+            }
         }
     }
     if (confirmUninstall) {
@@ -1010,6 +1124,34 @@ private fun SettingsCliSection(controller: DesktopApplication) {
             onConfirm = {
                 controller.uninstallCli()
                 confirmUninstall = false
+            },
+        )
+    }
+    if (confirmTagSkillOverwrite) {
+        ConfirmDialog(
+            title = if (tagSkillStatus.installed) "更新 AWM Tag Skill？" else "覆盖现有 Skill？",
+            message = "将完整覆盖 ${tagSkillStatus.destination} 中的现有内容，以安装当前应用内置的 AWM Tag Skill。该目录内未包含在新版本中的文件会被删除；awm CLI 不受影响。",
+            confirmLabel = if (tagSkillStatus.installed) "更新 Tag Skill" else "覆盖并安装",
+            destructive = true,
+            enabled = !controller.settingsBusy,
+            onDismiss = { confirmTagSkillOverwrite = false },
+            onConfirm = {
+                controller.installTagSkill()
+                confirmTagSkillOverwrite = false
+            },
+        )
+    }
+    if (confirmTagSkillUninstall) {
+        ConfirmDialog(
+            title = "卸载 AWM Tag Skill？",
+            message = "将删除 ${tagSkillStatus.destination} 及其全部内容。不会删除其他 Skill、awm CLI、任务或配置。",
+            confirmLabel = "卸载 Tag Skill",
+            destructive = true,
+            enabled = !controller.settingsBusy,
+            onDismiss = { confirmTagSkillUninstall = false },
+            onConfirm = {
+                controller.uninstallTagSkill()
+                confirmTagSkillUninstall = false
             },
         )
     }
@@ -1204,8 +1346,6 @@ private fun SettingsToolsSection(
     developmentToolPaths: MutableMap<DevelopmentToolType, String>,
     defaultDevelopmentTool: DevelopmentToolType,
     onDefaultDevelopmentToolChange: (DevelopmentToolType) -> Unit,
-    allowTemporaryDevelopmentToolSelection: Boolean,
-    onAllowTemporaryDevelopmentToolSelectionChange: (Boolean) -> Unit,
     terminal: String,
     onTerminalChange: (String) -> Unit,
     saving: Boolean,
@@ -1228,7 +1368,7 @@ private fun SettingsToolsSection(
     }
     SettingsCard(
         "开发工具",
-        "启动后会在后台静默探测尚未填写的工具路径；已有路径即使失效也不会被覆盖。未配置的工具不会出现在临时打开列表中。",
+        "启动后会在后台静默探测尚未填写的工具路径；已有路径即使失效也不会被覆盖。工作区快捷打开会使用该工作区配置的开发工具。",
     ) {
         AutoSaveStatus(controller, "tools")
         DevelopmentToolType.entries.forEach { type ->
@@ -1305,28 +1445,6 @@ private fun SettingsToolsSection(
                 )
             }
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("临时选择开发工具", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "默认关闭；开启后，任务工具栏和每个工作区的打开按钮旁显示开发工具下拉选择。不会在创建任务后自动打开服务。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = allowTemporaryDevelopmentToolSelection,
-                onCheckedChange = { enabled ->
-                    onAllowTemporaryDevelopmentToolSelectionChange(enabled)
-                    onSaveDevelopmentTools()
-                },
-                enabled = !controller.busy && !saving,
-            )
-        }
         val terminalResolution = controller.terminalCommandResolution()
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1376,70 +1494,119 @@ private fun SettingsToolsSection(
     }
 }
 
-internal fun terminalUsesApplicationPicker(osName: String): Boolean = osName.startsWith("Mac", ignoreCase = true)
-
 @Composable
-private fun SettingsBranchesSection(
+private fun SettingsTaskAreaSection(
     controller: DesktopApplication,
-    hiddenBranchInput: String,
-    onHiddenBranchInputChange: (String) -> Unit,
-    hiddenTaskDetailBranches: List<String>,
+    showTaskDetailGitActionGroup: Boolean,
+    onShowTaskDetailGitActionGroupChange: (Boolean) -> Unit,
+    showTaskDetailPathActionGroup: Boolean,
+    onShowTaskDetailPathActionGroupChange: (Boolean) -> Unit,
+    showWorkspaceGitActionGroup: Boolean,
+    onShowWorkspaceGitActionGroupChange: (Boolean) -> Unit,
+    showWorkspacePathActionGroup: Boolean,
+    onShowWorkspacePathActionGroupChange: (Boolean) -> Unit,
+    showTaskAreaBranchCopyIcons: Boolean,
+    onShowTaskAreaBranchCopyIconsChange: (Boolean) -> Unit,
+    showTaskAreaRequirementCopyIcons: Boolean,
+    onShowTaskAreaRequirementCopyIconsChange: (Boolean) -> Unit,
+    showTaskAreaProjectNameCopyIcons: Boolean,
+    onShowTaskAreaProjectNameCopyIconsChange: (Boolean) -> Unit,
     saving: Boolean,
-    onSaveHiddenBranches: (List<String>) -> Unit,
 ) {
-    SettingsCard("分支", "配置任务详情头部不展示的分支名；按完整名称区分大小写精确匹配。") {
-        AutoSaveStatus(controller, "branches")
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = hiddenBranchInput,
-                onValueChange = onHiddenBranchInputChange,
-                modifier = Modifier.weight(1f),
-                label = { Text("不展示的分支名") },
-                placeholder = { Text("例如 master") },
-                singleLine = true,
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        AutoSaveStatus(controller, "task-area")
+        SettingsCard("任务工具栏", "控制任务详情顶部的可选操作入口。") {
+            TaskAreaToolGroupSwitchRow(
+                title = "Git 工具组",
+                description = "显示提交、提交并推送和推送操作。",
+                checked = showTaskDetailGitActionGroup,
+                onCheckedChange = onShowTaskDetailGitActionGroupChange,
+                enabled = !controller.busy && !saving,
             )
-            OutlinedButton(
-                onClick = {
-                    val branch = hiddenBranchInput.trim()
-                    onSaveHiddenBranches(hiddenTaskDetailBranches + branch)
-                    onHiddenBranchInputChange("")
-                },
-                enabled = hiddenBranchInput.trim().isNotEmpty() && hiddenBranchInput.trim() !in hiddenTaskDetailBranches && !saving,
-            ) {
-                Icon(Icons.Outlined.Add, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("添加")
-            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            TaskAreaToolGroupSwitchRow(
+                title = "路径工具组",
+                description = "显示复制任务路径、终端和打开任务目录操作。",
+                checked = showTaskDetailPathActionGroup,
+                onCheckedChange = onShowTaskDetailPathActionGroupChange,
+                enabled = !controller.busy && !saving,
+            )
         }
-        if (hiddenTaskDetailBranches.isEmpty()) {
-            Text("尚未配置；所有实际分支都会显示在任务详情头部。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                hiddenTaskDetailBranches.forEach { branch ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    ) {
-                        Row(Modifier.padding(start = 10.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                            SelectionContainer { Text(branch, style = MaterialTheme.typography.bodyMedium) }
-                            ActionIconButton(
-                                "删除不展示分支 $branch",
-                                { onSaveHiddenBranches(hiddenTaskDetailBranches - branch) },
-                                Modifier.size(28.dp),
-                                enabled = !saving,
-                            ) { Icon(Icons.Outlined.Delete, "删除", Modifier.size(15.dp)) }
-                        }
-                    }
-                }
-            }
+        SettingsCard("工作区卡片工具栏", "控制每张 Worktree 卡片的可选操作入口。") {
+            TaskAreaToolGroupSwitchRow(
+                title = "Git 工具组",
+                description = "显示提交、提交并推送和推送操作。",
+                checked = showWorkspaceGitActionGroup,
+                onCheckedChange = onShowWorkspaceGitActionGroupChange,
+                enabled = !controller.busy && !saving,
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            TaskAreaToolGroupSwitchRow(
+                title = "路径工具组",
+                description = "显示终端、打开文件夹和复制路径操作。",
+                checked = showWorkspacePathActionGroup,
+                onCheckedChange = onShowWorkspacePathActionGroupChange,
+                enabled = !controller.busy && !saving,
+            )
+        }
+        SettingsCard("复制图标", "控制任务详情与 Worktree 卡片中的常驻信息复制操作。") {
+            TaskAreaToolGroupSwitchRow(
+                title = "分支名复制",
+                description = "显示 Worktree 卡片中分支名旁的复制图标。",
+                checked = showTaskAreaBranchCopyIcons,
+                onCheckedChange = onShowTaskAreaBranchCopyIconsChange,
+                enabled = !controller.busy && !saving,
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            TaskAreaToolGroupSwitchRow(
+                title = "需求链接和需求编号复制",
+                description = "显示需求链接与需求编号旁的复制图标。",
+                checked = showTaskAreaRequirementCopyIcons,
+                onCheckedChange = onShowTaskAreaRequirementCopyIconsChange,
+                enabled = !controller.busy && !saving,
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            TaskAreaToolGroupSwitchRow(
+                title = "项目名复制",
+                description = "显示 Worktree 卡片项目名旁的复制图标，不会复制模块名。",
+                checked = showTaskAreaProjectNameCopyIcons,
+                onCheckedChange = onShowTaskAreaProjectNameCopyIconsChange,
+                enabled = !controller.busy && !saving,
+            )
         }
     }
 }
+
+@Composable
+private fun TaskAreaToolGroupSwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+        )
+    }
+}
+
+internal fun terminalUsesApplicationPicker(osName: String): Boolean = osName.startsWith("Mac", ignoreCase = true)
 
 @Composable
 private fun SettingsGitSection(
@@ -2069,7 +2236,8 @@ private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "全局与组说明" -> Icons.AutoMirrored.Outlined.Article
     "任务说明模板" -> Icons.Outlined.Edit
     "开发工具" -> Icons.Outlined.Build
-    "AWM CLI" -> Icons.Outlined.Terminal
+    "任务工具栏", "工作区卡片工具栏" -> Icons.Outlined.AccountTree
+    "AWM CLI", "AWM Tag Skill" -> Icons.Outlined.Terminal
     "分支" -> Icons.Outlined.AccountTree
     "Git 环境" -> Icons.Outlined.Terminal
     "分支写保护" -> Icons.Outlined.Lock

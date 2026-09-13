@@ -3,6 +3,7 @@ package com.snowball.awm.desktop
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,9 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -39,49 +38,52 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskLifecycleStatus
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.WorkspaceGitHealthState
-import com.snowball.awm.core.WorkspaceGitHealth
 import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.health
 import com.snowball.awm.core.isHttpUrl
 import com.snowball.awm.core.RequirementReference
 import com.snowball.awm.core.RequirementMaterialsStatus
 
+internal const val TASK_DETAIL_HEADER_SIDE_BY_SIDE_MIN_WIDTH_DP = 720f
+
+internal enum class TaskDetailHeaderLayout { SIDE_BY_SIDE, STACKED }
+
+internal fun taskDetailHeaderLayout(availableWidthDp: Float): TaskDetailHeaderLayout =
+    if (availableWidthDp >= TASK_DETAIL_HEADER_SIDE_BY_SIDE_MIN_WIDTH_DP) {
+        TaskDetailHeaderLayout.SIDE_BY_SIDE
+    } else {
+        TaskDetailHeaderLayout.STACKED
+    }
+
+internal enum class TaskLifecyclePrimaryAction { ARCHIVE, RESTORE }
+
+internal fun taskLifecyclePrimaryAction(status: TaskLifecycleStatus): TaskLifecyclePrimaryAction =
+    if (status == TaskLifecycleStatus.ARCHIVED) TaskLifecyclePrimaryAction.RESTORE else TaskLifecyclePrimaryAction.ARCHIVE
+
 internal data class ParticipantSummary(
     val label: String,
     val details: String,
 )
 
-internal data class ActualBranchSummaryItem(
-    val branch: String,
-    val verified: Boolean,
-) {
-    val displayText: String get() = if (verified) branch else "$branch（未验证）"
-}
+/** Visibility of each persistent inline copy affordance in the task area. */
+internal data class TaskAreaCopyIconPresentation(
+    val showBranchNameCopyIcons: Boolean,
+    val showRequirementCopyIcons: Boolean,
+    val showProjectNameCopyIcons: Boolean,
+)
 
-internal fun actualBranchSummary(
-    workspaces: List<ServiceWorkspace>,
-    health: (ServiceWorkspace) -> WorkspaceGitHealth?,
-): List<ActualBranchSummaryItem> {
-    val byBranch = linkedMapOf<String, ActualBranchSummaryItem>()
-    workspaces.forEach { workspace ->
-        val actual = health(workspace)?.actualBranch?.trim()?.takeIf(String::isNotEmpty)
-        val item = ActualBranchSummaryItem(actual ?: workspace.branch, actual != null)
-        val previous = byBranch[item.branch]
-        if (previous == null || !previous.verified && item.verified) byBranch[item.branch] = item
-    }
-    return byBranch.values.toList()
-}
-
-internal fun visibleActualBranchSummary(
-    workspaces: List<ServiceWorkspace>,
-    health: (ServiceWorkspace) -> WorkspaceGitHealth?,
-    hiddenBranches: List<String>,
-): List<ActualBranchSummaryItem> = actualBranchSummary(workspaces, health)
-    .filterNot { it.branch in hiddenBranches }
+/** The former single toggle remains a compatibility fallback for already-saved configurations. */
+internal fun taskAreaCopyIconPresentationFor(config: AppConfig): TaskAreaCopyIconPresentation =
+    TaskAreaCopyIconPresentation(
+        showBranchNameCopyIcons = config.showTaskAreaCopyIcons && config.showTaskAreaBranchCopyIcons,
+        showRequirementCopyIcons = config.showTaskAreaCopyIcons && config.showTaskAreaRequirementCopyIcons,
+        showProjectNameCopyIcons = config.showTaskAreaCopyIcons && config.showTaskAreaProjectNameCopyIcons,
+    )
 
 internal fun participantSummary(role: String, names: List<String>, inlineLimit: Int = 2): ParticipantSummary? {
     val normalized = names.map(String::trim).filter(String::isNotEmpty).distinct()
@@ -105,77 +107,101 @@ internal fun TaskDetailHeader(
     val abnormalCount = physicalWorkspaces.count { workspace ->
         controller.gitHealth(workspace)?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)
     }
-    val branchSummary = visibleActualBranchSummary(
-        physicalWorkspaces,
-        controller::gitHealth,
-        controller.config.hiddenTaskDetailBranches,
-    )
     val requirementNumber = task.requirementId ?: RequirementReference.number(task.requirementLink)
-    Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f), shape = RoundedCornerShape(16.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                TaskHeaderMetadata(
-                    task,
-                    requirementState,
-                    groupName,
-                    showGroup,
-                    abnormalCount,
-                    onRetryRequirement = { controller.requirementController.refresh(task, force = true) },
+    // The detail page already provides the enclosing surface. Keeping another outlined card
+    // here made the first screenful read as a stack of unrelated boxes, especially on macOS.
+    // Let the task identity be a lightweight heading and reserve borders for workspace cards.
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        when (taskDetailHeaderLayout(maxWidth.value)) {
+            TaskDetailHeaderLayout.SIDE_BY_SIDE -> Row(
+                Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                TaskHeaderContent(
+                    controller = controller,
+                    task = task,
+                    requirementState = requirementState,
+                    groupName = groupName,
+                    showGroup = showGroup,
+                    abnormalCount = abnormalCount,
+                    requirementNumber = requirementNumber,
+                    modifier = Modifier.weight(1f),
+                )
+                TaskLifecycleActions(controller, task, onArchive, onDelete)
+            }
+            TaskDetailHeaderLayout.STACKED -> Column(
+                Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                TaskHeaderContent(
+                    controller = controller,
+                    task = task,
+                    requirementState = requirementState,
+                    groupName = groupName,
+                    showGroup = showGroup,
+                    abnormalCount = abnormalCount,
+                    requirementNumber = requirementNumber,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (task.requirementLink.isNotBlank()) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        TooltipText(
-                            text = task.requirementLink,
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isHttpUrl(task.requirementLink)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            onClick = if (isHttpUrl(task.requirementLink)) ({ controller.openUrl(task.requirementLink) }) else null,
-                        )
+                TaskLifecycleActions(controller, task, onArchive, onDelete, Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskHeaderContent(
+    controller: DesktopApplication,
+    task: TaskManifest,
+    requirementState: RequirementUiState,
+    groupName: String?,
+    showGroup: Boolean,
+    abnormalCount: Int,
+    requirementNumber: String?,
+    modifier: Modifier,
+) {
+    val copyIcons = taskAreaCopyIconPresentationFor(controller.config)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        TaskHeaderMetadata(
+            task,
+            requirementState,
+            groupName,
+            showGroup,
+            abnormalCount,
+            onRetryRequirement = { controller.requirementController.refresh(task, force = true) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (task.requirementLink.isNotBlank()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                TooltipText(
+                    text = task.requirementLink,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isHttpUrl(task.requirementLink)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = if (isHttpUrl(task.requirementLink)) ({ controller.openUrl(task.requirementLink) }) else null,
+                )
+                if (copyIcons.showRequirementCopyIcons) {
+                    ActionIconButton(
+                        label = "复制需求链接",
+                        onClick = { controller.copyText(task.requirementLink, "需求链接已复制") },
+                        modifier = Modifier.size(30.dp),
+                    ) { Icon(Icons.Outlined.ContentCopy, "复制需求链接", Modifier.size(15.dp)) }
+                    requirementNumber?.let { number ->
                         ActionIconButton(
-                            label = "复制需求编号或链接",
-                            onClick = { controller.copyText(task.requirementLink, "需求编号或链接已复制") },
+                            label = "复制需求编号 $number",
+                            onClick = { controller.copyText(number, "需求编号已复制") },
                             modifier = Modifier.size(30.dp),
-                        ) { Icon(Icons.Outlined.ContentCopy, "复制需求编号或链接", Modifier.size(15.dp)) }
-                        requirementNumber?.let { number ->
-                            ActionIconButton(
-                                label = "复制需求编号 $number",
-                                onClick = { controller.copyText(number, "需求编号已复制") },
-                                modifier = Modifier.size(30.dp),
-                            ) { Icon(Icons.Outlined.ContentCopy, "复制需求编号", Modifier.size(15.dp)) }
-                        }
-                    }
-                }
-                RequirementMaterialsDirectoryRow(controller, task)
-                if (branchSummary.isNotEmpty()) FlowRow(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    branchSummary.forEach { item ->
-                        Row(Modifier.widthIn(max = 680.dp), verticalAlignment = Alignment.CenterVertically) {
-                            SelectionContainer(Modifier.weight(1f, fill = false)) {
-                                Text(item.displayText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                            }
-                            ActionIconButton(
-                                label = "复制分支 ${item.branch}",
-                                onClick = { controller.copyText(item.branch, "分支已复制") },
-                                modifier = Modifier.size(30.dp),
-                            ) { Icon(Icons.Outlined.ContentCopy, "复制分支", Modifier.size(15.dp)) }
-                        }
+                        ) { Icon(Icons.Outlined.ContentCopy, "复制需求编号", Modifier.size(15.dp)) }
                     }
                 }
             }
-            TaskLifecycleActions(controller, task, onArchive, onDelete)
         }
+        RequirementMaterialsDirectoryRow(controller, task)
     }
 }
 
@@ -216,41 +242,63 @@ private fun TaskHeaderMetadata(
     onRetryRequirement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    FlowRow(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
         if (task.requirementLink.isNotBlank()) {
-            when (requirementState) {
-                RequirementUiState.Loading -> Text("正在读取需求标题…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                RequirementUiState.Failed -> Text("未读取到需求标题", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                is RequirementUiState.Loaded -> requirementState.metadata.title?.takeIf(String::isNotBlank)?.let { title ->
-                    TooltipText(
-                        text = title,
-                        modifier = Modifier.widthIn(max = 320.dp),
-                        style = MaterialTheme.typography.titleSmall,
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                when (requirementState) {
+                    RequirementUiState.Loading -> Text(
+                        "正在读取需求标题…",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    RequirementUiState.Failed -> Text(
+                        "未读取到需求标题",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    is RequirementUiState.Loaded -> requirementState.metadata.title?.takeIf(String::isNotBlank)?.let { title ->
+                        TooltipText(
+                            text = title,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+                    RequirementUiState.NotLoaded -> Spacer(Modifier.weight(1f))
                 }
-                RequirementUiState.NotLoaded -> Unit
-            }
-            RequirementStatePill(requirementState)
-            if (requirementState == RequirementUiState.Failed) {
-                ActionIconButton("重试读取需求", onRetryRequirement, Modifier.size(30.dp)) {
-                    Icon(Icons.Outlined.Refresh, "重试读取需求", Modifier.size(15.dp))
+                RequirementStatePill(requirementState)
+                if (requirementState == RequirementUiState.Failed) {
+                    ActionIconButton("重试读取需求", onRetryRequirement, Modifier.size(30.dp)) {
+                        Icon(Icons.Outlined.Refresh, "重试读取需求", Modifier.size(15.dp))
+                    }
                 }
             }
         }
-        if (task.health != WorkspaceHealth.READY) StatusPill(task.health.name)
-        if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) StatusPill("ARCHIVED")
-        if (task.requirementLink.isNotBlank()) {
-            (requirementState as? RequirementUiState.Loaded)?.metadata?.participants?.let { participants ->
-                participantSummary("测试", participants.qcOwners.map { it.name })?.let { ParticipantPill(it) }
-                participantSummary("产品", participants.productManagers.map { it.name })?.let { ParticipantPill(it) }
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (task.health != WorkspaceHealth.READY) StatusPill(task.health.name)
+            if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) StatusPill("ARCHIVED")
+            if (task.requirementLink.isNotBlank()) {
+                (requirementState as? RequirementUiState.Loaded)?.metadata?.participants?.let { participants ->
+                    participantSummary("测试", participants.qcOwners.map { it.name })?.let { ParticipantPill(it) }
+                    participantSummary("产品", participants.productManagers.map { it.name })?.let { ParticipantPill(it) }
+                }
             }
+            if (showGroup) MetaPill(groupName ?: task.groupId)
+            if (abnormalCount > 0) WorkspaceProblemPill("$abnormalCount 个工作区异常")
         }
-        if (showGroup) MetaPill(groupName ?: task.groupId)
-        if (abnormalCount > 0) WorkspaceProblemPill("$abnormalCount 个工作区异常")
     }
 }
 
@@ -262,21 +310,36 @@ private fun TaskLifecycleActions(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) {
-            OutlinedButton(onClick = { controller.restoreTask(task) }) {
+    FlowRow(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        when (taskLifecyclePrimaryAction(task.lifecycleStatus)) {
+            TaskLifecyclePrimaryAction.RESTORE -> OutlinedButton(
+                onClick = { controller.restoreTask(task) },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
                 Icon(Icons.Outlined.Restore, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("恢复")
             }
-        } else {
-            OutlinedButton(onClick = onArchive) {
+            TaskLifecyclePrimaryAction.ARCHIVE -> OutlinedButton(
+                onClick = onArchive,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
                 Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("归档")
             }
         }
         OutlinedButton(
             onClick = onDelete,
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
         ) {
-            Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("删除任务")
+            Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+            Text("删除任务")
         }
     }
 }
@@ -322,6 +385,14 @@ private fun ParticipantPill(summary: ParticipantSummary) {
 internal fun WorkspaceProblemPill(text: String) {
     val color = MaterialTheme.colorScheme.error
     Surface(color = color.copy(alpha = 0.10f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.25f))) {
-        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color, style = MaterialTheme.typography.labelSmall)
+        Text(
+            text,
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
     }
 }

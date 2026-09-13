@@ -3,7 +3,6 @@ package com.snowball.awm.desktop
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -26,7 +25,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Terminal
@@ -35,7 +33,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,14 +58,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.AgentTaskTemplate
+import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.RequirementMaterialsStatus
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.WorkspaceGitBatchMode
 import com.snowball.awm.core.WorkspaceGitBatchResult
-import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitStepState
 import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.WorkspaceModuleRemovalPreview
@@ -91,6 +87,18 @@ internal fun requirementMaterialsActionGroupFor(directory: String?): Requirement
         ?.takeIf { path -> runCatching { Files.isDirectory(Path.of(path), LinkOption.NOFOLLOW_LINKS) }.getOrDefault(false) }
         ?.let { RequirementMaterialsActionGroup.WORK_DATA }
 
+/** Visibility of the optional, task-level action groups in the detail toolbar. */
+internal data class TaskDetailToolbarPresentation(
+    val showPathActionGroup: Boolean,
+    val showGitActionGroup: Boolean,
+)
+
+internal fun taskDetailToolbarPresentationFor(config: AppConfig): TaskDetailToolbarPresentation =
+    TaskDetailToolbarPresentation(
+        showPathActionGroup = config.showTaskDetailPathActionGroup,
+        showGitActionGroup = config.showTaskDetailGitActionGroup,
+    )
+
 @Composable
 internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
     var notes by remember(task.folderName, task.updatedAt) { mutableStateOf("") }
@@ -107,8 +115,6 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     var showAddServices by remember(task.folderName) { mutableStateOf(false) }
     var showBatchTag by remember(task.folderName) { mutableStateOf(false) }
     var showBranchInfo by remember(task.folderName) { mutableStateOf(false) }
-    var workDataToolMenu by remember(task.folderName) { mutableStateOf(false) }
-    var showOnlyAbnormal by remember(task.folderName) { mutableStateOf(false) }
     var batchGitMode by remember(task.folderName) { mutableStateOf<WorkspaceGitBatchMode?>(null) }
     var lastBatchGitMode by remember(task.folderName) { mutableStateOf(WorkspaceGitBatchMode.PUSH) }
     var batchGitInitialSelection by remember(task.folderName) { mutableStateOf<Set<String>?>(null) }
@@ -123,6 +129,8 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     val group = controller.config.groups.firstOrNull { it.id == task.groupId }
     val tagWorkspaces = task.services.filter { controller.canBuildTag(task, it) }
     val physicalWorkspaces = controller.physicalWorkspaces(task)
+    val addableServices = controller.addableServices(task)
+    val toolbarPresentation = taskDetailToolbarPresentationFor(controller.config)
     val requirementState = controller.requirementController.stateFor(task)
     val requirementMaterialsDirectory = task.requirementMaterials
         .takeIf { it.status == RequirementMaterialsStatus.READY }
@@ -138,6 +146,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     val failedServiceIds = task.services.filter { it.health == WorkspaceHealth.FAILED }
         .map(ServiceWorkspace::groupServiceId).filter(String::isNotBlank).distinct()
     val tagOperationLoading = controller.busy && controller.activeOperation?.contains("Tag") == true
+    val allWorkspacesGitLoading = controller.busy && controller.activeOperation?.contains("全部工作区") == true
     val notesReady = !notesLoading && notesError == null
     LaunchedEffect(task.folderName, task.updatedAt, controller.agentRevision, notesLoadAttempt) {
         notesLoading = true
@@ -188,7 +197,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Column(Modifier.fillMaxSize().padding(18.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             TaskDetailHeader(
                 controller = controller,
                 task = task,
@@ -200,73 +209,76 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                 onDelete = { confirmDelete = true },
             )
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                IconActionGroup {
-                    ActionIconButton("复制任务完整路径", { controller.copyText(controller.taskPath(task), "任务路径已复制") }, Modifier.size(34.dp)) { Icon(Icons.Outlined.ContentCopy, "复制任务路径", Modifier.size(18.dp)) }
-                    ActionIconButton("在任务目录打开终端", { controller.terminal(controller.taskPath(task)) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp)) }
-                    ActionIconButton("打开任务目录", { controller.openDirectory(controller.taskPath(task)) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.FolderOpen, "打开任务目录", Modifier.size(18.dp)) }
+                if (toolbarPresentation.showPathActionGroup) {
+                    IconActionGroup {
+                        ActionIconButton("复制任务完整路径", { controller.copyText(controller.taskPath(task), "任务路径已复制") }, Modifier.size(34.dp)) {
+                            Icon(Icons.Outlined.ContentCopy, "复制任务路径", Modifier.size(18.dp))
+                        }
+                        ActionIconButton("在任务目录打开终端", { controller.terminal(controller.taskPath(task)) }, Modifier.size(34.dp)) {
+                            Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
+                        }
+                        ActionIconButton("打开任务目录", { controller.openDirectory(controller.taskPath(task)) }, Modifier.size(34.dp)) {
+                            Icon(Icons.Outlined.FolderOpen, "打开任务目录", Modifier.size(18.dp))
+                        }
+                    }
                 }
                 if (tagWorkspaces.isNotEmpty()) {
                     IconActionGroup {
-                        ActionIconButton("批量测试Tag", { showBatchTag = true }, Modifier.size(34.dp), enabled = !controller.busy, loading = tagOperationLoading) { Icon(Icons.Outlined.Sell, "批量测试Tag", Modifier.size(18.dp)) }
+                        ActionIconButton("批量测试Tag", { showBatchTag = true }, Modifier.size(34.dp), enabled = !controller.busy, loading = tagOperationLoading) {
+                            Icon(Icons.Outlined.Sell, "批量测试Tag", Modifier.size(18.dp))
+                        }
                     }
                 }
-                GitActionIconGroup(
-                    // Selection and the core batch preflight enforce write protection per selected
-                    // workspace. A protected workspace must not prevent choosing other workspaces.
-                    enabled = !controller.busy && physicalWorkspaces.isNotEmpty(),
-                    scopeLabel = "全部工作区",
-                    loading = controller.busy && controller.activeOperation?.contains("全部工作区") == true,
-                    onCommit = { batchGitInitialSelection = null; controller.loadBatchGitPreviews(task); batchGitMode = WorkspaceGitBatchMode.COMMIT },
-                    onCommitAndPush = { batchGitInitialSelection = null; controller.loadBatchGitPreviews(task); batchGitMode = WorkspaceGitBatchMode.COMMIT_AND_PUSH },
-                    onPush = { batchGitInitialSelection = null; controller.loadBatchGitPreviews(task); batchGitMode = WorkspaceGitBatchMode.PUSH },
-                )
+                if (toolbarPresentation.showGitActionGroup) {
+                    GitActionIconGroup(
+                        // Selection and the core batch preflight enforce write protection per selected
+                        // workspace. A protected workspace must not prevent choosing other workspaces.
+                        enabled = !controller.busy && physicalWorkspaces.isNotEmpty(),
+                        loading = allWorkspacesGitLoading,
+                        scopeLabel = "全部工作区",
+                        onCommit = {
+                            batchGitInitialSelection = null
+                            controller.loadBatchGitPreviews(task)
+                            batchGitMode = WorkspaceGitBatchMode.COMMIT
+                        },
+                        onCommitAndPush = {
+                            batchGitInitialSelection = null
+                            controller.loadBatchGitPreviews(task)
+                            batchGitMode = WorkspaceGitBatchMode.COMMIT_AND_PUSH
+                        },
+                        onPush = {
+                            batchGitInitialSelection = null
+                            controller.loadBatchGitPreviews(task)
+                            batchGitMode = WorkspaceGitBatchMode.PUSH
+                        },
+                    )
+                }
                 IconActionGroup {
-                    if (controller.addableServices(task).isNotEmpty()) {
-                        ActionIconButton("添加服务", { showAddServices = true }, Modifier.size(34.dp)) { Icon(Icons.Outlined.Add, "添加服务", Modifier.size(18.dp)) }
-                    }
-                    ActionIconButton("查看分支信息", { showBranchInfo = true }, Modifier.size(34.dp)) { Icon(Icons.Outlined.AccountTree, "分支信息", Modifier.size(18.dp)) }
-                    Box {
-                        ActionIconButton("打开工作数据", { controller.openWorkData(task) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.Folder, "工作数据", Modifier.size(18.dp)) }
-                        if (temporaryDevelopmentToolSelectionEnabled(controller.config)) {
-                            AwmDropdownMenu(workDataToolMenu, onDismissRequest = { workDataToolMenu = false }) {
-                                controller.configuredDevelopmentTools().forEach { type ->
-                                    DropdownMenuItem(text = { Text(type.displayName) }, onClick = { workDataToolMenu = false; controller.openWorkData(task, type) })
-                                }
-                            }
+                    if (addableServices.isNotEmpty()) {
+                        ActionIconButton("添加服务", { showAddServices = true }, Modifier.size(34.dp)) {
+                            Icon(Icons.Outlined.Add, "添加服务", Modifier.size(18.dp))
                         }
+                    }
+                    ActionIconButton("查看分支信息", { showBranchInfo = true }, Modifier.size(34.dp)) {
+                        Icon(Icons.Outlined.AccountTree, "分支信息", Modifier.size(18.dp))
+                    }
+                    ActionIconButton("打开工作数据", { controller.openWorkData(task) }, Modifier.size(34.dp)) {
+                        Icon(Icons.Outlined.Folder, "工作数据", Modifier.size(18.dp))
                     }
                     if (requirementMaterialsActionGroup == RequirementMaterialsActionGroup.WORK_DATA) {
                         requirementMaterialsDirectory?.let { path ->
-                            ActionIconButton("打开资料目录", { controller.openDirectory(path) }, Modifier.size(34.dp)) { Icon(Icons.Outlined.FolderOpen, "打开资料目录", Modifier.size(18.dp)) }
-                            ActionIconButton("复制资料目录路径", { controller.copyText(path, "资料目录路径已复制") }, Modifier.size(34.dp)) { Icon(Icons.Outlined.ContentCopy, "复制资料目录路径", Modifier.size(18.dp)) }
+                            ActionIconButton("打开资料目录", { controller.openDirectory(path) }, Modifier.size(34.dp)) {
+                                Icon(Icons.Outlined.FolderOpen, "打开资料目录", Modifier.size(18.dp))
+                            }
+                            ActionIconButton("复制资料目录路径", { controller.copyText(path, "资料目录路径已复制") }, Modifier.size(34.dp)) {
+                                Icon(Icons.Outlined.ContentCopy, "复制资料目录路径", Modifier.size(18.dp))
+                            }
                         }
-                    }
-                    if (temporaryDevelopmentToolSelectionEnabled(controller.config)) {
-                        ActionIconButton("选择工作数据开发工具", { workDataToolMenu = true }, Modifier.size(30.dp)) { Icon(Icons.Outlined.KeyboardArrowDown, "选择开发工具", Modifier.size(17.dp)) }
                     }
                 }
             }
-            val abnormalWorkspaces = physicalWorkspaces.filter {
-                controller.gitHealth(it)?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)
-            }
-            val unpushed = physicalWorkspaces.count {
-                controller.gitHealth(it)?.pushState in setOf(LocalPushState.AHEAD, LocalPushState.REMOTE_BRANCH_MISSING, LocalPushState.NO_UPSTREAM)
-            }
-            Surface(
-                Modifier.fillMaxWidth().clickable(enabled = abnormalWorkspaces.isNotEmpty()) { showOnlyAbnormal = !showOnlyAbnormal },
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(10.dp),
-            ) {
-                Text(
-                    "${physicalWorkspaces.size} 个工作区 · ${physicalWorkspaces.size - abnormalWorkspaces.size} 个正常 · ${abnormalWorkspaces.size} 个异常 · $unpushed 个待推送" +
-                        if (showOnlyAbnormal) " · 正在仅显示异常" else "",
-                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (abnormalWorkspaces.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             val firstWorkspaceByService = physicalWorkspaces.groupBy(ServiceWorkspace::groupServiceId).mapValues { it.value.first() }
-            (if (showOnlyAbnormal) abnormalWorkspaces else physicalWorkspaces).forEach { workspace ->
+            physicalWorkspaces.forEach { workspace ->
                 WorkspaceCard(
                     controller,
                     task,

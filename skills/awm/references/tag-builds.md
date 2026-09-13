@@ -1,8 +1,8 @@
 # Tag builds
 
-Tag operations are immediate single-call commands over an existing task; they
-never use the plan/apply handshake, and they never require the executor to run
-Git or Meegle directly.
+Tag operations are immediate single-call commands over an existing task. They
+run the configured Git and Genbu integration themselves; callers should not
+replace them with direct Git or Meegle commands.
 
 `--task` always takes the task's directory name under the AWM task root. A
 record's own `folderName` is a display name and may differ, so always reuse the

@@ -2,6 +2,8 @@ package com.snowball.awm.desktop
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class WindowPreferencesTest {
     @Test
@@ -13,10 +15,58 @@ class WindowPreferencesTest {
     }
 
     @Test
-    fun `new window starts with a large desktop size`() {
+    fun `new window starts maximized at the desktop size`() {
         assertEquals(1600, WindowPreferences.Snapshot().width)
         assertEquals(980, WindowPreferences.Snapshot().height)
+        assertTrue(WindowPreferences.Snapshot().maximized)
         assertEquals("basic", WindowPreferences.Snapshot().settingsSection)
+        assertEquals(null, WindowPreferences.Snapshot().taskListPaneWidth)
+    }
+
+    @Test
+    fun `legacy window layouts migrate to maximized`() {
+        val restored = WindowPreferences.snapshotFor(
+            width = 800,
+            height = 391,
+            maximized = false,
+            layoutVersion = WindowPreferences.CURRENT_LAYOUT_VERSION - 1,
+        )
+
+        assertTrue(restored.maximized)
+        assertEquals(800, restored.width)
+        assertEquals(391, restored.height)
+    }
+
+    @Test
+    fun `current window layouts preserve a user restored floating window`() {
+        val restored = WindowPreferences.snapshotFor(
+            width = 1200,
+            height = 720,
+            maximized = false,
+            layoutVersion = WindowPreferences.CURRENT_LAYOUT_VERSION,
+        )
+
+        assertFalse(restored.maximized)
+        assertEquals(1200, restored.width)
+        assertEquals(720, restored.height)
+    }
+
+    @Test
+    fun `current maximized window layouts remain maximized`() {
+        assertTrue(
+            WindowPreferences.snapshotFor(
+                maximized = true,
+                layoutVersion = WindowPreferences.CURRENT_LAYOUT_VERSION,
+            ).maximized,
+        )
+    }
+
+    @Test
+    fun `task list pane width is retained in the presentation snapshot`() {
+        assertEquals(
+            316,
+            WindowPreferences.snapshotFor(taskListPaneWidth = 316).taskListPaneWidth,
+        )
     }
 
     @Test
@@ -28,7 +78,7 @@ class WindowPreferencesTest {
     }
 
     @Test
-    fun `settings selection restores supported keys and maps legacy advanced to feishu`() {
+    fun `settings selection restores supported keys and maps only active legacy keys`() {
         val supported = settingsNavigationSections().map { it.key }.toSet()
 
         assertEquals("logs", normalizeSettingsSection("logs", supported))
@@ -36,6 +86,6 @@ class WindowPreferencesTest {
         assertEquals("feishu", normalizeSettingsSection("advanced", supported))
         assertEquals("basic", normalizeSettingsSection("unknown", supported))
         assertEquals("basic", normalizeSettingsSection("overview", supported))
-        assertEquals("git", normalizeSettingsSection("branches", supported))
+        assertEquals("basic", normalizeSettingsSection("branches", supported))
     }
 }

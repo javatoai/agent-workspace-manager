@@ -229,8 +229,22 @@ data class AppConfig(
     val defaultDevelopmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
     /** Shows temporary IDE selectors beside the normal default-tool open actions. */
     val allowTemporaryDevelopmentToolSelection: Boolean = false,
-    /** Exact, case-sensitive branch names hidden only from the task-detail header summary. */
-    val hiddenTaskDetailBranches: List<String> = emptyList(),
+    /** Shows the batch Git action group in the task-detail toolbar. */
+    val showTaskDetailGitActionGroup: Boolean = false,
+    /** Shows the task-directory action group in the task-detail toolbar. */
+    val showTaskDetailPathActionGroup: Boolean = false,
+    /** Shows the Git action group in each Worktree card. */
+    val showWorkspaceGitActionGroup: Boolean = false,
+    /** Shows the directory action group in each Worktree card. */
+    val showWorkspacePathActionGroup: Boolean = false,
+    /** Compatibility fallback for the former single inline-copy visibility switch. */
+    val showTaskAreaCopyIcons: Boolean = true,
+    /** Shows inline branch-name copy affordances in task details and Worktree cards. */
+    val showTaskAreaBranchCopyIcons: Boolean = true,
+    /** Shows inline requirement-link and requirement-number copy affordances in task details. */
+    val showTaskAreaRequirementCopyIcons: Boolean = true,
+    /** Shows inline project-name copy affordances in Worktree cards. */
+    val showTaskAreaProjectNameCopyIcons: Boolean = true,
     /** Exact local branch names on which AWM refuses every commit or branch push. */
     val blockedGitWriteBranches: List<String> = listOf("master", "main"),
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
@@ -260,12 +274,6 @@ data class AppConfig(
         }
         require(developmentTools.map(DevelopmentToolConfig::type).distinct().size == developmentTools.size) {
             "同一种开发工具只能配置一次"
-        }
-        require(hiddenTaskDetailBranches.all { it.isNotBlank() && it == it.trim() }) {
-            "任务详情分支白名单不能包含空值或首尾空格"
-        }
-        require(hiddenTaskDetailBranches.distinct().size == hiddenTaskDetailBranches.size) {
-            "任务详情分支白名单不能重复"
         }
         require(blockedGitWriteBranches.all { it.isNotBlank() && it == it.trim() }) {
             "Git 写保护分支不能包含空值或首尾空格"

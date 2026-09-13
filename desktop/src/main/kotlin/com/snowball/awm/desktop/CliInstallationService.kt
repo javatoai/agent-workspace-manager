@@ -40,6 +40,28 @@ internal interface CliInstallationService {
     fun uninstall(): CliInstallationStatus
 }
 
+/** Selects the installer that owns the current user's command environment. */
+internal fun platformCliInstallationService(
+    osName: String = System.getProperty("os.name"),
+): CliInstallationService = when {
+    osName.startsWith("Windows", ignoreCase = true) -> WindowsCliInstallationService()
+    osName.startsWith("Mac", ignoreCase = true) -> MacCliInstallationService()
+    else -> UnsupportedCliInstallationService()
+}
+
+private class UnsupportedCliInstallationService : CliInstallationService {
+    override fun inspect(): CliInstallationStatus = CliInstallationStatus(
+        supported = false,
+        bundledPayloadAvailable = false,
+        installed = false,
+        message = "当前系统暂不支持 AWM CLI 的一键安装；请使用绿色包内的 bin/awm。",
+    )
+
+    override fun install(): CliInstallationStatus = error("当前系统不支持 AWM CLI 的一键安装")
+
+    override fun uninstall(): CliInstallationStatus = error("当前系统不支持 AWM CLI 的一键卸载")
+}
+
 /**
  * Installs the CLI from a Windows green package into the current user's local
  * application-data directory. Its dedicated packaged jlink runtime is copied

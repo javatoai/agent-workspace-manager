@@ -200,7 +200,7 @@ internal fun AddRepositoryDialog(controller: DesktopApplication, onDismiss: () -
                         }
                     }
                 }
-                Text("新增服务默认采用标准 Worktree；添加后可在服务配置中改为独立克隆。", style = MaterialTheme.typography.bodySmall)
+                Text("新增服务默认采用 Worktree；添加后可在服务配置中改为独立克隆。", style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = { Button(onClick = { onAdd(paths) }, enabled = paths.isNotEmpty() && !controller.busy) { Text("校验并添加") } },

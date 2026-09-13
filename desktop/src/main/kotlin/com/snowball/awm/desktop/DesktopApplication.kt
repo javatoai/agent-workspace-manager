@@ -325,8 +325,11 @@ class DesktopApplication(
     )
     var recentErrors by mutableStateOf(errorLogReader.latest())
         private set
-    private val cliInstallationService: CliInstallationService = WindowsCliInstallationService()
+    private val cliInstallationService: CliInstallationService = platformCliInstallationService()
     var cliInstallationStatus by mutableStateOf(cliInstallationService.inspect())
+        private set
+    private val tagSkillInstallationService: TagSkillInstallationService = PackagedTagSkillInstallationService()
+    var tagSkillInstallationStatus by mutableStateOf(tagSkillInstallationService.inspect())
         private set
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
     private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
@@ -476,6 +479,11 @@ class DesktopApplication(
     fun cancelMeegleOperation(): Boolean = meegleOperationRunner.cancel()
     fun refreshCliInstallationStatus() {
         cliInstallationStatus = cliInstallationService.inspect()
+        tagSkillInstallationStatus = tagSkillInstallationService.inspect()
+    }
+
+    fun refreshTagSkillInstallationStatus() {
+        tagSkillInstallationStatus = tagSkillInstallationService.inspect()
     }
 
     fun installCli(): Boolean = settingsOperationRunner.run(
@@ -492,6 +500,22 @@ class DesktopApplication(
         block = cliInstallationService::uninstall,
         onFailure = { refreshCliInstallationStatus() },
         onSuccess = { cliInstallationStatus = it },
+    )
+
+    fun installTagSkill(): Boolean = settingsOperationRunner.run(
+        activeMessage = "正在安装 AWM Tag Skill…",
+        successMessage = "AWM Tag Skill 已安装；请重新打开或刷新 Skill 宿主后使用 \$awm。",
+        block = tagSkillInstallationService::install,
+        onFailure = { refreshTagSkillInstallationStatus() },
+        onSuccess = { tagSkillInstallationStatus = it },
+    )
+
+    fun uninstallTagSkill(): Boolean = settingsOperationRunner.run(
+        activeMessage = "正在卸载 AWM Tag Skill…",
+        successMessage = "AWM Tag Skill 已卸载；已删除本机的 Skill 目录。",
+        block = tagSkillInstallationService::uninstall,
+        onFailure = { refreshTagSkillInstallationStatus() },
+        onSuccess = { tagSkillInstallationStatus = it },
     )
     val statusMessage: String? get() = operationCoordinator.statusMessage
     val errorMessage: String? get() = operationCoordinator.errorMessage
@@ -674,6 +698,25 @@ class DesktopApplication(
         allowTemporaryDevelopmentToolSelection: Boolean,
         onFailure: (Throwable) -> Unit = {},
     ) = settingsController.updateDevelopmentTools(tools, defaultTool, terminal, allowTemporaryDevelopmentToolSelection, onFailure)
+    fun updateTaskAreaToolGroupVisibility(
+        taskGit: Boolean,
+        taskPath: Boolean,
+        workspaceGit: Boolean,
+        workspacePath: Boolean,
+        branchCopyIcons: Boolean,
+        requirementCopyIcons: Boolean,
+        projectNameCopyIcons: Boolean,
+        onFailure: (Throwable) -> Unit = {},
+    ) = settingsController.updateTaskAreaToolGroupVisibility(
+        taskGit,
+        taskPath,
+        workspaceGit,
+        workspacePath,
+        branchCopyIcons,
+        requirementCopyIcons,
+        projectNameCopyIcons,
+        onFailure,
+    )
     fun terminalCommandResolution() = resolvedTerminal
     fun redetectDevelopmentTools() = detectDevelopmentToolsInBackground()
     fun resetDevelopmentToolToAutomatic(type: DevelopmentToolType) {
@@ -704,8 +747,6 @@ class DesktopApplication(
             }
         }
     }
-    fun updateHiddenTaskDetailBranches(branches: List<String>, onFailure: (Throwable) -> Unit = {}) =
-        settingsController.updateHiddenTaskDetailBranches(branches, onFailure)
     fun addGroup(name: String, onCompleted: () -> Unit = {}) = settingsController.addGroup(name, onCompleted)
     fun renameGroup(groupId: String, name: String, onCompleted: () -> Unit = {}) = settingsController.renameGroup(groupId, name, onCompleted)
     fun moveGroup(groupId: String, offset: Int) = settingsController.moveGroup(groupId, offset)

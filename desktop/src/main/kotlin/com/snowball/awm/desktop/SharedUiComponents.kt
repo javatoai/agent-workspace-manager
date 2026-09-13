@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Commit
+import androidx.compose.material.icons.outlined.Publish
 import androidx.compose.material.icons.outlined.Workspaces
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -32,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.compose.Markdown
@@ -98,11 +104,63 @@ internal fun ActionIconButton(
     }
 }
 
+/**
+ * Compact visual grouping for related icon-only desktop actions.
+ *
+ * Keep the group in shared UI so task-level and workspace-level toolbars present the
+ * same affordance instead of each recreating subtly different bordered containers.
+ */
+@Composable
+internal fun IconActionGroup(content: @Composable RowScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+    }
+}
+
+/** Shared Git action cluster used wherever a commit/push trio is offered. */
+@Composable
+internal fun GitActionIconGroup(
+    enabled: Boolean,
+    scopeLabel: String,
+    loading: Boolean = false,
+    onCommit: () -> Unit,
+    onCommitAndPush: () -> Unit,
+    onPush: () -> Unit,
+) {
+    IconActionGroup {
+        ActionIconButton("提交 $scopeLabel", onCommit, Modifier.size(34.dp), enabled, loading) {
+            Icon(Icons.Outlined.Commit, "提交", Modifier.size(18.dp))
+        }
+        ActionIconButton("提交并推送 $scopeLabel", onCommitAndPush, Modifier.size(34.dp), enabled, loading) {
+            Icon(Icons.Outlined.Publish, "提交并推送", Modifier.size(18.dp))
+        }
+        ActionIconButton("推送 $scopeLabel", onPush, Modifier.size(34.dp), enabled, loading) {
+            Icon(Icons.Outlined.CloudUpload, "推送", Modifier.size(18.dp))
+        }
+    }
+}
+
 @Composable
 internal fun StatusPill(text: String) {
     val color = MaterialTheme.colorScheme.statusColor(text)
     Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.18f))) {
-        Text(statusLabel(text), Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color, style = MaterialTheme.typography.labelSmall)
+        Text(
+            statusLabel(text),
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
     }
 }
 
@@ -144,7 +202,15 @@ private fun RequirementStatusPill(status: String) {
         RequirementStatusCategory.PAUSED, RequirementStatusCategory.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.18f))) {
-        Text(status, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color, style = MaterialTheme.typography.labelSmall)
+        Text(
+            status,
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
     }
 }
 
@@ -169,14 +235,30 @@ private fun NeutralRequirementPill(text: String) {
         shape = RoundedCornerShape(50),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color, style = MaterialTheme.typography.labelSmall)
+        Text(
+            text,
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
     }
 }
 
 @Composable
 internal fun MetaPill(text: String) {
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), shape = RoundedCornerShape(50)) {
-        Text(text, Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            text,
+            Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
     }
 }
 
@@ -206,7 +288,7 @@ internal fun MetricCard(title: String, value: String, caption: String, modifier:
 
 internal val WorkspaceStrategy.displayName: String
     get() = when (this) {
-        WorkspaceStrategy.STANDARD_WORKTREE -> "标准 Worktree"
+        WorkspaceStrategy.STANDARD_WORKTREE -> "Worktree"
         WorkspaceStrategy.INDEPENDENT_CLONE -> "独立克隆"
     }
 

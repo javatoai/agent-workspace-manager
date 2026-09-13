@@ -10,6 +10,7 @@ internal fun settingsNavigationSections(): List<SettingsNavigationSection> = lis
     SettingsNavigationSection("paths", "目录"),
     SettingsNavigationSection("groups", "服务与仓库"),
     SettingsNavigationSection("tools", "开发工具"),
+    SettingsNavigationSection("task-area", "任务区"),
     SettingsNavigationSection("agents", "协作说明"),
     SettingsNavigationSection("feishu", "Meegle"),
     SettingsNavigationSection("genbu", "Genbu"),

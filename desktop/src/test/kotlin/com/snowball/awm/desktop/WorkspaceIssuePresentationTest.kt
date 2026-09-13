@@ -19,7 +19,7 @@ class WorkspaceIssuePresentationTest {
     }
 
     @Test
-    fun `healthy workspace status stays beside the branch on the second row`() {
+    fun `healthy workspace status uses the normal compact presentation`() {
         val health = WorkspaceGitHealth(state = WorkspaceGitHealthState.READY)
 
         assertEquals(WorkspaceStatusPlacement.SECOND_ROW, workspaceStatusPlacement(health))

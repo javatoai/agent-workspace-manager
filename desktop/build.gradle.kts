@@ -113,6 +113,9 @@ val preparePortableCli = tasks.register<Sync>("preparePortableCli") {
     from(portableCliRuntime) {
         into("cli-runtime")
     }
+    from(rootProject.layout.projectDirectory.dir("skills/awm")) {
+        into("skills/awm")
+    }
     into(layout.buildDirectory.dir("app-resources/common"))
 }
 

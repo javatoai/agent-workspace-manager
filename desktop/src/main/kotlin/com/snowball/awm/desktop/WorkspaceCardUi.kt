@@ -3,15 +3,17 @@ package com.snowball.awm.desktop
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -19,24 +21,19 @@ import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FolderOpen
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.Publish
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -54,6 +51,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.snowball.awm.core.AppConfig
+import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
@@ -64,18 +63,55 @@ import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.health
 
-internal enum class WorkspaceCardLayout { SIDE_BY_SIDE }
+internal const val WORKSPACE_CARD_SIDE_BY_SIDE_MIN_WIDTH_DP = 860f
+private val WorkspaceCardSideActionChromeWidth = 86.dp
+private val WorkspaceCardSummaryMinimumWidth = 300.dp
+
+internal enum class WorkspaceCardLayout { SIDE_BY_SIDE, STACKED }
 
 internal enum class WorkspaceStatusPlacement { SECOND_ROW, THIRD_ROW }
 
-internal data class WorkspaceBranchRowAllocation(
+/** Wide cards place their action groups against the card's right edge. */
+internal fun workspaceCardActionsAlignToEnd(layout: WorkspaceCardLayout): Boolean =
+    layout == WorkspaceCardLayout.SIDE_BY_SIDE
+
+/** Keeps the project/service identity visible when one service has multiple modules. */
+internal fun workspaceCardTitle(serviceName: String, moduleName: String): String {
+    val project = serviceName.trim()
+    val module = moduleName.trim()
+    return when {
+        project.isBlank() -> module
+        module.isBlank() || module == project -> project
+        else -> "$project · $module"
+    }
+}
+
+/** The title may include a module, but copying the project always uses the service name alone. */
+internal fun workspaceProjectNameForCopy(serviceName: String): String = serviceName.trim()
+
+internal data class WorkspaceBranchCopyAllocation(
     val branchWidth: Int,
     val copyX: Int,
-    val statusX: Int,
 )
 
-internal fun workspaceCardLayout(availableWidthDp: Float): WorkspaceCardLayout =
-    WorkspaceCardLayout.SIDE_BY_SIDE
+internal fun workspaceCardLayout(availableWidthDp: Float): WorkspaceCardLayout = when {
+    availableWidthDp >= WORKSPACE_CARD_SIDE_BY_SIDE_MIN_WIDTH_DP -> WorkspaceCardLayout.SIDE_BY_SIDE
+    else -> WorkspaceCardLayout.STACKED
+}
+
+/** Keeps a short branch compact, while reserving its copy affordance when a long branch wraps. */
+internal fun workspaceBranchCopyAllocation(
+    availableWidth: Int,
+    naturalBranchWidth: Int,
+    copyWidth: Int,
+    gapWidth: Int,
+): WorkspaceBranchCopyAllocation {
+    val branchCopyGap = if (naturalBranchWidth > 0 && copyWidth > 0) gapWidth else 0
+    val maximumBranchWidth = (availableWidth - copyWidth - branchCopyGap).coerceAtLeast(0)
+    val branchWidth = naturalBranchWidth.coerceIn(0, maximumBranchWidth)
+    val copyX = branchWidth + if (branchWidth > 0 && copyWidth > 0) gapWidth else 0
+    return WorkspaceBranchCopyAllocation(branchWidth, copyX)
+}
 
 internal fun workspaceStatusPlacement(health: WorkspaceGitHealth?): WorkspaceStatusPlacement =
     if (health?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)) {
@@ -84,21 +120,32 @@ internal fun workspaceStatusPlacement(health: WorkspaceGitHealth?): WorkspaceSta
         WorkspaceStatusPlacement.SECOND_ROW
     }
 
-internal fun workspaceBranchRowAllocation(
-    availableWidth: Int,
-    naturalBranchWidth: Int,
-    copyWidth: Int,
-    statusWidth: Int,
-    gapWidth: Int,
-): WorkspaceBranchRowAllocation {
-    val branchCopyGap = if (naturalBranchWidth > 0 && copyWidth > 0) gapWidth else 0
-    val copyStatusGap = if (copyWidth > 0 && statusWidth > 0) gapWidth else 0
-    val maximumBranchWidth = (availableWidth - copyWidth - statusWidth - branchCopyGap - copyStatusGap).coerceAtLeast(0)
-    val branchWidth = naturalBranchWidth.coerceIn(0, maximumBranchWidth)
-    val copyX = branchWidth + if (branchWidth > 0 && copyWidth > 0) gapWidth else 0
-    val statusX = copyX + copyWidth + if (copyWidth > 0 && statusWidth > 0) gapWidth else 0
-    return WorkspaceBranchRowAllocation(branchWidth, copyX, statusX)
+/** The card exposes one direct development-tool action: the workspace's own selection. */
+internal data class WorkspaceToolbarPresentation(
+    val showPathActionGroup: Boolean,
+    val showGitActionGroup: Boolean,
+    val showTagAction: Boolean,
+    val showAddModuleAction: Boolean,
+    val showRetryAction: Boolean,
+    val developmentTool: DevelopmentToolType,
+) {
+    val developmentToolActionLabel: String
+        get() = "使用 ${developmentTool.displayName} 打开"
 }
+
+internal fun workspaceToolbarPresentationFor(
+    workspace: ServiceWorkspace,
+    canBuildTag: Boolean,
+    showAddModule: Boolean,
+    config: AppConfig,
+): WorkspaceToolbarPresentation = WorkspaceToolbarPresentation(
+    showPathActionGroup = config.showWorkspacePathActionGroup,
+    showGitActionGroup = config.showWorkspaceGitActionGroup,
+    showTagAction = canBuildTag,
+    showAddModuleAction = showAddModule,
+    showRetryAction = workspace.health == WorkspaceHealth.FAILED && workspace.groupServiceId.isNotBlank(),
+    developmentTool = workspace.developmentTool,
+)
 
 @Composable
 internal fun WorkspaceCard(
@@ -114,49 +161,86 @@ internal fun WorkspaceCard(
     val branchVerified = !health?.actualBranch.isNullOrBlank()
     var commitMode by remember { mutableStateOf<String?>(null) }
     var commitMessage by remember(task, workspace) { mutableStateOf(controller.defaultCommitMessage(task, workspace)) }
-    var toolMenu by remember { mutableStateOf(false) }
     OutlinedCard(
         Modifier.fillMaxWidth(),
-        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)),
+        // The detail page already has a background. A plain card keeps a workspace distinct
+        // without adding another large tinted slab to an otherwise narrow detail pane.
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(Modifier.align(Alignment.Top), color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(11.dp)) {
-                Icon(
-                    if (workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
-                    null,
-                    Modifier.padding(9.dp).size(19.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val layout = workspaceCardLayout(maxWidth.value)
+            val sideBySideActionMaxWidth =
+                (maxWidth - WorkspaceCardSideActionChromeWidth - WorkspaceCardSummaryMinimumWidth)
+                    .coerceAtLeast(0.dp)
+            when (layout) {
+                WorkspaceCardLayout.SIDE_BY_SIDE -> {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        WorkspaceCardIdentity(workspace, Modifier.align(Alignment.Top))
+                        Spacer(Modifier.width(12.dp))
+                        WorkspaceCardSummary(
+                            controller = controller,
+                            task = task,
+                            workspace = workspace,
+                            health = health,
+                            displayedBranch = displayedBranch,
+                            branchVerified = branchVerified,
+                            modifier = Modifier.weight(1f).align(Alignment.Top),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        WorkspaceCardActions(
+                            controller = controller,
+                            task = task,
+                            workspace = workspace,
+                            onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
+                            onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
+                            showAddModule = showAddModule,
+                            onAddModule = onAddModule,
+                            canDeleteModule = task.services.size > 1,
+                            onDeleteModule = onDeleteModule,
+                            // The toolbar may use up to the available space, but should shrink
+                            // to its actual icon groups so the summary receives the rest.
+                            alignToEnd = workspaceCardActionsAlignToEnd(layout),
+                            modifier = Modifier.widthIn(max = sideBySideActionMaxWidth),
+                        )
+                    }
+                }
+
+                WorkspaceCardLayout.STACKED -> {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                            WorkspaceCardIdentity(workspace)
+                            Spacer(Modifier.width(12.dp))
+                            WorkspaceCardSummary(
+                                controller = controller,
+                                task = task,
+                                workspace = workspace,
+                                health = health,
+                                displayedBranch = displayedBranch,
+                                branchVerified = branchVerified,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        HorizontalDivider(Modifier.padding(top = 12.dp))
+                        WorkspaceCardActions(
+                            controller = controller,
+                            task = task,
+                            workspace = workspace,
+                            onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
+                            onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
+                            showAddModule = showAddModule,
+                            onAddModule = onAddModule,
+                            canDeleteModule = task.services.size > 1,
+                            onDeleteModule = onDeleteModule,
+                            alignToEnd = workspaceCardActionsAlignToEnd(layout),
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    }
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            WorkspaceCardSummary(
-                controller = controller,
-                task = task,
-                workspace = workspace,
-                health = health,
-                displayedBranch = displayedBranch,
-                branchVerified = branchVerified,
-                modifier = Modifier.weight(1f).align(Alignment.Top),
-            )
-            Spacer(Modifier.width(12.dp))
-            WorkspaceCardActions(
-                controller = controller,
-                task = task,
-                workspace = workspace,
-                toolMenu = toolMenu,
-                onToolMenuChange = { toolMenu = it },
-                onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
-                onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
-                showAddModule = showAddModule,
-                onAddModule = onAddModule,
-                canDeleteModule = task.services.size > 1,
-                onDeleteModule = onDeleteModule,
-                modifier = Modifier.padding(top = 1.dp),
-            )
         }
     }
     commitMode?.let { mode ->
@@ -189,6 +273,18 @@ internal fun WorkspaceCard(
 }
 
 @Composable
+private fun WorkspaceCardIdentity(workspace: ServiceWorkspace, modifier: Modifier = Modifier) {
+    Surface(modifier, color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+        Icon(
+            if (workspace.strategy == WorkspaceStrategy.STANDARD_WORKTREE) Icons.Outlined.AccountTree else Icons.Outlined.ContentCopy,
+            null,
+            Modifier.padding(8.dp).size(18.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+@Composable
 private fun WorkspaceCardSummary(
     controller: DesktopApplication,
     task: TaskManifest,
@@ -199,66 +295,86 @@ private fun WorkspaceCardSummary(
     modifier: Modifier,
 ) {
     val statusPlacement = workspaceStatusPlacement(health)
+    val projectName = workspaceProjectNameForCopy(workspace.serviceName)
+    val copyIcons = taskAreaCopyIconPresentationFor(controller.config)
     var confirmRerunBootstrap by remember(workspace.worktreePath) { mutableStateOf(false) }
     Column(modifier) {
-        Row(Modifier.heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                workspace.moduleName.ifBlank { workspace.serviceName },
-                Modifier.weight(1f, fill = false),
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            MetaPill(workspace.strategy.displayName)
-            if (workspace.health != WorkspaceHealth.READY) StatusPill(workspace.health.name)
-        }
-        WorkspaceBranchStatusRow(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 30.dp),
-            branch = {
-                SelectionContainer {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 28.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            WorkspaceBranchCopyRow(
+                modifier = Modifier.weight(1f).heightIn(min = 28.dp),
+                branch = {
                     Text(
-                        if (branchVerified) displayedBranch else "$displayedBranch（未验证）",
-                        style = MaterialTheme.typography.bodySmall,
+                        workspaceCardTitle(workspace.serviceName, workspace.moduleName),
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                copy = {
+                    if (copyIcons.showProjectNameCopyIcons && projectName.isNotBlank()) {
+                        ActionIconButton(
+                            "复制项目名",
+                            { controller.copyText(projectName, "项目名已复制") },
+                            Modifier.size(28.dp),
+                        ) {
+                            Icon(Icons.Outlined.ContentCopy, "复制项目名", Modifier.size(14.dp))
+                        }
+                    }
+                },
+            )
+            if (workspace.health != WorkspaceHealth.READY) WorkspaceCardStatusPill(workspace.health.name)
+        }
+        WorkspaceBranchCopyRow(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp),
+            branch = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        workspace.strategy.displayName,
+                        modifier = Modifier.widthIn(max = 84.dp),
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                }
-            },
-            copy = {
-                ActionIconButton(
-                    "复制分支名",
-                    { controller.copyText(displayedBranch, "分支已复制") },
-                    Modifier.size(28.dp),
-                ) { Icon(Icons.Outlined.ContentCopy, "复制分支名", Modifier.size(14.dp)) }
-            },
-            status = {
-                if (statusPlacement == WorkspaceStatusPlacement.SECOND_ROW) {
-                    if (health == null || health.state == WorkspaceGitHealthState.CHECKING) MetaPill("检查中")
-                    if (health?.state == WorkspaceGitHealthState.READY) {
-                        MetaPill(if (health.dirtyFileCount == 0) "无未提交" else "${health.dirtyFileCount} 个文件未提交")
-                        MetaPill(
-                            when (health.pushState) {
-                                LocalPushState.PUSHED -> "已推送"
-                                LocalPushState.AHEAD -> "${health.unpushedCommitCount} 个提交未推送"
-                                LocalPushState.REMOTE_BRANCH_MISSING -> "未发现远程分支"
-                                LocalPushState.NO_UPSTREAM -> "未关联远程"
-                                LocalPushState.FAILED -> "检查失败"
-                            },
+                    Text(
+                        " · ",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    SelectionContainer {
+                        Text(
+                            if (branchVerified) displayedBranch else "$displayedBranch（未验证）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
             },
+            copy = {
+                if (copyIcons.showBranchNameCopyIcons) {
+                    ActionIconButton(
+                        "复制分支名",
+                        { controller.copyText(displayedBranch, "分支已复制") },
+                        Modifier.size(28.dp),
+                    ) { Icon(Icons.Outlined.ContentCopy, "复制分支名", Modifier.size(14.dp)) }
+                }
+            },
         )
+        if (statusPlacement == WorkspaceStatusPlacement.SECOND_ROW) {
+            WorkspaceGitStatusLine(health)
+        }
         if (statusPlacement == WorkspaceStatusPlacement.THIRD_ROW && health != null) {
-            Row(
+            FlowRow(
                 Modifier.fillMaxWidth().heightIn(min = 30.dp),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.weight(1f, fill = false)) {
-                    WorkspaceProblemPill(workspaceIssueLabel(health))
-                }
+                WorkspaceCardProblemPill(workspaceIssueLabel(health))
                 ActionIconButton(
                     health.message ?: "查看修复方案",
                     { controller.inspectWorkspaceRepair(task, workspace) },
@@ -314,44 +430,119 @@ private fun WorkspaceCardSummary(
 }
 
 @Composable
-private fun WorkspaceBranchStatusRow(
+private fun WorkspaceBranchCopyRow(
     modifier: Modifier,
     branch: @Composable () -> Unit,
     copy: @Composable () -> Unit,
-    status: @Composable () -> Unit,
 ) {
     val gapWidth = with(LocalDensity.current) { 7.dp.roundToPx() }
-    val minimumHeight = with(LocalDensity.current) { 30.dp.roundToPx() }
+    val minimumHeight = with(LocalDensity.current) { 26.dp.roundToPx() }
     Layout(
         modifier = modifier,
         content = {
             Box { branch() }
             Box { copy() }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) { status() }
         },
     ) { measurables, constraints ->
         val looseConstraints = constraints.copy(minWidth = 0, minHeight = 0)
         val copyPlaceable = measurables[1].measure(looseConstraints)
-        val statusPlaceable = measurables[2].measure(looseConstraints)
-        val reservedGaps = gapWidth + if (statusPlaceable.width > 0) gapWidth else 0
-        val maximumBranchWidth = (
-            constraints.maxWidth - copyPlaceable.width - statusPlaceable.width - reservedGaps
-        ).coerceAtLeast(0)
-        val branchPlaceable = measurables[0].measure(looseConstraints.copy(maxWidth = maximumBranchWidth))
-        val allocation = workspaceBranchRowAllocation(
+        val copyGap = if (copyPlaceable.width > 0) gapWidth else 0
+        val branchMaximumWidth = (constraints.maxWidth - copyPlaceable.width - copyGap).coerceAtLeast(0)
+        val branchPlaceable = measurables[0].measure(looseConstraints.copy(maxWidth = branchMaximumWidth))
+        val allocation = workspaceBranchCopyAllocation(
             availableWidth = constraints.maxWidth,
             naturalBranchWidth = branchPlaceable.width,
             copyWidth = copyPlaceable.width,
-            statusWidth = statusPlaceable.width,
-            gapWidth = gapWidth,
+            gapWidth = copyGap,
         )
-        val height = maxOf(minimumHeight, branchPlaceable.height, copyPlaceable.height, statusPlaceable.height)
+        val height = maxOf(minimumHeight, branchPlaceable.height, copyPlaceable.height)
             .coerceIn(constraints.minHeight, constraints.maxHeight)
         layout(constraints.maxWidth, height) {
             branchPlaceable.placeRelative(0, (height - branchPlaceable.height) / 2)
             copyPlaceable.placeRelative(allocation.copyX, (height - copyPlaceable.height) / 2)
-            statusPlaceable.placeRelative(allocation.statusX, (height - statusPlaceable.height) / 2)
         }
+    }
+}
+
+@Composable
+private fun WorkspaceGitStatusLine(health: WorkspaceGitHealth?) {
+    val labels = workspaceGitStatusLabels(health)
+    if (labels.isEmpty()) return
+    Text(
+        "Git · ${labels.joinToString(" · ")}",
+        Modifier.fillMaxWidth().padding(top = 2.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+internal fun workspaceGitStatusLabels(health: WorkspaceGitHealth?): List<String> = when {
+    health == null || health.state == WorkspaceGitHealthState.CHECKING -> listOf("检查中")
+    health.state == WorkspaceGitHealthState.READY -> listOf(
+        if (health.dirtyFileCount == 0) "无未提交" else "${health.dirtyFileCount} 个文件未提交",
+        when (health.pushState) {
+            LocalPushState.PUSHED -> "已推送"
+            LocalPushState.AHEAD -> "${health.unpushedCommitCount} 个提交未推送"
+            LocalPushState.REMOTE_BRANCH_MISSING -> "未发现远程分支"
+            LocalPushState.NO_UPSTREAM -> "未关联远程"
+            LocalPushState.FAILED -> "检查失败"
+        },
+    )
+
+    else -> emptyList()
+}
+
+@Composable
+private fun WorkspaceCardStatusPill(text: String, modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.statusColor(text)
+    val label = when (text) {
+        "CREATING" -> "创建中"
+        "READY" -> "就绪"
+        "READY_WITH_WARNINGS" -> "有警告"
+        "FAILED" -> "失败"
+        "ARCHIVED" -> "已归档"
+        "SUCCESS" -> "成功"
+        "CONFLICT" -> "有冲突"
+        "PARTIAL" -> "部分完成"
+        "CREATED", "PREFLIGHT_PASSED", "SOURCE_BRANCH_PUSHED" -> "构建已中断"
+        else -> text
+    }
+    Surface(
+        modifier.widthIn(max = 180.dp),
+        color = color.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.18f)),
+    ) {
+        Text(
+            label,
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun WorkspaceCardProblemPill(text: String, modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.error
+    Surface(
+        modifier.widthIn(max = 260.dp),
+        color = color.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.25f)),
+    ) {
+        Text(
+            text,
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -360,52 +551,77 @@ private fun WorkspaceCardActions(
     controller: DesktopApplication,
     task: TaskManifest,
     workspace: ServiceWorkspace,
-    toolMenu: Boolean,
-    onToolMenuChange: (Boolean) -> Unit,
     onCommit: () -> Unit,
     onCommitAndPush: () -> Unit,
     showAddModule: Boolean,
     onAddModule: () -> Unit,
     canDeleteModule: Boolean,
     onDeleteModule: () -> Unit,
+    alignToEnd: Boolean,
     modifier: Modifier,
 ) {
     val actualBranch = controller.workspaceGitHealth[controller.workspaceKey(workspace)]?.actualBranch ?: workspace.branch
     val writeBlocked = controller.config.blockedGitWriteBranches.any { it.equals(actualBranch, ignoreCase = true) }
-    Row(
+    val workspaceLabel = workspace.moduleName.ifBlank { workspace.serviceName }
+    val workspaceLoading = controller.busy && controller.activeOperation?.contains(workspaceLabel) == true
+    val tagLoading = workspaceLoading && controller.activeOperation?.contains("Tag") == true
+    val toolbarPresentation = workspaceToolbarPresentationFor(
+        workspace = workspace,
+        canBuildTag = controller.canBuildTag(task, workspace),
+        showAddModule = showAddModule,
+        config = controller.config,
+    )
+    FlowRow(
         modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (alignToEnd) {
+            Arrangement.spacedBy(8.dp, Alignment.End)
+        } else {
+            Arrangement.spacedBy(8.dp)
+        },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
-        IconActionGroup {
-            ActionIconButton("在终端中打开", { controller.terminal(workspace.worktreePath) }, Modifier.size(34.dp)) {
-                Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
-            }
-            ActionIconButton("打开工作区文件夹", { controller.openDirectory(workspace.worktreePath) }, Modifier.size(34.dp)) {
-                Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
-            }
-            ActionIconButton("复制工作区完整路径", { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, Modifier.size(34.dp)) {
-                Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
+        if (toolbarPresentation.showPathActionGroup) {
+            IconActionGroup {
+                ActionIconButton("在终端中打开", { controller.terminal(workspace.worktreePath) }, Modifier.size(34.dp)) {
+                    Icon(Icons.Outlined.Terminal, "终端", Modifier.size(18.dp))
+                }
+                ActionIconButton("打开工作区文件夹", { controller.openDirectory(workspace.worktreePath) }, Modifier.size(34.dp)) {
+                    Icon(Icons.Outlined.FolderOpen, "打开文件夹", Modifier.size(18.dp))
+                }
+                ActionIconButton("复制工作区完整路径", { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, Modifier.size(34.dp)) {
+                    Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
+                }
             }
         }
-        GitActionIconGroup(
-            enabled = !controller.busy && !writeBlocked,
-            scopeLabel = workspace.moduleName.ifBlank { workspace.serviceName },
-            loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true,
-            onCommit = onCommit,
-            onCommitAndPush = onCommitAndPush,
-            onPush = { controller.pushWorkspace(task, workspace) },
-        )
-        if (controller.canBuildTag(task, workspace)) {
+        if (toolbarPresentation.showGitActionGroup) {
+            GitActionIconGroup(
+                enabled = !controller.busy && !writeBlocked,
+                scopeLabel = workspaceLabel,
+                loading = workspaceLoading,
+                onCommit = onCommit,
+                onCommitAndPush = onCommitAndPush,
+                onPush = { controller.pushWorkspace(task, workspace) },
+            )
+        }
+        if (toolbarPresentation.showTagAction) {
             IconActionGroup {
-                ActionIconButton("构建测试Tag", { controller.buildTag(task, workspace) }, Modifier.size(34.dp), enabled = !controller.busy, loading = controller.busy && controller.activeOperation?.contains(workspace.moduleName.ifBlank { workspace.serviceName }) == true && controller.activeOperation?.contains("Tag") == true) {
+                ActionIconButton(
+                    "构建测试Tag",
+                    { controller.buildTag(task, workspace) },
+                    Modifier.size(34.dp),
+                    enabled = !controller.busy,
+                    loading = tagLoading,
+                ) {
                     Icon(Icons.Outlined.Sell, "测试Tag", Modifier.size(18.dp))
                 }
             }
         }
         IconActionGroup {
-            if (showAddModule) ActionIconButton("为服务添加模块", onAddModule, Modifier.size(34.dp), enabled = !controller.busy) {
-                Icon(Icons.Outlined.Add, "添加模块", Modifier.size(18.dp))
+            if (toolbarPresentation.showAddModuleAction) {
+                ActionIconButton("为服务添加模块", onAddModule, Modifier.size(34.dp), enabled = !controller.busy) {
+                    Icon(Icons.Outlined.Add, "添加模块", Modifier.size(18.dp))
+                }
             }
             ActionIconButton("删除当前模块", onDeleteModule, Modifier.size(34.dp), enabled = canDeleteModule && !controller.busy) {
                 Icon(Icons.Outlined.Delete, "删除模块", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
@@ -413,43 +629,25 @@ private fun WorkspaceCardActions(
         }
         IconActionGroup {
             ActionIconButton(
-                "使用 ${workspace.developmentTool.displayName} 打开",
-                { controller.openWorkspace(workspace) },
+                toolbarPresentation.developmentToolActionLabel,
+                { controller.openWorkspace(workspace, toolbarPresentation.developmentTool) },
                 Modifier.size(34.dp),
-            ) { Icon(Icons.Outlined.Code, "打开开发工具", Modifier.size(18.dp)) }
-            if (temporaryDevelopmentToolSelectionEnabled(controller.config)) {
-                Box {
-                    ActionIconButton("选择开发工具", { onToolMenuChange(true) }, Modifier.size(30.dp)) {
-                        Icon(Icons.Outlined.KeyboardArrowDown, "选择开发工具", Modifier.size(17.dp))
-                    }
-                    AwmDropdownMenu(toolMenu, onDismissRequest = { onToolMenuChange(false) }) {
-                        controller.configuredDevelopmentTools().forEach { type ->
-                            DropdownMenuItem(text = { Text(type.displayName) }, onClick = { onToolMenuChange(false); controller.openWorkspace(workspace, type) })
-                        }
-                    }
+            ) {
+                Icon(Icons.Outlined.Code, "打开开发工具", Modifier.size(18.dp))
+            }
+        }
+        if (toolbarPresentation.showRetryAction) {
+            IconActionGroup {
+                ActionIconButton(
+                    "重试创建失败的服务",
+                    { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) },
+                    Modifier.size(34.dp),
+                    enabled = !controller.busy,
+                ) {
+                    Icon(Icons.Outlined.Refresh, "重试", Modifier.size(18.dp))
                 }
             }
         }
-        if (workspace.health == WorkspaceHealth.FAILED && workspace.groupServiceId.isNotBlank()) {
-            OutlinedButton(onClick = { controller.retryFailedServices(task, listOf(workspace.groupServiceId)) }, enabled = !controller.busy) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("重试")
-            }
-        }
-    }
-}
-
-@Composable
-internal fun IconActionGroup(content: @Composable RowScope.() -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            content = content,
-        )
     }
 }
 
@@ -473,26 +671,4 @@ internal fun workspaceIssueLabel(issue: WorkspaceGitIssue, actual: String?, expe
     WorkspaceGitIssue.DETACHED_HEAD -> "Detached HEAD"
     WorkspaceGitIssue.OPERATION_IN_PROGRESS -> "存在进行中的 Git 操作"
     WorkspaceGitIssue.INSPECTION_FAILED -> "Git 状态检查失败"
-}
-
-@Composable
-internal fun GitActionIconGroup(
-    enabled: Boolean,
-    scopeLabel: String,
-    loading: Boolean = false,
-    onCommit: () -> Unit,
-    onCommitAndPush: () -> Unit,
-    onPush: () -> Unit,
-) {
-    IconActionGroup {
-        ActionIconButton("提交 $scopeLabel", onCommit, Modifier.size(34.dp), enabled, loading) {
-            Icon(Icons.Outlined.Commit, "提交", Modifier.size(18.dp))
-        }
-        ActionIconButton("提交并推送 $scopeLabel", onCommitAndPush, Modifier.size(34.dp), enabled, loading) {
-            Icon(Icons.Outlined.Publish, "提交并推送", Modifier.size(18.dp))
-        }
-        ActionIconButton("推送 $scopeLabel", onPush, Modifier.size(34.dp), enabled, loading) {
-            Icon(Icons.Outlined.CloudUpload, "推送", Modifier.size(18.dp))
-        }
-    }
 }

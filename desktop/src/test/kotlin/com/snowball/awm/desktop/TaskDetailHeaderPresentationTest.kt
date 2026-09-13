@@ -1,14 +1,52 @@
 package com.snowball.awm.desktop
 
-import com.snowball.awm.core.DevelopmentToolType
-import com.snowball.awm.core.ServiceWorkspace
-import com.snowball.awm.core.WorkspaceGitHealth
-import com.snowball.awm.core.WorkspaceGitHealthState
+import com.snowball.awm.core.AppConfig
+import com.snowball.awm.core.TaskLifecycleStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class TaskDetailHeaderPresentationTest {
+    @Test
+    fun `inline copy icon groups are independently configurable and retain the legacy fallback`() {
+        val independentlyConfigured = taskAreaCopyIconPresentationFor(
+            AppConfig(
+                showTaskAreaBranchCopyIcons = false,
+                showTaskAreaRequirementCopyIcons = true,
+                showTaskAreaProjectNameCopyIcons = false,
+            ),
+        )
+
+        assertFalse(independentlyConfigured.showBranchNameCopyIcons)
+        assertTrue(independentlyConfigured.showRequirementCopyIcons)
+        assertFalse(independentlyConfigured.showProjectNameCopyIcons)
+
+        val legacyDisabled = taskAreaCopyIconPresentationFor(AppConfig(showTaskAreaCopyIcons = false))
+        assertFalse(legacyDisabled.showBranchNameCopyIcons)
+        assertFalse(legacyDisabled.showRequirementCopyIcons)
+        assertFalse(legacyDisabled.showProjectNameCopyIcons)
+    }
+
+    @Test
+    fun `header keeps metadata and lifecycle actions side by side at 720dp and above`() {
+        assertEquals(TaskDetailHeaderLayout.SIDE_BY_SIDE, taskDetailHeaderLayout(720f))
+        assertEquals(TaskDetailHeaderLayout.SIDE_BY_SIDE, taskDetailHeaderLayout(1_280f))
+    }
+
+    @Test
+    fun `header stacks lifecycle actions below metadata below 720dp`() {
+        assertEquals(TaskDetailHeaderLayout.STACKED, taskDetailHeaderLayout(719.9f))
+        assertEquals(TaskDetailHeaderLayout.STACKED, taskDetailHeaderLayout(0f))
+    }
+
+    @Test
+    fun `lifecycle primary action switches between archive and restore`() {
+        assertEquals(TaskLifecyclePrimaryAction.ARCHIVE, taskLifecyclePrimaryAction(TaskLifecycleStatus.ACTIVE))
+        assertEquals(TaskLifecyclePrimaryAction.RESTORE, taskLifecyclePrimaryAction(TaskLifecycleStatus.ARCHIVED))
+    }
+
     @Test
     fun `short participant list stays inline and long list collapses to count`() {
         assertEquals(
@@ -29,52 +67,4 @@ class TaskDetailHeaderPresentationTest {
         )
         assertNull(participantSummary("测试", listOf("", "  ")))
     }
-
-    @Test
-    fun `actual branch summary prefers runtime branches deduplicates and marks fallbacks`() {
-        val first = workspace("one", "feature/expected-one")
-        val duplicate = workspace("two", "feature/expected-two")
-        val unavailable = workspace("three", "feature/unverified")
-
-        val summary = actualBranchSummary(listOf(first, duplicate, unavailable)) { workspace ->
-            when (workspace.moduleId) {
-                "one", "two" -> WorkspaceGitHealth(WorkspaceGitHealthState.READY, actualBranch = "feature/current")
-                else -> WorkspaceGitHealth(WorkspaceGitHealthState.FAILED)
-            }
-        }
-
-        assertEquals(
-            listOf(
-                ActualBranchSummaryItem("feature/current", verified = true),
-                ActualBranchSummaryItem("feature/unverified", verified = false),
-            ),
-            summary,
-        )
-        assertEquals(listOf("feature/current", "feature/unverified（未验证）"), summary.map(ActualBranchSummaryItem::displayText))
-    }
-
-    @Test
-    fun `header hidden branches use exact case sensitive matching`() {
-        val master = workspace("master", "master")
-        val capitalized = workspace("capitalized", "Master")
-        val feature = workspace("feature", "feature/one")
-
-        val visible = visibleActualBranchSummary(
-            listOf(master, capitalized, feature),
-            health = { WorkspaceGitHealth(WorkspaceGitHealthState.READY, actualBranch = it.branch) },
-            hiddenBranches = listOf("master"),
-        )
-
-        assertEquals(listOf("Master", "feature/one"), visible.map(ActualBranchSummaryItem::branch))
-    }
-
-    private fun workspace(moduleId: String, branch: String) = ServiceWorkspace(
-        repositoryId = "repo-$moduleId",
-        serviceName = moduleId,
-        repositoryPath = "D:/repo-$moduleId",
-        worktreePath = "D:/task/$moduleId",
-        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
-        branch = branch,
-        moduleId = moduleId,
-    )
 }

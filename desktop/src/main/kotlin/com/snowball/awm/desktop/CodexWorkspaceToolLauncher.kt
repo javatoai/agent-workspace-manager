@@ -14,18 +14,21 @@ fun interface ExternalUriOpener {
 }
 
 /** Process boundary that allowlists the Codex scheme before handing it to the OS. */
-class SystemExternalUriOpener : ExternalUriOpener {
+class SystemExternalUriOpener(
+    private val osName: String = System.getProperty("os.name"),
+    private val processLauncher: DetachedProcessLauncher = SystemDetachedProcessLauncher(),
+) : ExternalUriOpener {
     override fun open(uri: URI) {
         require(uri.scheme.equals("codex", ignoreCase = true)) { "不允许打开非 Codex URI：${uri.scheme}" }
         when {
-            // Desktop.browse is browser-first. On Windows, hand the URI to the
-            // shell so it resolves the registered codex:// protocol handler.
-            System.getProperty("os.name").startsWith("Windows", ignoreCase = true) ->
-                ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", uri.toASCIIString()).start()
+            // Dispatch custom schemes through the OS shell rather than relying
+            // on Desktop.browse, so the registered Codex handler receives it.
+            osName.startsWith("Windows", ignoreCase = true) ->
+                processLauncher.launch(listOf("rundll32", "url.dll,FileProtocolHandler", uri.toASCIIString()))
+            isMacOs(osName) ->
+                processLauncher.launch(listOf("open", uri.toASCIIString()))
             Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) ->
                 Desktop.getDesktop().browse(uri)
-            System.getProperty("os.name").startsWith("Mac", ignoreCase = true) ->
-                ProcessBuilder("open", uri.toASCIIString()).start()
             else -> error("当前系统不支持打开 Codex 桌面深链")
         }
     }
@@ -49,7 +52,7 @@ class CodexWorkspaceToolLauncher(
     override fun open(context: TaskWorkspaceContext) {
         val path = context.taskDirectory.toAbsolutePath().normalize().toString()
         val encoded = URLEncoder.encode(path, StandardCharsets.UTF_8).replace("+", "%20")
-        uriOpener.open(URI.create("codex://new?path=$encoded"))
+        uriOpener.open(URI.create("codex://threads/new?path=$encoded"))
     }
 
     companion object {

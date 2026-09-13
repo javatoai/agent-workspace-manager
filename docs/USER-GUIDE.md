@@ -57,7 +57,7 @@ AWM 隔离的是代码工作目录和 Git 工作区；端口、数据库、Docke
 
 点击修复图标会先展示预计动作。失效的普通 Worktree 或独立克隆目录会先改名保留为同级备份；仅远程存在任务分支时必须明确确认复用。
 
-任务详情可逐个复制当前实际分支和路径、打开 IDE/终端/文件夹、查看工作数据、添加服务，以及在满足开关条件时构建 Tag。分支设置可隐藏头部中如 `master`、`develop` 的精确分支名，但工作区行仍完整展示。创建任务时，分支输入框可搜索所选标准 Worktree 服务的远程 Heads；下拉查询不会执行 fetch 或读取 Tag。
+任务详情可逐个复制当前实际分支和路径、打开 IDE/终端/文件夹、查看工作数据、添加服务，以及在满足开关条件时构建 Tag。创建任务时，分支输入框可搜索所选标准 Worktree 服务的远程 Heads；下拉查询不会执行 fetch 或读取 Tag。
 
 启动后，AWM 会在后台静默查找尚未填写路径的开发工具。Windows 只检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 已知目录和 PATH；macOS 只检查 `/Applications`、`~/Applications`、JetBrains Toolbox 已知目录和 PATH，不会联网或递归扫描磁盘。手动保存的路径优先级最高，即使当前无效也不会被自动结果覆盖；未找到时不会提示。
 

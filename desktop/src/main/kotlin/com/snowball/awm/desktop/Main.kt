@@ -34,7 +34,6 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AccountTree
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -62,6 +61,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -73,6 +73,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -81,6 +82,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -92,6 +97,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -217,12 +225,15 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
+            val navigationLayout = navigationLayoutFor(maxWidth.value)
             Row(Modifier.fillMaxSize()) {
-                Sidebar(controller) { controller.navigation = it }
+                Sidebar(controller, navigationLayout) { controller.navigation = it }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    TopBar(controller, onCreate = { showCreate = true })
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                    Box(
+                        Modifier.weight(1f).fillMaxWidth()
+                            .padding(top = navigationContentTopPaddingFor(controller.navigation).dp),
+                    ) {
                         when (controller.navigation) {
                             NavigationItem.TASKS -> TasksScreen(controller, archived = false) { showCreate = true }
                             NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true) { showCreate = true }
@@ -314,56 +325,115 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     }
 }
 
+/**
+ * The complete task view needs room for a task index and a readable detail pane.
+ * Below this width, an icon rail gives that content back 136dp without hiding a
+ * destination or requiring a separate navigation mode.
+ */
+internal const val COMPACT_NAVIGATION_MAX_WIDTH_DP = 1_180f
+internal const val EXPANDED_SIDEBAR_WIDTH_DP = 184f
+internal const val COMPACT_SIDEBAR_WIDTH_DP = 72f
+
+internal enum class NavigationLayout {
+    EXPANDED,
+    COMPACT,
+}
+
+internal enum class SidebarRefreshPlacement {
+    BRAND_ROW,
+    BELOW_BRAND,
+}
+
+internal fun navigationLayoutFor(availableWidthDp: Float): NavigationLayout =
+    if (availableWidthDp < COMPACT_NAVIGATION_MAX_WIDTH_DP) NavigationLayout.COMPACT else NavigationLayout.EXPANDED
+
+internal fun sidebarRefreshPlacement(layout: NavigationLayout): SidebarRefreshPlacement = when (layout) {
+    NavigationLayout.EXPANDED -> SidebarRefreshPlacement.BRAND_ROW
+    NavigationLayout.COMPACT -> SidebarRefreshPlacement.BELOW_BRAND
+}
+
+/** Non-task pages retain a small breathing space after their large page title is removed. */
+internal fun navigationContentTopPaddingFor(item: NavigationItem): Float =
+    if (item == NavigationItem.TASKS) 0f else 16f
+
+internal fun sidebarWidthFor(layout: NavigationLayout): Float = when (layout) {
+    NavigationLayout.EXPANDED -> EXPANDED_SIDEBAR_WIDTH_DP
+    NavigationLayout.COMPACT -> COMPACT_SIDEBAR_WIDTH_DP
+}
+
+/** Keeps badges legible in the narrow rail without spending horizontal space on large counts. */
+internal fun compactNavigationCountLabel(count: Int?): String? = when {
+    count == null || count <= 0 -> null
+    count > 9 -> "9+"
+    else -> count.toString()
+}
+
 @Composable
-private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem) -> Unit) {
+private fun Sidebar(
+    controller: DesktopApplication,
+    layout: NavigationLayout,
+    onSelected: (NavigationItem) -> Unit,
+) {
+    when (sidebarRefreshPlacement(layout)) {
+        SidebarRefreshPlacement.BRAND_ROW -> ExpandedSidebar(controller, onSelected)
+        SidebarRefreshPlacement.BELOW_BRAND -> CompactSidebar(controller, onSelected)
+    }
+}
+
+@Composable
+private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (NavigationItem) -> Unit) {
     Surface(
-        Modifier.width(232.dp).fillMaxHeight().border(
+        Modifier.width(EXPANDED_SIDEBAR_WIDTH_DP.dp).fillMaxHeight().border(
             BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp),
+            RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
         ),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp),
+        shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 18.dp)) {
-            Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = BrandBlue, shape = RoundedCornerShape(14.dp), shadowElevation = 3.dp) {
-                    Icon(Icons.Outlined.AccountTree, null, Modifier.padding(11.dp), tint = Color.White)
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 16.dp)) {
+            Row(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(color = BrandBlue, shape = RoundedCornerShape(12.dp), shadowElevation = 3.dp) {
+                    Icon(Icons.Outlined.AccountTree, "AWM", Modifier.padding(9.dp), tint = Color.White)
                 }
-                Spacer(Modifier.width(12.dp))
-                Text("AWM", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.width(10.dp))
+                Text("AWM", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                ActionIconButton(
+                    label = "刷新状态",
+                    onClick = controller.taskController::refresh,
+                    modifier = Modifier.size(34.dp),
+                    enabled = !controller.busy,
+                ) {
+                    Icon(Icons.Outlined.Refresh, "刷新状态", Modifier.size(18.dp))
+                }
             }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
             Text(
                 "工作空间",
-                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            NavigationItem.entries.filter { item ->
-                item != NavigationItem.TAG || controller.showsTagNavigation
-            }.forEach { item ->
+            visibleNavigationItems(controller).forEach { item ->
                 val selectedItem = item == controller.navigation
-                val icon = when (item) {
-                    NavigationItem.TASKS -> Icons.Outlined.Workspaces
-                    NavigationItem.ARCHIVED -> Icons.Outlined.Archive
-                    NavigationItem.SERVICES -> Icons.Outlined.Dns
-                    NavigationItem.TAG -> Icons.Outlined.Sell
-                    NavigationItem.SETTINGS -> Icons.Outlined.Settings
-                }
                 Surface(
-                    Modifier.fillMaxWidth().clickable { onSelected(item) },
+                    Modifier.fillMaxWidth().clickable(onClickLabel = item.title) { onSelected(item) },
                     color = if (selectedItem) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                     shape = RoundedCornerShape(13.dp),
                 ) {
-                    Row(Modifier.padding(horizontal = 10.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (selectedItem) {
-                            Surface(Modifier.width(4.dp).height(26.dp), color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(4.dp)) {}
-                            Spacer(Modifier.width(8.dp))
+                            Surface(Modifier.width(3.dp).height(24.dp), color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(3.dp)) {}
+                            Spacer(Modifier.width(7.dp))
                         } else {
-                            Spacer(Modifier.width(12.dp))
+                            Spacer(Modifier.width(10.dp))
                         }
-                        Icon(icon, null, tint = if (selectedItem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(11.dp))
+                        Icon(
+                            navigationIcon(item),
+                            null,
+                            Modifier.size(20.dp),
+                            tint = if (selectedItem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(9.dp))
                         Column(Modifier.weight(1f)) {
                             Text(item.title, fontWeight = if (selectedItem) FontWeight.SemiBold else FontWeight.Normal)
                             Text(item.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -375,12 +445,12 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
                         }
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
             }
             Spacer(Modifier.weight(1f))
-            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Security, null, Modifier.size(22.dp), tint = SuccessGreen)
-                Spacer(Modifier.width(8.dp))
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Security, "本地安全执行", Modifier.size(20.dp), tint = SuccessGreen)
+                Spacer(Modifier.width(7.dp))
                 Column {
                     Text("本地安全执行", style = MaterialTheme.typography.labelMedium)
                     Text("不上传源代码", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -391,35 +461,139 @@ private fun Sidebar(controller: DesktopApplication, onSelected: (NavigationItem)
 }
 
 @Composable
-private fun TopBar(controller: DesktopApplication, onCreate: () -> Unit) {
+@OptIn(ExperimentalMaterial3Api::class)
+private fun CompactSidebar(controller: DesktopApplication, onSelected: (NavigationItem) -> Unit) {
     Surface(
-        Modifier.fillMaxWidth().height(84.dp),
-        color = MaterialTheme.colorScheme.background,
+        Modifier.width(COMPACT_SIDEBAR_WIDTH_DP.dp).fillMaxHeight().border(
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
+        ),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
     ) {
-        Row(Modifier.fillMaxSize().padding(horizontal = 28.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column {
-                Text(controller.navigation.title, style = MaterialTheme.typography.headlineSmall)
-                Text(controller.navigation.pageDescription, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(
+            Modifier.fillMaxHeight().padding(horizontal = 10.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                tooltip = { PlainTooltip { Text("Agent Workspace Manager") } },
+                state = rememberTooltipState(),
+            ) {
+                Surface(
+                    Modifier.size(44.dp).semantics { contentDescription = "Agent Workspace Manager" },
+                    color = BrandBlue,
+                    shape = RoundedCornerShape(12.dp),
+                    shadowElevation = 2.dp,
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.AccountTree, null, Modifier.size(23.dp), tint = Color.White)
+                    }
+                }
             }
-            Spacer(Modifier.weight(1f))
-            OutlinedButton(
-                onClick = {
-                    controller.taskController.refresh()
-                },
+            Spacer(Modifier.height(6.dp))
+            ActionIconButton(
+                label = "刷新状态",
+                onClick = controller.taskController::refresh,
+                modifier = Modifier.size(34.dp),
                 enabled = !controller.busy,
             ) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("刷新状态")
+                Icon(Icons.Outlined.Refresh, "刷新状态", Modifier.size(18.dp))
             }
-            Spacer(Modifier.width(10.dp))
-            if (controller.navigation == NavigationItem.TASKS) Button(onClick = onCreate, enabled = !controller.needsTaskRoot) {
-                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("创建任务")
+            Spacer(Modifier.height(8.dp))
+            visibleNavigationItems(controller).forEach { item ->
+                CompactNavigationItem(
+                    item = item,
+                    count = navigationCount(controller, item),
+                    selected = item == controller.navigation,
+                    onSelected = { onSelected(item) },
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            Spacer(Modifier.weight(1f))
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                tooltip = { PlainTooltip { Text("本地安全执行\n不上传源代码") } },
+                state = rememberTooltipState(),
+            ) {
+                Surface(
+                    Modifier.size(44.dp).semantics { contentDescription = "本地安全执行，不上传源代码" },
+                    color = SuccessGreen.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Security, null, Modifier.size(22.dp), tint = SuccessGreen)
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun CompactNavigationItem(
+    item: NavigationItem,
+    count: Int?,
+    selected: Boolean,
+    onSelected: () -> Unit,
+) {
+    val countLabel = compactNavigationCountLabel(count)
+    val accessibilityLabel = buildString {
+        append(item.title)
+        append("，")
+        append(item.subtitle)
+        count?.let { append("，$it 项") }
+    }
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(accessibilityLabel) } },
+        state = rememberTooltipState(),
+    ) {
+        Surface(
+            Modifier
+                .size(48.dp)
+                .semantics { contentDescription = accessibilityLabel }
+                .clickable(onClickLabel = item.title, onClick = onSelected),
+            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            shape = RoundedCornerShape(13.dp),
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    navigationIcon(item),
+                    null,
+                    Modifier.size(22.dp),
+                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                countLabel?.let { label ->
+                    Surface(
+                        Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 2.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(
+                            label,
+                            Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun visibleNavigationItems(controller: DesktopApplication): List<NavigationItem> =
+    NavigationItem.entries.filter { item -> item != NavigationItem.TAG || controller.showsTagNavigation }
+
+private fun navigationIcon(item: NavigationItem): ImageVector = when (item) {
+    NavigationItem.TASKS -> Icons.Outlined.Workspaces
+    NavigationItem.ARCHIVED -> Icons.Outlined.Archive
+    NavigationItem.SERVICES -> Icons.Outlined.Dns
+    NavigationItem.TAG -> Icons.Outlined.Sell
+    NavigationItem.SETTINGS -> Icons.Outlined.Settings
 }
 
 private fun navigationCount(controller: DesktopApplication, item: NavigationItem): Int? = when (item) {
@@ -428,12 +602,3 @@ private fun navigationCount(controller: DesktopApplication, item: NavigationItem
     NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
     NavigationItem.TAG, NavigationItem.SETTINGS -> null
 }
-
-private val NavigationItem.pageDescription: String
-    get() = when (this) {
-        NavigationItem.TASKS -> "集中查看任务状态、工作区与任务说明"
-        NavigationItem.ARCHIVED -> "查看已归档任务并按需恢复"
-        NavigationItem.SERVICES -> "按组管理仓库、模块和工作区策略"
-        NavigationItem.TAG -> "从已启用的工作区安全构建测试Tag"
-        NavigationItem.SETTINGS -> "管理本地目录、服务、协作说明与开发工具"
-    }

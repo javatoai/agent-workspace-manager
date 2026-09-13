@@ -415,7 +415,7 @@ private fun ServiceModulesSection(
     repositoryId: String,
     controller: DesktopApplication,
 ) {
-    SectionHeader("工作区模块", "同一服务可同时包含标准 Worktree 和独立克隆模块")
+    SectionHeader("工作区模块", "同一服务可同时包含 Worktree 和独立克隆模块")
     modules.forEachIndexed { index, module ->
         ModuleEditor(module, repositoryId, controller, canDelete = modules.size > 1, onChange = { changed -> onModulesChange(modules.mapIndexed { i, value -> if (i == index) changed else value }) }, onDelete = { onModulesChange(modules.filterIndexed { i, _ -> i != index }) })
     }
