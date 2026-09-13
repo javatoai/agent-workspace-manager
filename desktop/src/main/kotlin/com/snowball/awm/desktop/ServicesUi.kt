@@ -70,7 +70,11 @@ internal fun ServicesScreen(controller: DesktopApplication) {
     }.filter { (service, repository) -> serviceMatchesQuery(service, repository, serviceQuery) }
     val showGroupNavigation = serviceGroupNavigationVisible(groupIds.size)
     Row(
-        Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
+        Modifier.fillMaxSize().padding(
+            start = MAIN_CONTENT_START_PADDING_DP.dp,
+            end = MAIN_CONTENT_END_PADDING_DP.dp,
+            bottom = MAIN_CONTENT_BOTTOM_PADDING_DP.dp,
+        ),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (showGroupNavigation) {

@@ -19,6 +19,7 @@ import com.snowball.awm.core.ManifestStore
 import com.snowball.awm.core.MeegleCliService
 import com.snowball.awm.core.MeegleCliStatus
 import com.snowball.awm.core.MeegleCommandSource
+import com.snowball.awm.core.MeegleProjectCatalog
 import com.snowball.awm.core.RepositoryConfig
 import com.snowball.awm.core.RequirementMaterialsDirectory
 import com.snowball.awm.core.RequirementMaterialsStatus
@@ -284,6 +285,103 @@ class DesktopApplicationTest {
 
             assertEquals(1, runner.calls)
             assertEquals(2, cli.statusCalls)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `Meegle login success refreshes authentication and project catalog`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-meegle-login-success")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val executablePath = root.resolve("meegle.cmd").toAbsolutePath().toString()
+        val store = ConfigStore(paths)
+        store.save(AppConfig(meegleExecutablePath = executablePath))
+        var authenticated = false
+        val cli = RecordingMeegleCliService(
+            statusProvider = { MeegleCliStatus(installed = true, authenticated = authenticated) },
+            loginAction = { authenticated = true },
+        )
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            meegleCliService = cli,
+            meegleProjectCatalog = MeegleProjectCatalog { emptyList() },
+            ioDispatcher = dispatcher,
+        )
+        try {
+            controller.refreshMeegleStatus()
+            advanceUntilIdle()
+            assertFalse(assertIs<MeegleCliState.Ready>(controller.meegleCliState).status.authenticated)
+
+            assertTrue(controller.loginMeegle())
+            assertTrue(controller.meegleBusy)
+            advanceUntilIdle()
+
+            assertTrue(assertIs<MeegleCliState.Ready>(controller.meegleCliState).status.authenticated)
+            assertEquals(listOf("project.feishu.cn"), cli.loginHosts)
+            assertIs<MeegleProjectCatalogState.Loaded>(controller.meegleProjectCatalogState)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `failed Meegle login keeps retry available after status refresh`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-meegle-login-retry")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val executablePath = root.resolve("meegle.cmd").toAbsolutePath().toString()
+        val store = ConfigStore(paths)
+        store.save(AppConfig(meegleExecutablePath = executablePath))
+        var authenticated = false
+        var failLogin = true
+        val cli = RecordingMeegleCliService(
+            statusProvider = {
+                MeegleCliStatus(
+                    installed = true,
+                    authenticated = authenticated,
+                    authenticationError = if (authenticated) null else "not logged in",
+                )
+            },
+            loginAction = {
+                if (failLogin) error("oauth unavailable") else authenticated = true
+            },
+        )
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            meegleCliService = cli,
+            meegleProjectCatalog = MeegleProjectCatalog { emptyList() },
+            ioDispatcher = dispatcher,
+        )
+        try {
+            controller.refreshMeegleStatus()
+            advanceUntilIdle()
+            val initialStatus = assertIs<MeegleCliState.Ready>(controller.meegleCliState).status
+
+            assertTrue(controller.loginMeegle())
+            advanceUntilIdle()
+
+            assertFalse(controller.meegleBusy)
+            assertContains(controller.meegleOperationError.orEmpty(), "oauth unavailable")
+            val failedStatus = assertIs<MeegleCliState.Ready>(controller.meegleCliState).status
+            assertTrue(meegleLoginActionEnabled(failedStatus, controller.meegleCliState, saving = false, busy = false))
+
+            failLogin = false
+            assertTrue(controller.loginMeegle())
+            advanceUntilIdle()
+
+            assertTrue(assertIs<MeegleCliState.Ready>(controller.meegleCliState).status.authenticated)
+            assertEquals(2, cli.loginCalls)
+            assertEquals(initialStatus.authenticationError, failedStatus.authenticationError)
         } finally {
             controller.close()
             Dispatchers.resetMain()
@@ -908,16 +1006,26 @@ class DesktopApplicationTest {
         }
     }
 
-    private class RecordingMeegleCliService : MeegleCliService {
+    private class RecordingMeegleCliService(
+        private val statusProvider: () -> MeegleCliStatus = { MeegleCliStatus(installed = true) },
+        private val loginAction: (String) -> Unit = {},
+    ) : MeegleCliService {
         var statusCalls = 0
             private set
+        var loginCalls = 0
+            private set
+        val loginHosts = mutableListOf<String>()
 
         override fun status(): MeegleCliStatus {
             statusCalls++
-            return MeegleCliStatus(installed = true)
+            return statusProvider()
         }
 
-        override fun login(host: String) = Unit
+        override fun login(host: String) {
+            loginCalls++
+            loginHosts += host
+            loginAction(host)
+        }
     }
 
     private class RecordingGitEnvironmentRunner(private val detectedPath: String) : CommandRunner {

@@ -95,6 +95,7 @@ import com.snowball.awm.core.GroupConfig
 import com.snowball.awm.core.GitConfigValue
 import com.snowball.awm.core.LocalGitEnvironmentSnapshot
 import com.snowball.awm.core.CommandVersionStatus
+import com.snowball.awm.core.MeegleCliStatus
 import com.snowball.awm.core.MeegleProjectConfig
 import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.TaskRootMigrationMode
@@ -320,7 +321,11 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     Box(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().fillMaxHeight().align(Alignment.TopStart)
-                .padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
+                .padding(
+                    start = MAIN_CONTENT_START_PADDING_DP.dp,
+                    end = MAIN_CONTENT_END_PADDING_DP.dp,
+                    bottom = MAIN_CONTENT_BOTTOM_PADDING_DP.dp,
+                ),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Surface(
@@ -650,7 +655,31 @@ internal fun normalizeSettingsSection(stored: String, supported: Set<String>): S
     else -> "basic"
 }
 
-private enum class CliDetectionPhase { IDLE, LOADING, READY, FAILED }
+internal enum class CliDetectionPhase { IDLE, LOADING, READY, AUTH_REQUIRED, FAILED }
+
+internal fun meegleCliDetectionPhase(state: MeegleCliState): CliDetectionPhase = when (state) {
+    MeegleCliState.Idle -> CliDetectionPhase.IDLE
+    is MeegleCliState.Loading -> CliDetectionPhase.LOADING
+    is MeegleCliState.Ready -> when {
+        !state.status.installed -> CliDetectionPhase.FAILED
+        !state.status.authenticated -> CliDetectionPhase.AUTH_REQUIRED
+        else -> CliDetectionPhase.READY
+    }
+    is MeegleCliState.Failed -> CliDetectionPhase.FAILED
+}
+
+internal fun meegleLoginActionVisible(status: MeegleCliStatus?): Boolean =
+    status?.installed == true && !status.authenticated
+
+internal fun meegleLoginActionEnabled(
+    status: MeegleCliStatus?,
+    cliState: MeegleCliState,
+    saving: Boolean,
+    busy: Boolean,
+): Boolean = meegleLoginActionVisible(status) &&
+    cliState !is MeegleCliState.Loading &&
+    !saving &&
+    !busy
 
 private fun genbuSourceLabel(source: GenbuCommandSource): String = when (source) {
     GenbuCommandSource.CONFIGURED -> "手动配置"
@@ -695,10 +724,12 @@ private fun CliCommandPanel(
         CliDetectionPhase.IDLE -> "尚未检测"
         CliDetectionPhase.LOADING -> "检测中"
         CliDetectionPhase.READY -> "检测成功"
+        CliDetectionPhase.AUTH_REQUIRED -> "未登录"
         CliDetectionPhase.FAILED -> "检测失败"
     }
     val phaseColor = when (phase) {
         CliDetectionPhase.READY -> SuccessGreen
+        CliDetectionPhase.AUTH_REQUIRED -> WarningAmber
         CliDetectionPhase.FAILED -> MaterialTheme.colorScheme.error
         CliDetectionPhase.IDLE, CliDetectionPhase.LOADING -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -2015,16 +2046,14 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
     }
     val (command, source) = controller.meegleCommandResolution()
     val saving = controller.settingsSaveState("feishu") == SettingsSaveState.SAVING
-    val phase = when {
-        cliState is MeegleCliState.Failed -> CliDetectionPhase.FAILED
-        cliState is MeegleCliState.Loading -> CliDetectionPhase.LOADING
-        cliState is MeegleCliState.Ready && cliState.status.installed -> CliDetectionPhase.READY
-        cliState is MeegleCliState.Ready -> CliDetectionPhase.FAILED
-        else -> CliDetectionPhase.IDLE
-    }
+    val phase = meegleCliDetectionPhase(cliState)
     val failure = when (cliState) {
         is MeegleCliState.Failed -> cliState.message
-        is MeegleCliState.Ready -> cliState.status.takeUnless { it.installed }?.let { "未安装或无法启动 Meegle CLI" }
+        is MeegleCliState.Ready -> when {
+            !cliState.status.installed -> "未安装或无法启动 Meegle CLI"
+            !cliState.status.authenticated -> cliState.status.authenticationError?.let { "登录状态检查失败：$it" } ?: "未登录"
+            else -> null
+        }
         else -> null
     }
     CliCommandPanel(
@@ -2057,8 +2086,18 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
                 if (current.authenticated && (current.expiresInMinutes ?: Long.MAX_VALUE) <= 5) {
                     Text("登录凭据即将过期，建议刷新或重新登录", style = MaterialTheme.typography.labelSmall, color = WarningAmber)
                 }
-                if (current.installed && !current.authenticated) {
-                    Button(onClick = controller::loginMeegle, enabled = !controller.meegleBusy) { Text("登录 Meegle") }
+                if (meegleLoginActionVisible(current)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = controller::copyMeegleLoginCommand,
+                            enabled = meegleLoginActionEnabled(current, cliState, saving, controller.meegleBusy),
+                        ) { Text("复制登录命令") }
+                        Text(
+                            "请在命令行执行复制的命令，完成后点击“重新检测”。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             if (controller.meegleBusy && controller.meegleOperationCancellable) {

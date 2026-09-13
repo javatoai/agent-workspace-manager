@@ -402,7 +402,7 @@ internal fun resolveTaskListPaneWidth(preferredWidthDp: Float?, availableWidthDp
  * small gutter before its own outlined cards begin. Keeping this at 8dp also
  * gives the detail pane back useful width on a Mac window.
  */
-internal fun taskScreenHorizontalPadding(): Float = 8f
+internal fun taskScreenHorizontalPadding(): Float = MAIN_CONTENT_START_PADDING_DP
 
 internal fun taskCreateEntryVisible(archived: Boolean): Boolean = !archived
 

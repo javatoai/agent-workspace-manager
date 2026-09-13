@@ -71,6 +71,61 @@ class MeegleCliServiceTest {
     }
 
     @Test
+    fun `auth status failure is represented as installed but unauthenticated with the command error`() {
+        val commands = mutableListOf<List<String>>()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                commands += command
+                return if (commands.size == 1) {
+                    CommandResult(0, "1.0.19\n", "")
+                } else {
+                    CommandResult(1, "", "not logged in")
+                }
+            }
+        }
+
+        val status = ProcessMeegleCliService(runner, isWindows = false).status()
+
+        assertTrue(status.installed)
+        assertFalse(status.authenticated)
+        assertEquals("1.0.19", status.version)
+        assertEquals("not logged in", status.authenticationError)
+        assertEquals(2, commands.size)
+    }
+
+    @Test
+    fun `version detection failure remains a status error`() {
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>) =
+                CommandResult(1, "", "unsupported version flag")
+        }
+
+        val error = assertFailsWith<IllegalStateException> {
+            ProcessMeegleCliService(runner, isWindows = false).status()
+        }
+
+        assertTrue(error.message.orEmpty().contains("读取 Meegle CLI 版本失败"))
+    }
+
+    @Test
+    fun `authentication protocol parse failure remains a status error`() {
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>) =
+                if (command.last() == "--version") {
+                    CommandResult(0, "1.0.19\n", "")
+                } else {
+                    CommandResult(0, "{invalid json", "")
+                }
+        }
+
+        val error = assertFailsWith<IllegalStateException> {
+            ProcessMeegleCliService(runner, isWindows = false).status()
+        }
+
+        assertTrue(error.message.orEmpty().contains("Meegle 登录状态 JSON 解析失败"))
+    }
+
+    @Test
     fun `status forwards the macOS login shell environment to both CLI calls`() {
         val environments = mutableListOf<Map<String, String>>()
         val runner = object : CommandRunner {
@@ -128,6 +183,7 @@ class MeegleCliServiceTest {
         assertEquals(listOf("meegle", "auth", "login", "--host", "project.feishu.cn", "--format", "json"), capturedCommand)
         assertEquals(Duration.ofMinutes(10), capturedTimeout)
     }
+
 }
 
 class MeegleCliMacEnvironmentIntegrationTest {

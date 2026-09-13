@@ -333,6 +333,9 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
 internal const val COMPACT_NAVIGATION_MAX_WIDTH_DP = 1_180f
 internal const val EXPANDED_SIDEBAR_WIDTH_DP = 184f
 internal const val COMPACT_SIDEBAR_WIDTH_DP = 72f
+internal const val MAIN_CONTENT_START_PADDING_DP = 8f
+internal const val MAIN_CONTENT_END_PADDING_DP = 28f
+internal const val MAIN_CONTENT_BOTTOM_PADDING_DP = 28f
 
 internal enum class NavigationLayout {
     EXPANDED,

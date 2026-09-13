@@ -139,6 +139,18 @@ internal fun tagAnnouncementCopyMessage(metadata: RequirementMetadata?): String 
     }
 }
 
+internal fun buildMeegleLoginCommand(
+    command: String,
+    osName: String = System.getProperty("os.name"),
+): String {
+    require(command.isNotBlank()) { "Meegle 命令不能为空" }
+    val displayed = TerminalLaunchCommand.display(
+        listOf(command, "auth", "login", "--host", "project.feishu.cn", "--format", "json"),
+        osName,
+    )
+    return if (osName.startsWith("Windows", ignoreCase = true)) "& $displayed" else displayed
+}
+
 data class DeleteRiskInspection(
     val loading: Boolean = true,
     val risks: List<DeleteRisk> = emptyList(),
@@ -622,6 +634,13 @@ class DesktopApplication(
         settingsController.updateMeegleExecutablePath(raw, onFailure)
 
     fun meegleCommandResolution(): Pair<String, MeegleCommandSource> = settingsController.meegleCommandResolution()
+
+    fun copyMeegleLoginCommand() {
+        copyText(
+            buildMeegleLoginCommand(meegleCommandResolution().first),
+            "Meegle 登录命令已复制，请在命令行执行；完成后点击重新检测",
+        )
+    }
 
     fun updateGitExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateGitExecutablePath(raw, onFailure)

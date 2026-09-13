@@ -35,6 +35,14 @@ class NavigationLayoutTest {
     }
 
     @Test
+    fun `task service and settings pages share the eight dp content start gutter`() {
+        assertEquals(8f, MAIN_CONTENT_START_PADDING_DP)
+        assertEquals(MAIN_CONTENT_START_PADDING_DP, taskScreenHorizontalPadding())
+        assertEquals(28f, MAIN_CONTENT_END_PADDING_DP)
+        assertEquals(28f, MAIN_CONTENT_BOTTOM_PADDING_DP)
+    }
+
+    @Test
     fun `compact badges omit empty counts and cap long counts`() {
         assertNull(compactNavigationCountLabel(null))
         assertNull(compactNavigationCountLabel(0))

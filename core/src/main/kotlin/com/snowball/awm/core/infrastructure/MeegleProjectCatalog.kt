@@ -22,6 +22,7 @@ data class MeegleCliStatus(
     val authenticated: Boolean = false,
     val host: String? = null,
     val expiresInMinutes: Long? = null,
+    val authenticationError: String? = null,
 )
 
 interface MeegleCliService {
@@ -53,7 +54,14 @@ class ProcessMeegleCliService(
             timeout = Duration.ofSeconds(15),
             environment = environment,
         )
-        check(authResult.succeeded) { "检查 Meegle 登录状态失败：${commandError(authResult)}" }
+        if (!authResult.succeeded) {
+            return MeegleCliStatus(
+                installed = true,
+                version = version,
+                authenticated = false,
+                authenticationError = commandError(authResult),
+            )
+        }
         val auth = runCatching { json.decodeFromString<AuthResponse>(authResult.stdout) }
             .getOrElse { error -> throw IllegalStateException("Meegle 登录状态 JSON 解析失败：${error.message}", error) }
         return MeegleCliStatus(
