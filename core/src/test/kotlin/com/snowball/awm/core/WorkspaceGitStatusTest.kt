@@ -22,19 +22,38 @@ class WorkspaceGitStatusTest {
     lateinit var temporary: Path
 
     @Test
-    fun `porcelain parser counts staged unstaged untracked conflict and rename once`() {
+    fun `porcelain parser reports file change kinds and counts rename once`() {
         val output = listOf(
             "1 M. N... 100644 100644 100644 a a staged.txt",
             "1 .M N... 100644 100644 100644 a a unstaged name.txt",
+            "1 A. N... 100644 100644 100644 a a added.txt",
+            "1 D. N... 100644 100644 100644 a a deleted.txt",
+            "1 T. N... 100644 100644 100644 a a type-changed.txt",
             "u UU N... 100644 100644 100644 100644 a a a conflict.txt",
             "? untracked.txt",
             "2 R. N... 100644 100644 100644 a a R100 renamed.txt",
             "old.txt",
+            "2 C. N... 100644 100644 100644 a a C100 copied.txt",
+            "source.txt",
             "! ignored.txt",
             "",
         ).joinToString("\u0000")
         assertEquals(
-            setOf("staged.txt", "unstaged name.txt", "conflict.txt", "untracked.txt", "renamed.txt"),
+            listOf(
+                WorkspaceGitFileChange("staged.txt", WorkspaceGitFileChangeKind.MODIFIED),
+                WorkspaceGitFileChange("unstaged name.txt", WorkspaceGitFileChangeKind.MODIFIED),
+                WorkspaceGitFileChange("added.txt", WorkspaceGitFileChangeKind.ADDED),
+                WorkspaceGitFileChange("deleted.txt", WorkspaceGitFileChangeKind.DELETED),
+                WorkspaceGitFileChange("type-changed.txt", WorkspaceGitFileChangeKind.TYPE_CHANGED),
+                WorkspaceGitFileChange("conflict.txt", WorkspaceGitFileChangeKind.CONFLICTED),
+                WorkspaceGitFileChange("untracked.txt", WorkspaceGitFileChangeKind.UNTRACKED),
+                WorkspaceGitFileChange("renamed.txt", WorkspaceGitFileChangeKind.RENAMED),
+                WorkspaceGitFileChange("copied.txt", WorkspaceGitFileChangeKind.COPIED),
+            ),
+            PorcelainV2Parser.changedFiles(output),
+        )
+        assertEquals(
+            setOf("staged.txt", "unstaged name.txt", "added.txt", "deleted.txt", "type-changed.txt", "conflict.txt", "untracked.txt", "renamed.txt", "copied.txt"),
             PorcelainV2Parser.changedPaths(output),
         )
     }
@@ -140,13 +159,20 @@ class WorkspaceGitStatusTest {
         val workspace = ServiceWorkspace("repo", "service", repository.toString(), repository.toString(), DevelopmentToolType.INTELLIJ_IDEA, "master", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, originUrl = remote.toString())
         assertEquals(LocalPushState.PUSHED, reader.read(workspace).pushState)
         Files.writeString(repository.resolve("untracked.txt"), "local")
-        assertEquals(1, reader.read(workspace).dirtyFileCount)
+        val dirty = reader.read(workspace)
+        assertEquals(1, dirty.dirtyFileCount)
+        assertEquals(
+            listOf(WorkspaceGitFileChange("untracked.txt", WorkspaceGitFileChangeKind.UNTRACKED)),
+            dirty.dirtyFiles,
+        )
 
         GitTestSupport.run(repository, "add", "untracked.txt")
         GitTestSupport.run(repository, "commit", "-m", "local commit")
         val ahead = reader.read(workspace)
         assertEquals(LocalPushState.AHEAD, ahead.pushState)
         assertEquals(1, ahead.unpushedCommitCount)
+        assertEquals(0, ahead.dirtyFileCount)
+        assertTrue(ahead.dirtyFiles.isEmpty())
 
         GitTestSupport.run(repository, "switch", "-c", "feature/no-upstream")
         val featureWorkspace = workspace.copy(branch = "feature/no-upstream")
@@ -235,6 +261,10 @@ class WorkspaceGitStatusTest {
 
         assertEquals(WorkspaceGitHealthState.READY, health.state)
         assertEquals(1, health.dirtyFileCount)
+        assertEquals(
+            listOf(WorkspaceGitFileChange("untracked.txt", WorkspaceGitFileChangeKind.UNTRACKED)),
+            health.dirtyFiles,
+        )
         assertEquals(LocalPushState.AHEAD, health.pushState)
         assertEquals(2, health.unpushedCommitCount)
         assertEquals(3, invocations.size)

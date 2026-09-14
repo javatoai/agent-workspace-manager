@@ -87,6 +87,9 @@ import com.snowball.awm.core.TagNavigationPolicy
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.WorkspaceToolLaunchService
 import com.snowball.awm.core.WorkspaceGitHealth
+import com.snowball.awm.core.WorkspaceGitFileChange
+import com.snowball.awm.core.WorkspaceGitFilePreview
+import com.snowball.awm.core.WorkspaceGitFilePreviewService
 import com.snowball.awm.core.WorkspaceGitStatusService
 import com.snowball.awm.core.WorkspaceGitOperationService
 import com.snowball.awm.core.WorkspaceGitBatchMode
@@ -274,6 +277,7 @@ class DesktopApplication(
     private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader(gitClient)),
+    private val gitFilePreviewService: WorkspaceGitFilePreviewService = WorkspaceGitFilePreviewService(gitClient),
     private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(gitClient, repositoryLock),
     private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(gitClient),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
@@ -377,6 +381,7 @@ class DesktopApplication(
             repositoryInspector = repositoryInspector,
             tasks = tasksApplication,
             gitStatus = gitStatusService,
+            gitFilePreviews = gitFilePreviewService,
             workspaceTools = workspaceToolLaunchService,
             gitOperations = gitOperationService,
             taskBranchCatalog = taskBranchCatalog,
@@ -1089,6 +1094,8 @@ class DesktopApplication(
         onCompleted: (WorkspaceGitBatchResult) -> Unit,
     ) = taskController.batchGit(task, mode, selectedWorkspaceKeys, commitMessages, expectedFingerprints, onCompleted)
     fun loadBatchGitPreviews(task: TaskManifest) = taskController.loadBatchGitPreviews(task)
+    suspend fun previewWorkspaceFile(worktreePath: String, change: WorkspaceGitFileChange): WorkspaceGitFilePreview =
+        taskController.previewWorkspaceFile(worktreePath, change)
 
 
     fun openWorkspace(workspace: ServiceWorkspace, type: com.snowball.awm.core.DevelopmentToolType = workspace.developmentTool) =

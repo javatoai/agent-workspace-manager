@@ -24,6 +24,9 @@ import com.snowball.awm.core.TaskBranchCatalog
 import com.snowball.awm.core.TaskBranchCatalogResult
 import com.snowball.awm.core.TaskBranchCatalogProgress
 import com.snowball.awm.core.WorkspaceGitHealth
+import com.snowball.awm.core.WorkspaceGitFileChange
+import com.snowball.awm.core.WorkspaceGitFilePreviewService
+import com.snowball.awm.core.WorkspaceGitFilePreview
 import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitStatusService
 import com.snowball.awm.core.WorkspaceToolLaunchService
@@ -87,6 +90,7 @@ class TaskController internal constructor(
     private val repositoryInspector: RepositoryInspector,
     private val tasks: TaskApplicationService,
     private val gitStatus: WorkspaceGitStatusService,
+    private val gitFilePreviews: WorkspaceGitFilePreviewService,
     private val workspaceTools: WorkspaceToolLaunchService,
     private val gitOperations: WorkspaceGitOperationService,
     private val taskBranchCatalog: TaskBranchCatalog,
@@ -528,6 +532,13 @@ class TaskController internal constructor(
         task.services.distinctBy(WorkspaceGitOperationService::workspacePathKey)
 
     fun workspaceKey(workspace: ServiceWorkspace): String = WorkspaceGitOperationService.workspacePathKey(workspace)
+
+    suspend fun previewWorkspaceFile(
+        worktreePath: String,
+        change: WorkspaceGitFileChange,
+    ): WorkspaceGitFilePreview = withContext(ioDispatcher) {
+        gitFilePreviews.preview(worktreePath, change)
+    }
 
     fun loadBatchGitPreviews(task: TaskManifest) {
         batchGitPreviews = BatchGitPreviewState.Loading

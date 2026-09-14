@@ -1,21 +1,29 @@
 package com.snowball.awm.desktop
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
@@ -31,6 +39,7 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,29 +48,49 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.snowball.awm.core.AppConfig
 import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
+import com.snowball.awm.core.WorkspaceGitFileChange
+import com.snowball.awm.core.WorkspaceGitFileChangeKind
+import com.snowball.awm.core.WorkspaceGitFilePreview
 import com.snowball.awm.core.WorkspaceGitHealth
 import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitIssue
+import com.snowball.awm.core.WorkspaceFileComparison
+import com.snowball.awm.core.WorkspaceFileComparisonLine
+import com.snowball.awm.core.WorkspaceFileComparisonLineKind
+import com.snowball.awm.core.WorkspaceFileComparisonRow
+import com.snowball.awm.core.WorkspaceFileContentOrigin
+import com.snowball.awm.core.WorkspaceFileLanguage
+import com.snowball.awm.core.WorkspaceFilePreviewMode
 import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.WorkspaceStrategy
 import com.snowball.awm.core.health
+import kotlinx.coroutines.CancellationException
 
 internal const val WORKSPACE_CARD_SIDE_BY_SIDE_MIN_WIDTH_DP = 860f
 private val WorkspaceCardSideActionChromeWidth = 86.dp
@@ -298,6 +327,8 @@ private fun WorkspaceCardSummary(
     val projectName = workspaceProjectNameForCopy(workspace.serviceName)
     val copyIcons = taskAreaCopyIconPresentationFor(controller.config)
     var confirmRerunBootstrap by remember(workspace.worktreePath) { mutableStateOf(false) }
+    var showDirtyFiles by remember(workspace.worktreePath) { mutableStateOf(false) }
+    val dirtyHealth = health?.takeIf(::workspaceGitStatusHasDirtyFiles)
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 28.dp),
@@ -365,7 +396,7 @@ private fun WorkspaceCardSummary(
             },
         )
         if (statusPlacement == WorkspaceStatusPlacement.SECOND_ROW) {
-            WorkspaceGitStatusLine(health)
+            WorkspaceGitStatusLine(health) { showDirtyFiles = true }
         }
         if (statusPlacement == WorkspaceStatusPlacement.THIRD_ROW && health != null) {
             FlowRow(
@@ -427,6 +458,14 @@ private fun WorkspaceCardSummary(
             controller.rerunWorkspaceBootstrap(task, workspace)
         }
     }
+    if (showDirtyFiles && dirtyHealth != null) {
+        WorkspaceDirtyFilesDialog(
+            controller = controller,
+            worktreePath = workspace.worktreePath,
+            health = dirtyHealth,
+            onDismiss = { showDirtyFiles = false },
+        )
+    }
 }
 
 @Composable
@@ -465,17 +504,51 @@ private fun WorkspaceBranchCopyRow(
 }
 
 @Composable
-private fun WorkspaceGitStatusLine(health: WorkspaceGitHealth?) {
+private fun WorkspaceGitStatusLine(
+    health: WorkspaceGitHealth?,
+    onShowDirtyFiles: () -> Unit,
+) {
     val labels = workspaceGitStatusLabels(health)
     if (labels.isEmpty()) return
-    Text(
-        "Git · ${labels.joinToString(" · ")}",
+    val hasDirtyFiles = workspaceGitStatusHasDirtyFiles(health)
+    val dirtyModifier = if (hasDirtyFiles) {
+        Modifier.clickable(onClickLabel = "查看未提交文件", onClick = onShowDirtyFiles)
+    } else {
+        Modifier
+    }
+    Row(
         Modifier.fillMaxWidth().padding(top = 2.dp),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Git · ",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            labels.first(),
+            modifier = dirtyModifier,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (hasDirtyFiles) WarningAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (labels.size > 1) {
+            Text(
+                " · ",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Text(
+                labels.drop(1).joinToString(" · "),
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 internal fun workspaceGitStatusLabels(health: WorkspaceGitHealth?): List<String> = when {
@@ -492,6 +565,663 @@ internal fun workspaceGitStatusLabels(health: WorkspaceGitHealth?): List<String>
     )
 
     else -> emptyList()
+}
+
+internal fun workspaceGitStatusHasDirtyFiles(health: WorkspaceGitHealth?): Boolean =
+    health?.state == WorkspaceGitHealthState.READY && health.dirtyFileCount > 0
+
+internal fun workspaceGitFileChangeLabel(kind: WorkspaceGitFileChangeKind): String = when (kind) {
+    WorkspaceGitFileChangeKind.MODIFIED -> "修改"
+    WorkspaceGitFileChangeKind.ADDED -> "新增"
+    WorkspaceGitFileChangeKind.DELETED -> "删除"
+    WorkspaceGitFileChangeKind.RENAMED -> "重命名"
+    WorkspaceGitFileChangeKind.COPIED -> "复制"
+    WorkspaceGitFileChangeKind.TYPE_CHANGED -> "类型变更"
+    WorkspaceGitFileChangeKind.CONFLICTED -> "冲突"
+    WorkspaceGitFileChangeKind.UNTRACKED -> "未跟踪"
+}
+
+internal fun workspaceGitFileChangeRow(change: WorkspaceGitFileChange): String =
+    "${workspaceGitFileChangeLabel(change.kind)} · ${change.path}"
+
+internal data class WorkspaceGitFileChangeGroup(
+    val kind: WorkspaceGitFileChangeKind,
+    val changes: List<WorkspaceGitFileChange>,
+)
+
+private val workspaceGitFileChangeGroupOrder = listOf(
+    WorkspaceGitFileChangeKind.MODIFIED,
+    WorkspaceGitFileChangeKind.ADDED,
+    WorkspaceGitFileChangeKind.UNTRACKED,
+    WorkspaceGitFileChangeKind.DELETED,
+    WorkspaceGitFileChangeKind.RENAMED,
+    WorkspaceGitFileChangeKind.COPIED,
+    WorkspaceGitFileChangeKind.TYPE_CHANGED,
+    WorkspaceGitFileChangeKind.CONFLICTED,
+)
+
+internal fun workspaceGitFileChangeGroups(changes: List<WorkspaceGitFileChange>): List<WorkspaceGitFileChangeGroup> {
+    val grouped = changes.groupBy(WorkspaceGitFileChange::kind)
+    return workspaceGitFileChangeGroupOrder.mapNotNull { kind ->
+        grouped[kind]?.let {
+            WorkspaceGitFileChangeGroup(
+                kind = kind,
+                changes = it.sortedWith(compareBy<WorkspaceGitFileChange> { change -> change.path.lowercase() }.thenBy { change -> change.path }),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceDirtyFilesDialog(
+    controller: DesktopApplication,
+    worktreePath: String,
+    health: WorkspaceGitHealth,
+    onDismiss: () -> Unit,
+) {
+    val groups = workspaceGitFileChangeGroups(health.dirtyFiles)
+    val changes = groups.flatMap(WorkspaceGitFileChangeGroup::changes)
+    var selectedPath by remember(health.dirtyFiles) { mutableStateOf(changes.firstOrNull()?.path) }
+    val selectedChange = changes.firstOrNull { it.path == selectedPath }
+    val selected = selectedChange
+    var selectedMode by remember(worktreePath, selected?.path) { mutableStateOf<WorkspaceFilePreviewMode?>(null) }
+    var comparisonDisplayMode by remember(worktreePath, selected?.path) {
+        mutableStateOf(WorkspaceComparisonDisplayMode.ALL_LINES)
+    }
+    var previewState by remember(worktreePath) {
+        mutableStateOf<WorkspaceFilePreviewState>(WorkspaceFilePreviewState.Empty)
+    }
+    LaunchedEffect(worktreePath, selected?.path) {
+        if (selected == null) {
+            previewState = WorkspaceFilePreviewState.Empty
+        } else {
+            previewState = WorkspaceFilePreviewState.Loading
+            previewState = try {
+                WorkspaceFilePreviewState.Loaded(
+                    controller.previewWorkspaceFile(worktreePath, selected),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                WorkspaceFilePreviewState.Failed(error.message ?: "无法读取文件")
+            }
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val dialogWidth = minOf(maxWidth * 0.90f, 1_800.dp)
+            val dialogHeight = minOf(maxHeight * 0.82f, 820.dp)
+            val fileListWidth = if (dialogWidth >= 1_400.dp) 360.dp else 300.dp
+            Surface(
+                Modifier.width(dialogWidth).height(dialogHeight),
+                shape = RoundedCornerShape(22.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("未提交文件（${health.dirtyFileCount}）", style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        "点击文件查看预览",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    Modifier.weight(1f).fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Surface(
+                        Modifier.width(fileListWidth).fillMaxHeight(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("文件列表", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "${changes.size} 个",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            if (groups.isEmpty()) {
+                                Box(
+                                    Modifier.fillMaxSize().padding(16.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        "当前 Git 状态未返回文件明细，请刷新后重试。",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else {
+                                Column(
+                                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    groups.forEach { group ->
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(
+                                                "${workspaceGitFileChangeLabel(group.kind)}（${group.changes.size}）",
+                                                Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                            group.changes.forEach { change ->
+                                                val selectedRow = change.path == selectedPath
+                                                Surface(
+                                                    Modifier.fillMaxWidth().clickable { selectedPath = change.path },
+                                                    color = if (selectedRow) {
+                                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.70f)
+                                                    } else {
+                                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)
+                                                    },
+                                                    shape = RoundedCornerShape(8.dp),
+                                                ) {
+                                                    Row(
+                                                        Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
+                                                        Text(
+                                                            workspaceGitFileChangeLabel(change.kind),
+                                                            Modifier.width(64.dp),
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                        Text(
+                                                            change.path,
+                                                            Modifier.weight(1f),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            maxLines = 2,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Surface(
+                        Modifier.weight(1f).fillMaxHeight(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        WorkspaceFilePreviewPane(
+                            change = selectedChange,
+                            state = previewState,
+                            selectedMode = selectedMode,
+                            onModeSelected = { selectedMode = it },
+                            comparisonDisplayMode = comparisonDisplayMode,
+                            onComparisonDisplayModeChange = { comparisonDisplayMode = it },
+                        )
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+                }
+            }
+        }
+    }
+}
+
+private sealed interface WorkspaceFilePreviewState {
+    data object Empty : WorkspaceFilePreviewState
+    data object Loading : WorkspaceFilePreviewState
+    data class Loaded(val preview: WorkspaceGitFilePreview) : WorkspaceFilePreviewState
+    data class Failed(val message: String) : WorkspaceFilePreviewState
+}
+
+@Composable
+private fun WorkspaceFilePreviewPane(
+    change: WorkspaceGitFileChange?,
+    state: WorkspaceFilePreviewState,
+    selectedMode: WorkspaceFilePreviewMode?,
+    onModeSelected: (WorkspaceFilePreviewMode) -> Unit,
+    comparisonDisplayMode: WorkspaceComparisonDisplayMode,
+    onComparisonDisplayModeChange: (WorkspaceComparisonDisplayMode) -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        if (change == null) {
+            Text(
+                "文件预览",
+                Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                style = MaterialTheme.typography.titleSmall,
+            )
+        } else {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text(
+                    workspaceGitFileChangeLabel(change.kind),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    change.path,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        when (state) {
+            WorkspaceFilePreviewState.Empty -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("从左侧选择文件查看预览", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            WorkspaceFilePreviewState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            is WorkspaceFilePreviewState.Failed -> SelectionContainer {
+                Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                    Text(state.message, color = MaterialTheme.colorScheme.error)
+                }
+            }
+            is WorkspaceFilePreviewState.Loaded -> {
+                WorkspaceGitPreviewContent(
+                    preview = state.preview,
+                    selectedMode = selectedMode,
+                    onModeSelected = onModeSelected,
+                    comparisonDisplayMode = comparisonDisplayMode,
+                    onComparisonDisplayModeChange = onComparisonDisplayModeChange,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceGitPreviewContent(
+    preview: WorkspaceGitFilePreview,
+    selectedMode: WorkspaceFilePreviewMode?,
+    onModeSelected: (WorkspaceFilePreviewMode) -> Unit,
+    comparisonDisplayMode: WorkspaceComparisonDisplayMode,
+    onComparisonDisplayModeChange: (WorkspaceComparisonDisplayMode) -> Unit,
+) {
+    val hasComparison = preview.comparison?.rows?.isNotEmpty() == true
+    val hasContent = preview.content != null
+    val displayedMode = workspacePreviewDisplayedMode(preview, selectedMode)
+    Column(Modifier.fillMaxSize()) {
+        if (hasComparison || hasContent) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                if (hasComparison) {
+                    WorkspacePreviewModeButton(
+                        label = "左右对比",
+                        selected = displayedMode == WorkspaceFilePreviewMode.COMPARISON,
+                        onClick = { onModeSelected(WorkspaceFilePreviewMode.COMPARISON) },
+                    )
+                }
+                if (hasComparison && hasContent) {
+                    WorkspacePreviewModeButton(
+                        label = when (preview.content?.origin) {
+                            WorkspaceFileContentOrigin.HEAD -> "HEAD 内容"
+                            else -> "文件内容"
+                        },
+                        selected = displayedMode == WorkspaceFilePreviewMode.CONTENT,
+                        onClick = { onModeSelected(WorkspaceFilePreviewMode.CONTENT) },
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                if (hasComparison && displayedMode == WorkspaceFilePreviewMode.COMPARISON) {
+                    TextButton(
+                        onClick = {
+                            onComparisonDisplayModeChange(
+                                if (comparisonDisplayMode == WorkspaceComparisonDisplayMode.ALL_LINES) {
+                                    WorkspaceComparisonDisplayMode.CHANGED_LINES
+                                } else {
+                                    WorkspaceComparisonDisplayMode.ALL_LINES
+                                },
+                            )
+                        },
+                    ) {
+                        Text(
+                            if (comparisonDisplayMode == WorkspaceComparisonDisplayMode.ALL_LINES) "仅看改动" else "查看全部",
+                        )
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        preview.notice?.let { notice ->
+            Text(
+                notice,
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val truncated = when (displayedMode) {
+            WorkspaceFilePreviewMode.COMPARISON -> preview.comparison?.truncated == true
+            WorkspaceFilePreviewMode.CONTENT -> preview.content?.truncated == true
+        }
+        if (truncated) {
+            Text(
+                "内容较大，预览已截断（前 512 KB）",
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                color = WarningAmber,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        when {
+            displayedMode == WorkspaceFilePreviewMode.COMPARISON && hasComparison -> WorkspaceSideBySideComparisonPreview(
+                comparison = requireNotNull(preview.comparison),
+                language = preview.language,
+                displayMode = comparisonDisplayMode,
+            )
+
+            displayedMode == WorkspaceFilePreviewMode.CONTENT && hasContent -> WorkspaceFileContentPreview(
+                preview = preview,
+            )
+
+            else -> Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    preview.unavailableReason ?: "当前文件没有可展示的文本内容。",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+internal fun workspacePreviewDisplayedMode(
+    preview: WorkspaceGitFilePreview,
+    selectedMode: WorkspaceFilePreviewMode?,
+): WorkspaceFilePreviewMode {
+    val hasComparison = preview.comparison?.rows?.isNotEmpty() == true
+    val hasContent = preview.content != null
+    val mode = selectedMode ?: preview.defaultMode
+    return when {
+        mode == WorkspaceFilePreviewMode.COMPARISON && hasComparison -> WorkspaceFilePreviewMode.COMPARISON
+        hasContent -> WorkspaceFilePreviewMode.CONTENT
+        else -> WorkspaceFilePreviewMode.COMPARISON
+    }
+}
+
+internal enum class WorkspaceComparisonDisplayMode { ALL_LINES, CHANGED_LINES }
+
+@Composable
+private fun WorkspacePreviewModeButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    TextButton(onClick = onClick) {
+        Text(
+            label,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ColumnScope.WorkspaceFileContentPreview(
+    preview: WorkspaceGitFilePreview,
+) {
+    val palette = workspacePreviewPalette()
+    val verticalScroll = rememberScrollState()
+    val horizontalScroll = rememberScrollState()
+    Surface(
+        Modifier.weight(1f).fillMaxWidth().padding(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+    ) {
+        SelectionContainer {
+            Box(
+                Modifier.fillMaxSize()
+                    .verticalScroll(verticalScroll)
+                    .horizontalScroll(horizontalScroll)
+                    .padding(14.dp),
+            ) {
+                Text(
+                    workspaceContentPreviewText(preview, palette),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                    softWrap = false,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.WorkspaceSideBySideComparisonPreview(
+    comparison: WorkspaceFileComparison,
+    language: WorkspaceFileLanguage,
+    displayMode: WorkspaceComparisonDisplayMode,
+) {
+    val palette = workspacePreviewPalette()
+    val text = workspaceComparisonText(comparison, displayMode, language, palette)
+    val verticalScroll = rememberScrollState()
+    val oldHorizontalScroll = rememberScrollState()
+    val newHorizontalScroll = rememberScrollState()
+    Surface(
+        Modifier.weight(1f).fillMaxWidth().padding(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (comparison.oldContent == null) "HEAD（修改前，不存在）" else "HEAD（修改前）",
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                VerticalDivider(Modifier.height(18.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    if (comparison.newContent == null) "工作区（当前，已删除）" else "工作区（当前）",
+                    Modifier.weight(1f).padding(start = 14.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                SelectionContainer {
+                    Row(
+                        Modifier.fillMaxSize().verticalScroll(verticalScroll),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Box(
+                            Modifier.weight(1f).horizontalScroll(oldHorizontalScroll).padding(14.dp),
+                        ) {
+                            Text(
+                                text.old,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                                softWrap = false,
+                            )
+                        }
+                        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Box(
+                            Modifier.weight(1f).horizontalScroll(newHorizontalScroll).padding(14.dp),
+                        ) {
+                            Text(
+                                text.new,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                                softWrap = false,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class WorkspacePreviewPalette(
+    val foreground: Color,
+    val muted: Color,
+    val keyword: Color,
+    val string: Color,
+    val comment: Color,
+    val number: Color,
+    val annotation: Color,
+    val property: Color,
+    val tag: Color,
+    val attribute: Color,
+    val heading: Color,
+    val addedBackground: Color,
+    val deletedBackground: Color,
+)
+
+@Composable
+private fun workspacePreviewPalette(): WorkspacePreviewPalette = WorkspacePreviewPalette(
+    foreground = MaterialTheme.colorScheme.onSurface,
+    muted = MaterialTheme.colorScheme.onSurfaceVariant,
+    keyword = MaterialTheme.colorScheme.primary,
+    string = MaterialTheme.colorScheme.tertiary,
+    comment = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.80f),
+    number = MaterialTheme.colorScheme.secondary,
+    annotation = MaterialTheme.colorScheme.secondary,
+    property = MaterialTheme.colorScheme.primary,
+    tag = MaterialTheme.colorScheme.primary,
+    attribute = MaterialTheme.colorScheme.tertiary,
+    heading = MaterialTheme.colorScheme.secondary,
+    addedBackground = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.58f),
+    deletedBackground = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.58f),
+)
+
+private data class WorkspaceComparisonText(
+    val old: AnnotatedString,
+    val new: AnnotatedString,
+)
+
+internal fun workspaceComparisonRows(
+    comparison: WorkspaceFileComparison,
+    displayMode: WorkspaceComparisonDisplayMode,
+): List<WorkspaceFileComparisonRow> = when (displayMode) {
+    WorkspaceComparisonDisplayMode.ALL_LINES -> comparison.rows
+    WorkspaceComparisonDisplayMode.CHANGED_LINES -> comparison.rows.filter(WorkspaceFileComparisonRow::isChanged)
+}
+
+private fun workspaceComparisonText(
+    comparison: WorkspaceFileComparison,
+    displayMode: WorkspaceComparisonDisplayMode,
+    language: WorkspaceFileLanguage,
+    palette: WorkspacePreviewPalette,
+): WorkspaceComparisonText {
+    val rows = workspaceComparisonRows(comparison, displayMode)
+    val oldGutterWidth = rows.maxOfOrNull { it.oldLine?.lineNumber ?: 0 }
+        ?.coerceAtLeast(1)?.toString()?.length ?: 1
+    val newGutterWidth = rows.maxOfOrNull { it.newLine?.lineNumber ?: 0 }
+        ?.coerceAtLeast(1)?.toString()?.length ?: 1
+    return WorkspaceComparisonText(
+        old = buildAnnotatedString {
+            rows.forEach { row ->
+                appendWorkspaceComparisonLine(row.oldLine, oldGutterWidth, language, palette)
+            }
+        },
+        new = buildAnnotatedString {
+            rows.forEach { row ->
+                appendWorkspaceComparisonLine(row.newLine, newGutterWidth, language, palette)
+            }
+        },
+    )
+}
+
+private fun workspaceContentPreviewText(
+    preview: WorkspaceGitFilePreview,
+    palette: WorkspacePreviewPalette,
+): AnnotatedString = buildAnnotatedString {
+    val lines = workspacePreviewLines(preview.content?.text.orEmpty())
+    val gutterWidth = lines.size.coerceAtLeast(1).toString().length
+    lines.forEachIndexed { index, line -> appendWorkspaceContentLine(index + 1, gutterWidth, line, preview.language, palette) }
+}
+
+private fun AnnotatedString.Builder.appendWorkspaceComparisonLine(
+    line: WorkspaceFileComparisonLine?,
+    gutterWidth: Int,
+    language: WorkspaceFileLanguage,
+    palette: WorkspacePreviewPalette,
+) {
+    if (line == null) {
+        append(" ".repeat(gutterWidth))
+        append(" │")
+        append('\n')
+        return
+    }
+    val lineStart = length
+    append("${line.lineNumber.toString().padStart(gutterWidth)} │ ")
+    val contentStart = length
+    appendWorkspaceSyntax(line.text, language, palette)
+    addStyle(SpanStyle(color = palette.muted), lineStart, contentStart)
+    when (line.kind) {
+        WorkspaceFileComparisonLineKind.ADDED -> addStyle(SpanStyle(background = palette.addedBackground), lineStart, length)
+        WorkspaceFileComparisonLineKind.DELETED -> addStyle(SpanStyle(background = palette.deletedBackground), lineStart, length)
+        WorkspaceFileComparisonLineKind.CONTEXT -> Unit
+    }
+    append('\n')
+}
+
+private fun AnnotatedString.Builder.appendWorkspaceContentLine(
+    lineNumber: Int,
+    gutterWidth: Int,
+    line: String,
+    language: WorkspaceFileLanguage,
+    palette: WorkspacePreviewPalette,
+) {
+    val lineStart = length
+    append("${lineNumber.toString().padStart(gutterWidth)} │ ")
+    val contentStart = length
+    appendWorkspaceSyntax(line, language, palette)
+    addStyle(SpanStyle(color = palette.muted), lineStart, contentStart)
+    append('\n')
+}
+
+private fun AnnotatedString.Builder.appendWorkspaceSyntax(
+    text: String,
+    language: WorkspaceFileLanguage,
+    palette: WorkspacePreviewPalette,
+) {
+    val start = length
+    append(text)
+    workspaceSyntaxTokens(language, text).forEach { token ->
+        addStyle(SpanStyle(color = palette.colorFor(token.kind)), start + token.start, start + token.end)
+    }
+}
+
+private fun WorkspacePreviewPalette.colorFor(kind: WorkspaceSyntaxTokenKind): Color = when (kind) {
+    WorkspaceSyntaxTokenKind.KEYWORD -> keyword
+    WorkspaceSyntaxTokenKind.STRING -> string
+    WorkspaceSyntaxTokenKind.COMMENT -> comment
+    WorkspaceSyntaxTokenKind.NUMBER -> number
+    WorkspaceSyntaxTokenKind.ANNOTATION -> annotation
+    WorkspaceSyntaxTokenKind.PROPERTY_KEY -> property
+    WorkspaceSyntaxTokenKind.TAG -> tag
+    WorkspaceSyntaxTokenKind.ATTRIBUTE -> attribute
+    WorkspaceSyntaxTokenKind.HEADING -> heading
+}
+
+private fun workspacePreviewLines(text: String): List<String> {
+    if (text.isEmpty()) return emptyList()
+    val lines = text.lineSequence().toList()
+    return if (text.endsWith('\n') && lines.lastOrNull()?.isEmpty() == true) lines.dropLast(1) else lines
 }
 
 @Composable

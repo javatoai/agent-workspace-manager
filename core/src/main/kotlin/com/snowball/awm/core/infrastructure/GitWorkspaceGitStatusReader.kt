@@ -93,20 +93,36 @@ class GitWorkspaceGitStatusReader(
                 expectedBranch = workspace.branch,
                 message = "分支不一致：当前 $actualBranch，期望 ${workspace.branch}",
             )
-            val dirty = parsedStatus.changedPaths.size
+            val dirtyFiles = parsedStatus.changedFiles
+            val dirty = dirtyFiles.size
             if (parsedStatus.upstream == null) {
-                WorkspaceGitHealth(WorkspaceGitHealthState.READY, dirty, LocalPushState.NO_UPSTREAM, actualBranch = actualBranch, expectedBranch = workspace.branch)
+                WorkspaceGitHealth(
+                    state = WorkspaceGitHealthState.READY,
+                    dirtyFileCount = dirty,
+                    pushState = LocalPushState.NO_UPSTREAM,
+                    actualBranch = actualBranch,
+                    expectedBranch = workspace.branch,
+                    dirtyFiles = dirtyFiles,
+                )
             } else if (parsedStatus.ahead == null) {
-                WorkspaceGitHealth(WorkspaceGitHealthState.READY, dirty, LocalPushState.REMOTE_BRANCH_MISSING, actualBranch = actualBranch, expectedBranch = workspace.branch)
+                WorkspaceGitHealth(
+                    state = WorkspaceGitHealthState.READY,
+                    dirtyFileCount = dirty,
+                    pushState = LocalPushState.REMOTE_BRANCH_MISSING,
+                    actualBranch = actualBranch,
+                    expectedBranch = workspace.branch,
+                    dirtyFiles = dirtyFiles,
+                )
             } else {
                 val ahead = parsedStatus.ahead
                 WorkspaceGitHealth(
-                    WorkspaceGitHealthState.READY,
-                    dirty,
-                    if (ahead == 0) LocalPushState.PUSHED else LocalPushState.AHEAD,
-                    ahead,
+                    state = WorkspaceGitHealthState.READY,
+                    dirtyFileCount = dirty,
+                    pushState = if (ahead == 0) LocalPushState.PUSHED else LocalPushState.AHEAD,
+                    unpushedCommitCount = ahead,
                     actualBranch = actualBranch,
                     expectedBranch = workspace.branch,
+                    dirtyFiles = dirtyFiles,
                 )
             }
         }.getOrElse { error ->
@@ -132,21 +148,26 @@ class GitWorkspaceGitStatusReader(
     }
 }
 
-/** Parses NUL-delimited porcelain-v2 output and counts a rename as one destination path. */
+/** Parses NUL-delimited porcelain-v2 output and reports one change per destination path. */
 object PorcelainV2Parser {
     data class Status(
         val branch: String?,
         val upstream: String?,
         val ahead: Int?,
         val behind: Int?,
-        val changedPaths: Set<String>,
-    )
+        val changedFiles: List<WorkspaceGitFileChange>,
+    ) {
+        val changedPaths: Set<String>
+            get() = changedFiles.mapTo(linkedSetOf(), WorkspaceGitFileChange::path)
+    }
 
     fun changedPaths(output: String): Set<String> = parse(output).changedPaths
 
+    fun changedFiles(output: String): List<WorkspaceGitFileChange> = parse(output).changedFiles
+
     fun parse(output: String): Status {
         val fields = output.split('\u0000')
-        val paths = linkedSetOf<String>()
+        val files = linkedMapOf<String, WorkspaceGitFileChange>()
         var branch: String? = null
         var upstream: String? = null
         var ahead: Int? = null
@@ -162,17 +183,44 @@ object PorcelainV2Parser {
                     ahead = match?.groupValues?.get(1)?.toIntOrNull()
                     behind = match?.groupValues?.get(2)?.toIntOrNull()
                 }
-                record.startsWith("1 ") -> pathAfterFields(record, 8)?.let(paths::add)
+                record.startsWith("1 ") -> changedFile(record, '1', 8)?.let { files[it.path] = it }
                 record.startsWith("2 ") -> {
-                    pathAfterFields(record, 9)?.let(paths::add)
+                    changedFile(record, '2', 9)?.let { files[it.path] = it }
                     index++
                 }
-                record.startsWith("u ") -> pathAfterFields(record, 10)?.let(paths::add)
-                record.startsWith("? ") -> record.removePrefix("? ").takeIf(String::isNotEmpty)?.let(paths::add)
+                record.startsWith("u ") -> changedFile(record, 'u', 10)?.let { files[it.path] = it }
+                record.startsWith("? ") -> record.removePrefix("? ").takeIf(String::isNotEmpty)?.let {
+                    files[it] = WorkspaceGitFileChange(it, WorkspaceGitFileChangeKind.UNTRACKED)
+                }
             }
             index++
         }
-        return Status(branch, upstream, ahead, behind, paths)
+        return Status(branch, upstream, ahead, behind, files.values.toList())
+    }
+
+    private fun changedFile(record: String, recordType: Char, fieldCount: Int): WorkspaceGitFileChange? {
+        val path = pathAfterFields(record, fieldCount) ?: return null
+        val xy = record.split(' ', limit = 3).getOrNull(1) ?: return null
+        return WorkspaceGitFileChange(path, changeKind(recordType, xy))
+    }
+
+    private fun changeKind(recordType: Char, xy: String): WorkspaceGitFileChangeKind {
+        if (recordType == 'u' || xy.any { it == 'U' }) return WorkspaceGitFileChangeKind.CONFLICTED
+        if (recordType == '2') {
+            return when {
+                xy.any { it == 'C' } -> WorkspaceGitFileChangeKind.COPIED
+                xy.any { it == 'R' } -> WorkspaceGitFileChangeKind.RENAMED
+                else -> WorkspaceGitFileChangeKind.MODIFIED
+            }
+        }
+        return when {
+            xy.any { it == 'D' } -> WorkspaceGitFileChangeKind.DELETED
+            xy.any { it == 'A' } -> WorkspaceGitFileChangeKind.ADDED
+            xy.any { it == 'T' } -> WorkspaceGitFileChangeKind.TYPE_CHANGED
+            xy.any { it == 'R' } -> WorkspaceGitFileChangeKind.RENAMED
+            xy.any { it == 'C' } -> WorkspaceGitFileChangeKind.COPIED
+            else -> WorkspaceGitFileChangeKind.MODIFIED
+        }
     }
 
     private fun pathAfterFields(record: String, fieldCount: Int): String? =

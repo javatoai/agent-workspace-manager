@@ -4,6 +4,22 @@ enum class WorkspaceGitHealthState { CHECKING, READY, FAILED, MISSING }
 
 enum class LocalPushState { PUSHED, AHEAD, REMOTE_BRANCH_MISSING, NO_UPSTREAM, FAILED }
 
+enum class WorkspaceGitFileChangeKind {
+    MODIFIED,
+    ADDED,
+    DELETED,
+    RENAMED,
+    COPIED,
+    TYPE_CHANGED,
+    CONFLICTED,
+    UNTRACKED,
+}
+
+data class WorkspaceGitFileChange(
+    val path: String,
+    val kind: WorkspaceGitFileChangeKind,
+)
+
 enum class WorkspaceGitIssue {
     NONE,
     MISSING,
@@ -24,4 +40,5 @@ data class WorkspaceGitHealth(
     val issue: WorkspaceGitIssue = WorkspaceGitIssue.NONE,
     val actualBranch: String? = null,
     val expectedBranch: String? = null,
+    val dirtyFiles: List<WorkspaceGitFileChange> = emptyList(),
 )
