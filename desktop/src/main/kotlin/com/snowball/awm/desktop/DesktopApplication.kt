@@ -451,6 +451,7 @@ class DesktopApplication(
             genbuTagProbes = genbuTagProbes,
             scope = scope,
             ioDispatcher = ioDispatcher,
+            onError = ::showError,
         )
     }
     var config: AppConfig
@@ -703,6 +704,10 @@ class DesktopApplication(
     fun selectTask(task: TaskManifest) = taskController.select(task)
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
+    fun setGlobalTagEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.setGlobalTagEnabled(enabled, onFailure)
+    fun updateTagHistoryMaxGroups(value: Int, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateTagHistoryMaxGroups(value, onFailure)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
     fun confirmTaskRootMigration(onFailure: (Throwable) -> Unit = {}) = settingsController.confirmTaskRootMigration(onFailure)
     fun cancelTaskRootMigration() = settingsController.cancelTaskRootMigration()
@@ -907,11 +912,21 @@ class DesktopApplication(
     fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}) =
         taskController.retryRequirementMaterials(task, onCompleted)
 
-    fun buildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
-        deliveryController.build(task, workspace).also { started -> if (started) navigation = NavigationItem.TAG }
+    fun buildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
+        if (!config.tagEnabled) {
+            showError(IllegalStateException("全局测试Tag已关闭"))
+            return false
+        }
+        return deliveryController.build(task, workspace).also { started -> if (started) navigation = NavigationItem.TAG }
+    }
 
-    fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>): Boolean =
-        deliveryController.buildBatch(task, workspaces).also { started -> if (started) navigation = NavigationItem.TAG }
+    fun buildTags(task: TaskManifest, workspaces: List<ServiceWorkspace>): Boolean {
+        if (!config.tagEnabled) {
+            showError(IllegalStateException("全局测试Tag已关闭"))
+            return false
+        }
+        return deliveryController.buildBatch(task, workspaces).also { started -> if (started) navigation = NavigationItem.TAG }
+    }
 
     /** Resolves the exact task workspace recorded by a Tag operation. */
     fun tagOperationWorkspace(operation: TagOperation): ServiceWorkspace? =
@@ -1284,11 +1299,15 @@ class DesktopApplication(
         val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects ||
             config.requirementMaterialsRoot != updated.requirementMaterialsRoot ||
             config.requirementMaterialsSubdirectory != updated.requirementMaterialsSubdirectory
+        val tagConfigurationChanged = config.tagEnabled != updated.tagEnabled ||
+            config.tagHistoryMaxGroups != updated.tagHistoryMaxGroups
         config = updated
         configurationLoadError = null
         if (navigation == NavigationItem.TAG && !TagNavigationPolicy.isVisible(updated)) {
             navigation = NavigationItem.TASKS
         }
+        if (!updated.tagEnabled) deliveryController.setGenbuTagProbeVisible(false)
+        if (tagConfigurationChanged) deliveryController.reloadHistory()
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
         if (terminalConfigurationChanged) detectTerminalInBackground()
         if (requirementConfigurationChanged) requirementController.onConfigurationChanged()

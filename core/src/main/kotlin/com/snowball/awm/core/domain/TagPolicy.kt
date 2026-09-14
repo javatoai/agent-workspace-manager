@@ -14,7 +14,12 @@ data class EffectiveTagTarget(
 
 /** Resolves the two-level group/child Tag gate and immutable workspace branch. */
 object TagPolicy {
+    fun requireEnabled(config: AppConfig) {
+        check(config.tagEnabled) { "全局测试Tag已关闭" }
+    }
+
     fun resolve(config: AppConfig, manifest: TaskManifest, selection: String): EffectiveTagTarget {
+        requireEnabled(config)
         val candidates = manifest.services.filter {
             it.selectionKey == selection || it.repositoryId == selection
         }

@@ -892,6 +892,53 @@ class DesktopApplicationTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `archiving a task keeps the current active-task navigation`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-archive-navigation")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val taskRoot = root.resolve("tasks")
+        val store = ConfigStore(paths)
+        store.save(AppConfig(taskRoot = taskRoot.toString()))
+        val taskDirectory = taskRoot.resolve("archive-me")
+        ManifestStore().save(
+            taskDirectory,
+            TaskManifest(
+                folderName = "archive-me",
+                taskDirectoryName = "archive-me",
+                featureBranch = "feature/archive-me",
+                createdAt = "2026-09-14 10:00:00",
+                updatedAt = "2026-09-14 10:00:00",
+                lifecycleStatus = TaskLifecycleStatus.ACTIVE,
+                services = emptyList(),
+            ),
+        )
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            ioDispatcher = dispatcher,
+        )
+        try {
+            val selected = assertNotNull(controller.selectedTask)
+            assertEquals(NavigationItem.TASKS, controller.navigation)
+
+            assertTrue(controller.archiveTask(selected))
+            advanceUntilIdle()
+
+            assertEquals(NavigationItem.TASKS, controller.navigation)
+            assertEquals(null, controller.selectedTask)
+            assertEquals(
+                TaskLifecycleStatus.ARCHIVED,
+                ManifestStore().load(taskDirectory).lifecycleStatus,
+            )
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `remote branch loading exposes loading success and failure without startup request`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
@@ -969,6 +1016,47 @@ class DesktopApplicationTest {
 
             assertEquals(false, controller.showsTagNavigation)
             assertEquals(NavigationItem.TASKS, controller.navigation)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `global Tag settings hide navigation and persist independently of group gates`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("awm-global-tag-settings")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val repository = RepositoryConfig("repo", "repo", root.resolve("repo").toString(), root.resolve("repo/.git").toString())
+        store.save(AppConfig(
+            repositories = listOf(repository),
+            groups = listOf(GroupConfig("g", "G", services = listOf(GroupServiceConfig.standard("service", "repo", "Service")))),
+        ))
+        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            controller.navigation = NavigationItem.TAG
+            assertTrue(controller.showsTagNavigation)
+
+            assertTrue(controller.setGlobalTagEnabled(false))
+            advanceUntilIdle()
+
+            assertFalse(controller.config.tagEnabled)
+            assertFalse(controller.showsTagNavigation)
+            assertEquals(NavigationItem.TASKS, controller.navigation)
+            assertFalse(ConfigStore(paths).load().tagEnabled)
+
+            assertTrue(controller.updateTagHistoryMaxGroups(3))
+            advanceUntilIdle()
+            assertEquals(3, controller.config.tagHistoryMaxGroups)
+            assertEquals(3, ConfigStore(paths).load().tagHistoryMaxGroups)
+
+            assertTrue(controller.setGlobalTagEnabled(true))
+            advanceUntilIdle()
+            assertTrue(controller.config.tagEnabled)
+            assertTrue(controller.showsTagNavigation)
         } finally {
             controller.close()
             Dispatchers.resetMain()

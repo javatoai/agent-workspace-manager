@@ -86,7 +86,7 @@ class TagPresentationTest {
     }
 
     @Test
-    fun `conflict guidance names target and source branches`() {
+    fun `conflict summary names target and source branches`() {
         val conflict = operation(TagOperationState.CONFLICT).copy(
             sourceBranch = "feature/task-42",
             targetBranch = "uat",
@@ -94,8 +94,8 @@ class TagPresentationTest {
         )
 
         assertEquals(
-            "请将 feature/task-42 合入 upstream/uat，解决冲突后提交并推送 upstream/uat，再点击“已解决，重试构建Tag”。",
-            tagConflictGuidance(conflict),
+            "自动将 feature/task-42 合入 upstream/uat 时检测到冲突。",
+            tagConflictSummary(conflict),
         )
     }
 
@@ -108,6 +108,22 @@ class TagPresentationTest {
         assertEquals(
             "冲突文件：未返回具体文件",
             tagConflictFilesSummary(operation(TagOperationState.CONFLICT)),
+        )
+    }
+
+    @Test
+    fun `conflict copy text contains only the event and files`() {
+        val conflict = operation(TagOperationState.CONFLICT).copy(
+            sourceBranch = "feature/task-42",
+            targetBranch = "uat",
+            remote = "upstream",
+            conflictFiles = listOf("src/A.kt", "src/B.kt"),
+            message = "旧的操作引导不应进入冲突信息",
+        )
+
+        assertEquals(
+            "自动将 feature/task-42 合入 upstream/uat 时检测到冲突。\n冲突文件：src/A.kt、src/B.kt",
+            tagConflictCopyText(conflict),
         )
     }
 

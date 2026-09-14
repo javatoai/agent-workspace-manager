@@ -94,6 +94,30 @@ class TagHistoryQueryServiceTest {
     }
 
     @Test
+    fun `retention removes oldest complete groups and keeps newer groups`() {
+        val root = Files.createTempDirectory("tag-history-retention-")
+        val store = TagOperationStore()
+        val task = task("task")
+        val directory = root.resolve(task.taskDirectoryName)
+        store.save(directory, operation("old-1", "2026-08-08 09:00:00", "old-batch"))
+        store.save(directory, operation("old-2", "2026-08-08 09:01:00", "old-batch"))
+        store.save(directory, operation("middle", "2026-08-08 10:00:00"))
+        store.save(directory, operation("new", "2026-08-08 11:00:00"))
+        val config = AppConfig(taskRoot = root.toString(), tagHistoryMaxGroups = 2)
+        val service = TagHistoryQueryService(store)
+
+        assertEquals(2, service.enforceRetention(config, listOf(task)))
+        assertEquals(
+            listOf("new", "middle"),
+            service.listItems(config, listOf(task)).flatMap(TagHistoryItem::operations).map(TagOperation::operationId),
+        )
+        assertFalse(Files.exists(directory.resolve("tag-operations/old-1.json")))
+        assertFalse(Files.exists(directory.resolve("tag-operations/old-2.json")))
+        assertTrue(Files.exists(directory.resolve("tag-operations/middle.json")))
+        assertTrue(Files.exists(directory.resolve("tag-operations/new.json")))
+    }
+
+    @Test
     fun `clear removes only Tag history files from every known task`() {
         val root = Files.createTempDirectory("tag-history-clear-")
         val store = TagOperationStore()

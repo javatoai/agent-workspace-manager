@@ -77,7 +77,7 @@ class ConfigurationInteractionPolicyTest {
     }
 
     @Test
-    fun `Tag navigation requires only an enabled group gate`() {
+    fun `Tag navigation requires both global and group gates`() {
         val standard = GroupServiceConfig.standard("standard", "repo", "Standard")
         val clone = GroupServiceConfig(
             id = "clone",
@@ -92,6 +92,7 @@ class ConfigurationInteractionPolicyTest {
         val base = AppConfig(repositories = repositories, groups = listOf(GroupConfig("g", "G", services = listOf(standard, clone))))
 
         assertTrue(TagNavigationPolicy.isVisible(base))
+        assertFalse(TagNavigationPolicy.isVisible(base.copy(tagEnabled = false)))
         assertFalse(TagNavigationPolicy.isVisible(base.copy(groups = listOf(base.groups.single().copy(tagEnabled = false)))))
         val childrenOff = base.copy(groups = listOf(base.groups.single().copy(services = listOf(
             standard.copy(modules = standard.modules.map { it.copy(tagEnabled = false) }),

@@ -244,6 +244,12 @@ class ConfigStore(
             if (current.repositories.size != imported.repositories.size) add("仓库：${current.repositories.size} → ${imported.repositories.size}")
             if (current.developmentTools != imported.developmentTools) add("开发工具配置将更新")
             if (current.meegleProjects != imported.meegleProjects) add("飞书项目：${current.meegleProjects.size} → ${imported.meegleProjects.size}")
+            if (current.tagEnabled != imported.tagEnabled) {
+                add("全局测试Tag：${if (current.tagEnabled) "开启" else "关闭"} → ${if (imported.tagEnabled) "开启" else "关闭"}")
+            }
+            if (current.tagHistoryMaxGroups != imported.tagHistoryMaxGroups) {
+                add("Tag历史保留组数：${current.tagHistoryMaxGroups} → ${imported.tagHistoryMaxGroups}")
+            }
             if (isEmpty() && current != imported) add("配置内容存在其他变化")
         }
         val invalidTools = imported.developmentTools.filterNot { runCatching { Files.exists(Path.of(it.path)) }.getOrDefault(false) }

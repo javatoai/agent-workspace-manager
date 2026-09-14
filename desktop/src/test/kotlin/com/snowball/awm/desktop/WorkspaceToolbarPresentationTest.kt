@@ -46,6 +46,14 @@ class WorkspaceToolbarPresentationTest {
         assertTrue(failedPresentation.showTagAction)
         assertTrue(failedPresentation.showAddModuleAction)
         assertTrue(failedPresentation.showRetryAction)
+
+        val globallyHidden = workspaceToolbarPresentationFor(
+            failed,
+            canBuildTag = true,
+            showAddModule = true,
+            config = AppConfig(tagEnabled = false),
+        )
+        assertFalse(globallyHidden.showTagAction)
     }
 
     @Test

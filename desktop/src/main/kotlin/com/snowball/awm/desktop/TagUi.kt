@@ -56,6 +56,7 @@ private val interruptedTagStates = setOf(
 
 @Composable
 internal fun TagScreen(controller: DesktopApplication) {
+    if (!controller.showsTagNavigation) return
     DisposableEffect(controller) {
         controller.setGenbuTagProbeVisible(true)
         onDispose { controller.setGenbuTagProbeVisible(false) }
@@ -409,14 +410,18 @@ private fun TagHistoryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            operation.message?.takeIf(String::isNotBlank)?.let { message ->
-                Text(
-                    message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isProblem) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = if (isProblem) 2 else 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (operation.state == TagOperationState.CONFLICT) {
+                TagConflictSummary(controller, operation)
+            } else {
+                operation.message?.takeIf(String::isNotBlank)?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isProblem) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (isProblem) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (isActive) {
                 tagOperationInProgressMessage(operation)?.let { message ->
@@ -552,23 +557,48 @@ private fun TagGenbuBuildFailedActions(controller: DesktopApplication, operation
 }
 
 @Composable
+private fun TagConflictSummary(
+    controller: DesktopApplication,
+    operation: TagOperation,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                tagConflictSummary(operation),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(
+                tagConflictFilesSummary(operation),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        ActionIconButton(
+            label = "复制冲突信息",
+            onClick = { controller.copyText(tagConflictCopyText(operation), "冲突信息已复制") },
+            modifier = Modifier.size(30.dp),
+        ) {
+            Icon(Icons.Outlined.ContentCopy, "复制冲突信息", Modifier.size(16.dp))
+        }
+    }
+}
+
+@Composable
 private fun TagConflictActions(
     controller: DesktopApplication,
     operation: TagOperation,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            tagConflictGuidance(operation),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-        Text(
-            tagConflictFilesSummary(operation),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-        )
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -614,15 +644,18 @@ private fun TagWorkspaceCheckResult(check: TagWorkspaceCheck?) {
     )
 }
 
-internal fun tagConflictGuidance(operation: TagOperation): String {
+internal fun tagConflictSummary(operation: TagOperation): String {
     val target = operation.targetBranch?.let { "${operation.remote}/$it" } ?: "目标分支"
-    return "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再点击“已解决，重试构建Tag”。"
+    return "自动将 ${operation.sourceBranch} 合入 $target 时检测到冲突。"
 }
 
 internal fun tagConflictFilesSummary(operation: TagOperation): String =
     operation.conflictFiles.takeIf { it.isNotEmpty() }
         ?.joinToString("、", prefix = "冲突文件：")
         ?: "冲突文件：未返回具体文件"
+
+internal fun tagConflictCopyText(operation: TagOperation): String =
+    "${tagConflictSummary(operation)}\n${tagConflictFilesSummary(operation)}"
 
 internal fun tagOperationCanInspectWorkspace(operation: TagOperation): Boolean =
     operation.state == TagOperationState.CONFLICT ||

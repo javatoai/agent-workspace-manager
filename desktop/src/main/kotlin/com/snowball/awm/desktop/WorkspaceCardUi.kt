@@ -141,7 +141,7 @@ internal fun workspaceToolbarPresentationFor(
 ): WorkspaceToolbarPresentation = WorkspaceToolbarPresentation(
     showPathActionGroup = config.showWorkspacePathActionGroup,
     showGitActionGroup = config.showWorkspaceGitActionGroup,
-    showTagAction = canBuildTag,
+    showTagAction = config.tagEnabled && canBuildTag,
     showAddModuleAction = showAddModule,
     showRetryAction = workspace.health == WorkspaceHealth.FAILED && workspace.groupServiceId.isNotBlank(),
     developmentTool = workspace.developmentTool,

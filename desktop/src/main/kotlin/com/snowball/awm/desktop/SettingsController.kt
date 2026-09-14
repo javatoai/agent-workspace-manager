@@ -369,6 +369,22 @@ class SettingsController internal constructor(
         runner = settingsOperations,
     ) { it.copy(theme = theme) }
 
+    fun setGlobalTagEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在更新全局测试Tag开关…",
+        "全局测试Tag开关已更新",
+        onFailure = onFailure,
+        saveKey = "tag",
+        runner = settingsOperations,
+    ) { it.copy(tagEnabled = enabled) }
+
+    fun updateTagHistoryMaxGroups(value: Int, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存Tag历史设置…",
+        "Tag历史设置已保存",
+        onFailure = onFailure,
+        saveKey = "tag",
+        runner = settingsOperations,
+    ) { it.copy(tagHistoryMaxGroups = value) }
+
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(
         "正在检查任务根目录…",
         "任务根目录检查完成",

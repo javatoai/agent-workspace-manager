@@ -10,7 +10,7 @@ class SettingsExperienceTest {
         val sections = settingsNavigationSections()
 
         assertEquals(
-            listOf("外观", "目录", "服务与仓库", "开发工具", "任务区", "协作说明", "Meegle", "Genbu", "AWM CLI", "Git", "诊断与日志"),
+            listOf("外观", "目录", "服务与仓库", "Tag设置", "开发工具", "任务区", "协作说明", "Meegle", "Genbu", "AWM CLI", "Git", "诊断与日志"),
             sections.map { it.label },
         )
         assertFalse(sections.any { it.key == "overview" })

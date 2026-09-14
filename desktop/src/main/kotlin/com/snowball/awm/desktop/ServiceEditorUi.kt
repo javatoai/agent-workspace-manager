@@ -641,21 +641,23 @@ private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String,
                     remote = module.baseRemote,
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("测试Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
+            if (controller.config.tagEnabled) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("测试Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
+                }
+                if (module.tagEnabled) TagModeSelector(module.tagMode) { mode ->
+                    onChange(module.copy(tagMode = mode, tagTargetRef = if (mode == TagBuildMode.CURRENT_BRANCH) "" else module.tagTargetRef.ifBlank { "origin/release/test" }))
+                }
+                if (module.tagEnabled) TagConfigurationFields(
+                    targetVisible = module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
+                    targetRef = module.tagTargetRef,
+                    onTargetRefChange = { onChange(module.copy(tagTargetRef = it)) },
+                    messagePrefix = module.tagMessagePrefix,
+                    onMessagePrefixChange = { onChange(module.copy(tagMessagePrefix = it)) },
+                    repositoryId = repositoryId,
+                    controller = controller,
+                )
             }
-            if (module.tagEnabled) TagModeSelector(module.tagMode) { mode ->
-                onChange(module.copy(tagMode = mode, tagTargetRef = if (mode == TagBuildMode.CURRENT_BRANCH) "" else module.tagTargetRef.ifBlank { "origin/release/test" }))
-            }
-            if (module.tagEnabled) TagConfigurationFields(
-                targetVisible = module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
-                targetRef = module.tagTargetRef,
-                onTargetRefChange = { onChange(module.copy(tagTargetRef = it)) },
-                messagePrefix = module.tagMessagePrefix,
-                onMessagePrefixChange = { onChange(module.copy(tagMessagePrefix = it)) },
-                repositoryId = repositoryId,
-                controller = controller,
-            )
         }
     }
 }

@@ -36,6 +36,18 @@ class TagHistoryQueryService(
             .sortedWith(historyItemLatestFirst)
     }
 
+    /** Removes the oldest complete history groups until the configured global limit is met. */
+    fun enforceRetention(config: AppConfig, tasks: List<TaskManifest>): Int {
+        val items = listItems(config, tasks)
+        if (items.size <= config.tagHistoryMaxGroups) return 0
+        val selectedOperationIds = items
+            .drop(config.tagHistoryMaxGroups)
+            .flatMap(TagHistoryItem::operations)
+            .map(TagOperation::operationId)
+            .toSet()
+        return deleteSelected(config, tasks, selectedOperationIds)
+    }
+
     /** Clears only Tag build records for the currently known task directories. */
     fun clear(config: AppConfig, tasks: List<TaskManifest>): Int {
         val taskRoot = config.taskRoot?.let(Path::of) ?: return 0

@@ -204,7 +204,6 @@ class TaskController internal constructor(
             tasks.archive(session.config, taskDirectory(task), false)
         }, onSuccess = {
             reloadTasks(it.folderName)
-            session.navigation = NavigationItem.ARCHIVED
             onCompleted()
         })
 

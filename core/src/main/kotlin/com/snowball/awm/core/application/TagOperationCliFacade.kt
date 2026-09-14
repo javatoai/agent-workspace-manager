@@ -95,6 +95,7 @@ class TagOperationCliFacade(
     fun build(taskFolder: String, selectionKeys: List<String>, allServices: Boolean): List<TagOperationReport> {
         require(!(allServices && selectionKeys.isNotEmpty())) { "--all-services 与 --service 不能同时使用" }
         val (config, taskDirectory, manifest) = resolveTask(taskFolder)
+        TagPolicy.requireEnabled(config)
         val group = config.groups.firstOrNull { it.id == manifest.groupId }
             ?: throw IllegalStateException("配置中找不到任务所属组：${manifest.groupId}")
         // Same wording as TagPolicy so the group gate reads identically no
@@ -130,12 +131,14 @@ class TagOperationCliFacade(
     /** Returns one record, refreshing its Genbu stages live when probing is configured. */
     fun status(taskFolder: String, operationId: String): TagOperationReport {
         val (config, _, manifest) = resolveTask(taskFolder)
+        TagPolicy.requireEnabled(config)
         return probed(config, manifest, operationId).toReport(manifest.taskDirectoryName)
     }
 
     /** Lists every Tag record of the task, newest first. */
     fun history(taskFolder: String): List<TagOperationReport> {
-        val (_, taskDirectory, manifest) = resolveTask(taskFolder)
+        val (config, taskDirectory, manifest) = resolveTask(taskFolder)
+        TagPolicy.requireEnabled(config)
         return operations.list(taskDirectory)
             .sortedWith(compareByDescending<TagOperation> { it.updatedAt }.thenByDescending { it.operationId })
             .map { it.toReport(manifest.taskDirectoryName) }
@@ -148,6 +151,7 @@ class TagOperationCliFacade(
      */
     fun retry(taskFolder: String, operationId: String): TagOperationReport {
         val (config, taskDirectory, manifest) = resolveTask(taskFolder)
+        TagPolicy.requireEnabled(config)
         // A stale failed build would otherwise re-Tag a pipeline that has since
         // succeeded, pushing a needless Tag.
         val operation = probed(config, manifest, operationId)
@@ -168,6 +172,7 @@ class TagOperationCliFacade(
     /** Read-only inspection of the feature worktree behind a conflicted or failed record. */
     fun workspaceCheck(taskFolder: String, operationId: String): TagWorkspaceCheckReport {
         val (config, taskDirectory, _) = resolveTask(taskFolder)
+        TagPolicy.requireEnabled(config)
         val operation = loadOperation(taskDirectory, operationId)
         require(
             operation.state == TagOperationState.CONFLICT || operation.state == TagOperationState.FAILED,

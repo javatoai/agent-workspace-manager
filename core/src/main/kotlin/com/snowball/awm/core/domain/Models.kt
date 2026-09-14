@@ -7,11 +7,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
 /** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_PRODUCT_VERSION = "1.0.6"
+const val CURRENT_PRODUCT_VERSION = "1.0.7"
 const val CURRENT_APP_CONFIG_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
+const val DEFAULT_TAG_HISTORY_MAX_GROUPS = 20
+const val MAX_TAG_HISTORY_GROUPS = 1000
 
 @Serializable
 enum class DevelopmentToolType {
@@ -224,6 +226,10 @@ data class AppConfig(
         GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME),
     ),
     val theme: ThemePreference = ThemePreference.SYSTEM,
+    /** Enables the desktop Tag page, Tag actions, and Tag operation entry points. */
+    val tagEnabled: Boolean = true,
+    /** Maximum number of grouped Tag history cards retained across all known tasks. */
+    val tagHistoryMaxGroups: Int = DEFAULT_TAG_HISTORY_MAX_GROUPS,
     val terminalExecutable: String? = null,
     val developmentTools: List<DevelopmentToolConfig> = emptyList(),
     val defaultDevelopmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
@@ -271,6 +277,9 @@ data class AppConfig(
         }
         require(meegleProjects.map(MeegleProjectConfig::projectKey).distinct().size == meegleProjects.size) {
             "Meegle 空间 Key 不能重复"
+        }
+        require(tagHistoryMaxGroups in 1..MAX_TAG_HISTORY_GROUPS) {
+            "Tag组保留数量必须在 1 到 $MAX_TAG_HISTORY_GROUPS 之间"
         }
         require(developmentTools.map(DevelopmentToolConfig::type).distinct().size == developmentTools.size) {
             "同一种开发工具只能配置一次"

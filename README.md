@@ -1,143 +1,105 @@
 # Agent Workspace Manager
 
-Agent Workspace Manager（AWM）是一个桌面工具，用来把“一项需求涉及多个代码仓库”的本地开发工作整理成一个清晰、安全的任务工作区。
+> 面向多仓库和 Agent 协作的任务级研发工作台，让每个需求拥有自己的代码现场。
 
-它适合需要同时修改多个服务、希望使用 Git Worktree 隔离任务、并且会配合 Codex、Cursor 等 Agent 工具开发的人或团队。创建任务后，AWM 会按你选择的服务建立独立工作区、生成任务说明、展示 Git 改动与推送状态，并在需要时构建 Tag。
+Agent Workspace Manager（AWM）是一款本地优先的任务级研发工作台。它帮助你把一个跨多个代码仓库的需求，整理成一个独立、清晰、可追溯的任务工作区。任务关联的服务、分支、说明、工作区状态和交付记录集中在一起，让多仓库协作和 Agent 协作都有明确的上下文。
 
-当前版本：**1.0.6**
+AWM 是一个以研发任务为核心的一体化本地研发工作台：它把 Meegle 需求、GitLab 代码仓库、Git Worktree 隔离工作区、Agent 工作区、测试 Tag 以及 Genbu 构建与发布状态串联在一起，形成从需求到交付的完整任务上下文。
+
+## AWM 如何串联各环节
+
+```mermaid
+flowchart LR
+    M["Meegle<br/>需求与 Sprint"] --> A["AWM<br/>研发任务中枢<br/>自动管理 Worktree"]
+    L["GitLab<br/>代码仓库"] --> A
+    W["Worktree<br/>任务工作区与 Git 状态"] --> A
+    G["Tag / Genbu<br/>构建与发布状态"] --> A
+    A --> C["Agent 客户端<br/>Codex / Cursor / Qoder<br/>统一任务上下文"]
+
+    classDef center fill:#2563eb,color:#fff,stroke:#1d4ed8,stroke-width:2px;
+    class A center;
+```
+
+AWM 将需求、代码、工作区和交付状态汇总成统一任务上下文，再提供给 Codex、Cursor、Qoder 等 Agent 客户端。
 
 ## 适合什么场景
 
-- 一个需求往往涉及两个或更多 Git 仓库，例如前端、后端、网关、公共服务需要一起修改。
-- 同时进行多个需求，不希望切换分支、未提交改动或本地配置互相干扰。
-- 希望每个任务都有独立目录、独立 `AGENTS.md` 说明，并能从任务目录直接打开 IDEA、WebStorm、Codex 或 Cursor。
-- 团队按业务线把服务分组管理；不同组可以使用不同服务、分支前缀、协作说明和 Tag 配置。
-- 需要在本地提交前快速确认：哪些文件还没有提交、哪些提交尚未推送、是否可以安全归档或删除任务。
+- 一个需求需要同时调整前端、后端、网关或其他多个服务；
+- 同时推进多个需求，希望每个需求拥有独立的目录和分支；
+- 希望从一个任务入口管理需求说明、工作区状态和交付动作；
+- 团队需要按业务线维护服务清单、协作规则和交付配置。
 
-## 它能做什么
+## 功能介绍
 
-- **按任务创建隔离工作区**：标准服务使用 Git Worktree；也可将服务配置为独立克隆。
-- **按组管理服务**：为每组维护服务清单、服务排序、分支前缀、协作说明、默认打开的工具和 Tag 开关；只有一个组时界面保持简洁。
-- **一次覆盖多个服务**：一个任务可选择多个服务；标准 Worktree 多模块始终按模块建立独立工作区和目标分支。
-- **管理任务说明**：合成全局、组、任务三级 `AGENTS.md`，任务人工说明独立保存；外部编辑文件后可自动同步并处理冲突。
-- **打开日常工具**：从任务或工作区直接打开 IDEA、WebStorm、终端、文件夹、Codex 或 Cursor。
-- **查看 Git 健康状态**：显示未提交文件数（含未跟踪文件、不含忽略文件）以及本地已知上游下的未推送提交数。
-- **辅助填写飞书需求**：可选用本地 Meegle CLI 获取需求标题；组分支前缀支持从需求链接提取 `{num}`。
-- **构建与追溯 Tag**：按组和服务配置创建 Tag，保留可复制的构建历史。
-- **保护已有工作**：归档、删除和 Tag 操作执行 Git 安全检查；不会 Force Push、自动 Rebase 或自动解决冲突。
+### 按任务创建独立工作区
 
-## 三分钟上手
+- 一个任务可以同时选择多个服务和模块，统一查看和管理；
+- 支持标准 Worktree 和独立克隆两种工作区方式，适应不同的分支协作模式；
+- 多个任务可以同时存在，每个任务都有自己的目录和工作区，彼此隔离；
+- 恢复或修复工作区前会检查仓库身份、分支和工作区状态，异常目录会先保留为备份。
 
-1. 首次启动会自动使用用户目录下的 `awm/tasks` 作为任务根目录；在“设置”中添加本地 Git 仓库到一个组。
-2. 为服务选择“标准 Worktree”或“独立克隆”，按需配置基础分支、Tag 和开发工具；尚未填写的常见开发工具路径会在启动后由本机静默探测补齐。
-3. 点击“创建任务”，填写或选择需求链接、任务名称和分支，再选择需要修改的服务。
-4. 在任务详情中打开工作区开始开发；完成后检查未提交/未推送状态，按需构建 Tag、归档或删除任务。
+### 按业务组管理服务
 
-完整的界面操作与配置字段说明见[日常使用指南](docs/USER-GUIDE.md)和[配置与使用](docs/CONFIGURATION.md)。
+- 按团队或业务线组织仓库和服务，支持服务排序和分组展示；
+- 为服务配置显示名称、模块、基础分支、分支命名规则和默认打开的工具；
+- 同一个仓库可以被多个业务组复用，创建任务时只选择本次需要的服务；
+- 可按服务或模块单独启用测试 Tag，并配置相应的交付规则。
 
-## 快速开始
+### 让需求上下文跟着任务走
 
-要求 **JDK 21**。
+- 创建任务时可关联需求编号或飞书项目（Meegle）需求链接；
+- 连接 Meegle 后，可查询当前账号可用的需求，获取需求标题并识别所属 Sprint；
+- 支持配置需求资料目录，按 Sprint 组织资料，并在已有资料目录时复用；
+- 支持维护全局、业务组和任务三级 Agent 说明，自动汇总为任务级 `AGENTS.md`；
+- 任务人工说明始终保留，外部编辑说明文件后可同步变化并提示冲突。
 
-```powershell
-.\gradlew.bat test
-.\gradlew.bat :desktop:compileKotlin
-.\gradlew.bat :desktop:run
-```
+### 从任务直接打开常用工具
 
-Windows 完整构建（测试、绿色包、EXE、MSI）：
+在任务或具体工作区中，可以直接打开编辑器、终端、文件夹和 Agent 工具，包括 IntelliJ IDEA、WebStorm、PyCharm、Visual Studio Code、Android Studio、DevEco Studio、Codex 和 Cursor。常用工具路径可以自动识别，也可以手动配置。
 
-```powershell
-.\scripts\build-windows.ps1
-```
+### 支持 Agent 协作
 
-macOS 构建 DMG：
+- 为 Codex 等 Agent 提供任务级入口，可查看任务配置、生成任务方案、创建任务、查询工作区状态和追踪测试 Tag；
+- 创建任务前先展示完整方案，确认后才执行创建，便于人工检查需求、分支和服务范围；
+- Agent 操作限定在 AWM 提供的任务能力内，不提供任意 Shell 或 Git 操作入口。
 
-```bash
-./scripts/build-macos.sh
-```
+### 集中查看任务和 Git 状态
 
-## AWM CLI 与 Tag Skill
+- 任务列表区分进行中和已归档任务，支持按名称搜索；
+- 任务详情集中展示需求、分支、工作区路径、任务说明和服务状态；
+- 直接查看未提交文件、未跟踪文件、未推送提交，以及工作区缺失、分支不一致、Detached HEAD 和进行中的 Git 操作；
+- 对可修复的异常提供预计动作和恢复入口，方便在处理前确认影响范围。
 
-桌面绿色包内置了 `awm` CLI。它提供受控的 Tag 构建命令组，不提供任意 Shell 或 Git 操作入口。
+### 构建和追踪测试 Tag
 
-### 安装 CLI
+- 支持从单个工作区构建测试 Tag，也支持批量处理一个任务中的多个服务；
+- 构建前执行工作区风险检查和合并预检，构建结果、目标分支和历史记录集中保存；
+- 可筛选 Tag 构建记录，复制测试 Tag 发版信息；
+- 可在 Tag 设置中统一开关 Tag 功能，并设置最多保留的 Tag 组数量，超出后自动清理最旧历史组；
+- 对冲突、中断、失败和部分完成的操作提供继续或重试入口；
+- 启用 Genbu 后，可追踪 Tag 的构建、UAT 发布和生产发布状态；Genbu 构建失败时可按下一版本重新打 Tag。
 
-Windows 绿色包启动后，打开 **设置 → AWM CLI → 安装 CLI**。应用会把 CLI 与专用 Java 运行时复制到当前用户的 `LOCALAPPDATA`，并将命令目录加入用户 `PATH`；无需管理员权限或系统 JDK。安装后重开终端；如果终端由 Codex、IDE 或 Windows Terminal 打开，请重启对应应用，再运行：
+### 安全的任务生命周期管理
 
-```powershell
-awm --help
-```
+- 归档后任务、工作区和代码仍然保留，可随时恢复；
+- 归档和删除前检查未提交内容、未推送提交和进行中的 Git 操作；
+- 涉及 Git 写入的操作会显示检查结果和预计动作；
+- 不自动 Force Push、Rebase 或替你解决冲突，冲突处理和最终交付决定由用户掌握。
 
-macOS/Linux 绿色包同样内置 `resources/cli/bin/awm` 与相邻的 `resources/cli-runtime`。将 `resources/cli/bin` 加入当前用户的 `PATH` 后即可使用；启动脚本会优先使用随包运行时。
+### 本地优先的使用体验
 
-### 安装 Tag Skill
+AWM 负责管理本地任务目录、代码工作区和 Git 状态。查看状态时不会为了刷新信息偷偷 Fetch；端口、数据库、Docker、凭据和外部测试环境仍由各自的项目和使用者管理。
 
-仓库内置了 Tag Skill [`skills/awm`](skills/awm/SKILL.md)。用户显式输入 `$awm` 时，它只处理已有任务的测试 Tag 构建、状态查询、历史查询、工作区检查和重试。打开桌面端 **设置 → AWM CLI**，点击“安装 Tag Skill”即可将它复制到当前用户的 `~/.agent/skills/awm`；更新会覆盖同名目录。技能的完整命令与结果说明见 [`skills/awm/references/tag-builds.md`](skills/awm/references/tag-builds.md)。
+## 典型使用流程
 
-## 数据位置
+1. 在设置中添加本地仓库，并按业务组整理服务和模块。
+2. 创建研发任务，填写需求、任务名称、分支和需要修改的服务。
+3. 从任务详情打开工作区和常用工具，依据任务说明开展协作。
+4. 随时查看各服务的 Git 状态；需要交付时构建测试 Tag 并追踪后续发布状态。
+5. 完成后归档任务，保留完整的任务上下文和交付记录。
 
-```text
-~/awm/
-├── config.json
-├── tasks/
-├── agents/
-│   ├── global/AGENTS.md
-│   ├── groups/<groupId>/AGENTS.md
-│   └── task-templates.json
-├── locks/
-└── temp/tag-build/
-```
+## 使用边界
 
-每个任务目录包含严格版本的 `agent-workspace.json`、最终合成的 `AGENTS.md`、Tag 构建历史以及服务 Worktree 或独立克隆。
+AWM 管理的是任务级代码工作区和 Git 协作状态，不代替具体项目的业务运行环境。服务启动、端口分配、数据库、Docker、凭据以及外部测试环境，仍由对应项目自行负责。
 
-Windows 的 `~` 为 `%USERPROFILE%`，macOS 的 `~` 为 `$HOME`。首次启动会创建 `~/awm`、`~/awm/tasks` 和包含默认 `taskRoot` 的当前版本配置。AWM 不探测或读取旧的 `~/.AgentWorkspaceManager`；如需保留旧数据，应在停止 AWM 后手动迁移并验证。
-
-在设置页更改任务根目录时，空目录可直接切换；已有任务时会先显示迁移预览。确认后，同磁盘整体移动、跨磁盘完整复制，标准 Worktree 会修复 Git 注册；全部任务及 Git 状态校验成功后才更新 `taskRoot`。
-
-`1.0.x` 使用字符串 schema，当前写入版本为 `1.0.6`。相同主次版本的 PATCH 可兼容读取；主版本或次版本不同则拒绝读取，且不会迁移或改写旧数据。`0.12.x` 及更早数据不会读取、迁移或删除。升级时需先备份数据，手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `1.0.6`，并在设置页重新保存需求资料根目录与资料子目录。
-
-需求资料统一使用设置页填写的 `requirementMaterialsRoot` 和 `requirementMaterialsSubdirectory`：`<资料根>/<Sprint>/<需求编号>-<任务文件夹名>/<资料子目录>`。桌面端创建或复用资料目录；`awm agent` 在同一目录的 `write_root` 内补写过程文档，Sprint 总览保留在资料根的 Sprint 层。旧的独立过程文档目录不会自动搬迁。
-
-## 构建产物
-
-| 类型 | 路径 |
-|---|---|
-| 绿色目录 | `desktop/build/compose/binaries/main/app/Agent Workspace Manager/` |
-| 绿色 Zip | `desktop/build/compose/binaries/main/zip/` |
-| Windows EXE | `desktop/build/compose/binaries/main/exe/` |
-| Windows MSI | `desktop/build/compose/binaries/main/msi/` |
-| macOS DMG | `desktop/build/compose/binaries/main/dmg/` |
-
-Compose Desktop 原生安装包不能跨平台生成：EXE/MSI 必须在 Windows 构建，DMG 必须在 macOS 构建。
-
-## CI / GitHub Release
-
-推送到 `master`、推送 `v*` 标签，或手动运行 **Release packages** 工作流后，会分别构建 Windows 桌面三件套与 macOS DMG，再上传到 GitHub Release。`master` 使用可覆盖的 `continuous` 预发布，`v*` 标签生成正式 Release。
-
-## 模块
-
-```text
-core/      Domain、Application 与 Infrastructure 实现
-desktop/   Compose Desktop 界面与原生安装包
-docs/      配置、架构和安全流程文档
-scripts/   桌面打包脚本
-```
-
-## 文档
-
-- [配置与使用](docs/CONFIGURATION.md)
-- [日常使用指南](docs/USER-GUIDE.md)
-- [架构与测试](docs/ARCHITECTURE.md)
-- [安全与 Tag 流程](docs/SAFETY-AND-TAG-FLOW.md)
-- [本地开发指南](docs/DEVELOPMENT.md)
-- [已知问题与支持边界](docs/KNOWN-ISSUES.md)
-- [发布指南](docs/RELEASE.md)
-- [版本升级规则](docs/VERSIONING.md)
-- [版本变更记录](docs/CHANGELOG.md)
-- [产品定位与验证](docs/PRODUCT-FIRST-PRINCIPLES-REVIEW.md)
-- [Worktrunk 功能适配调研](docs/WORKTRUNK-FEATURE-ADAPTATION.md)
-
-## License
-
-按仓库内声明使用；未单独声明时默认供个人与团队内部使用。
+详细操作说明见[日常使用指南](docs/USER-GUIDE.md)。

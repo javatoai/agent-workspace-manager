@@ -48,7 +48,6 @@ class TaskDetailLayoutTest {
     @Test
     fun `project name copy omits the module name`() {
         assertEquals("awm-test-project", workspaceProjectNameForCopy(" awm-test-project "))
-        assertEquals("awm-test-project · module-2", workspaceCardTitle("awm-test-project", "module-2"))
     }
 
     @Test

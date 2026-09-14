@@ -222,7 +222,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                         }
                     }
                 }
-                if (tagWorkspaces.isNotEmpty()) {
+                if (controller.config.tagEnabled && tagWorkspaces.isNotEmpty()) {
                     IconActionGroup {
                         ActionIconButton("批量测试Tag", { showBatchTag = true }, Modifier.size(34.dp), enabled = !controller.busy, loading = tagOperationLoading) {
                             Icon(Icons.Outlined.Sell, "批量测试Tag", Modifier.size(18.dp))
@@ -424,7 +424,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
             },
         )
     }
-    if (showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
+    if (controller.config.tagEnabled && showBatchTag) BatchTagDialog(tagWorkspaces, onDismiss = { showBatchTag = false }) { selected ->
         if (controller.buildTags(task, selected)) showBatchTag = false
     }
     if (showBranchInfo) {

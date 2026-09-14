@@ -47,6 +47,25 @@ class ConfigStoreTest {
     }
 
     @Test
+    fun `Tag settings round trip and retention limit is validated`() {
+        val defaults = AppConfig()
+        assertTrue(defaults.tagEnabled)
+        assertEquals(DEFAULT_TAG_HISTORY_MAX_GROUPS, defaults.tagHistoryMaxGroups)
+        assertFailsWith<IllegalArgumentException> { AppConfig(tagHistoryMaxGroups = 0) }
+        assertFailsWith<IllegalArgumentException> { AppConfig(tagHistoryMaxGroups = MAX_TAG_HISTORY_GROUPS + 1) }
+
+        val paths = ApplicationPaths(temporary.resolve("tag-settings"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig(tagEnabled = false, tagHistoryMaxGroups = 7))
+
+        assertFalse(store.load().tagEnabled)
+        assertEquals(7, store.load().tagHistoryMaxGroups)
+        val persisted = Files.readString(paths.config)
+        assertTrue("\"tagEnabled\": false" in persisted)
+        assertTrue("\"tagHistoryMaxGroups\": 7" in persisted)
+    }
+
+    @Test
     fun `existing custom task root is preserved`() {
         val paths = ApplicationPaths(temporary.resolve("custom-home"))
         val store = ConfigStore(paths)

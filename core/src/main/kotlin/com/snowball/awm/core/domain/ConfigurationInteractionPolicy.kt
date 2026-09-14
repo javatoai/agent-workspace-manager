@@ -39,7 +39,7 @@ data class RemoteBranchRef(val remote: String, val branch: String) {
 
 /** Pure policy shared by the sidebar and controller navigation fallback. */
 object TagNavigationPolicy {
-    fun isVisible(config: AppConfig): Boolean = config.groups.any(GroupConfig::tagEnabled)
+    fun isVisible(config: AppConfig): Boolean = config.tagEnabled && config.groups.any(GroupConfig::tagEnabled)
 }
 
 /** Keeps a user's branch edit while allowing untouched drafts to follow the selected group. */

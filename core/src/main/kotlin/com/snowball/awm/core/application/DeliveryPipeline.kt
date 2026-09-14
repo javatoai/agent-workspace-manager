@@ -97,6 +97,9 @@ class GitTagDeliveryAdapter(
     fun historyItems(config: AppConfig, tasks: List<TaskManifest>): List<TagHistoryItem> =
         historyQuery.listItems(config, tasks)
 
+    fun enforceHistoryRetention(config: AppConfig, tasks: List<TaskManifest>): Int =
+        historyQuery.enforceRetention(config, tasks)
+
     fun clearHistory(config: AppConfig, tasks: List<TaskManifest>): Int =
         historyQuery.clear(config, tasks)
 

@@ -101,6 +101,7 @@ import com.snowball.awm.core.ThemePreference
 import com.snowball.awm.core.TaskRootMigrationMode
 import com.snowball.awm.core.TaskRootMigrationPhase
 import com.snowball.awm.core.TaskRootMigrationProgress
+import com.snowball.awm.core.MAX_TAG_HISTORY_GROUPS
 
 @Composable
 internal fun SettingsScreen(controller: DesktopApplication) {
@@ -120,6 +121,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     }
     var defaultDevelopmentTool by remember(controller.config.defaultDevelopmentTool) {
         mutableStateOf(controller.config.defaultDevelopmentTool)
+    }
+    var tagHistoryMaxGroupsInput by remember(controller.config.tagHistoryMaxGroups) {
+        mutableStateOf(controller.config.tagHistoryMaxGroups.toString())
     }
     var showTaskDetailGitActionGroup by remember(controller.config.showTaskDetailGitActionGroup) {
         mutableStateOf(controller.config.showTaskDetailGitActionGroup)
@@ -200,6 +204,17 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         WindowPreferences.saveSettingsSection(key)
     }
     fun saving(key: String) = controller.settingsSaveState(key) == SettingsSaveState.SAVING
+    fun saveTagHistoryMaxGroups() {
+        val value = tagHistoryMaxGroupsInput.toIntOrNull()
+        if (value == null || value !in 1..MAX_TAG_HISTORY_GROUPS) {
+            controller.showError(IllegalArgumentException("Tag组保留数量必须在 1 到 $MAX_TAG_HISTORY_GROUPS 之间"))
+            tagHistoryMaxGroupsInput = controller.config.tagHistoryMaxGroups.toString()
+            return
+        }
+        controller.updateTagHistoryMaxGroups(value) {
+            tagHistoryMaxGroupsInput = controller.config.tagHistoryMaxGroups.toString()
+        }
+    }
     fun currentToolConfigs(): List<DevelopmentToolConfig> = DevelopmentToolType.entries.mapNotNull { type ->
         developmentToolPaths[type]?.trim()?.takeIf(String::isNotBlank)?.let { DevelopmentToolConfig(type, it) }
     }
@@ -387,6 +402,15 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                 SettingsBasicSection(
                     controller = controller,
                     saving = saving("basic"),
+                )
+            }
+            if (selectedSection == "tag") item {
+                SettingsTagSection(
+                    controller = controller,
+                    maxGroupsInput = tagHistoryMaxGroupsInput,
+                    onMaxGroupsInputChange = { tagHistoryMaxGroupsInput = it },
+                    onSaveMaxGroups = ::saveTagHistoryMaxGroups,
+                    saving = saving("tag"),
                 )
             }
             if (selectedSection == "paths") item {
@@ -844,6 +868,62 @@ private fun SettingsBasicSection(
 }
 
 @Composable
+private fun SettingsTagSection(
+    controller: DesktopApplication,
+    maxGroupsInput: String,
+    onMaxGroupsInputChange: (String) -> Unit,
+    onSaveMaxGroups: () -> Unit,
+    saving: Boolean,
+) {
+    val parsedMaxGroups = maxGroupsInput.toIntOrNull()
+    val maxGroupsValid = parsedMaxGroups != null && parsedMaxGroups in 1..MAX_TAG_HISTORY_GROUPS
+    SettingsCard("Tag设置", "控制测试 Tag 功能及历史记录保留数量。") {
+        AutoSaveStatus(controller, "tag")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("全局 Tag 开关", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (controller.config.tagEnabled) {
+                        "已开启：显示 Tag 页面、构建入口和 Tag 配置。"
+                    } else {
+                        "已关闭：隐藏 Tag 页面、构建入口和其他 Tag 配置；本设置仍保留用于重新开启。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = controller.config.tagEnabled,
+                onCheckedChange = { controller.setGlobalTagEnabled(it) },
+                enabled = !controller.busy && !saving,
+            )
+        }
+        OutlinedTextField(
+            value = maxGroupsInput,
+            onValueChange = { value ->
+                if (value.isEmpty() || value.all(Char::isDigit)) onMaxGroupsInputChange(value)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("最多保留 Tag 组") },
+            supportingText = {
+                Text("按最近更新时间保留，超过后自动清理最旧的整组记录；范围：1-$MAX_TAG_HISTORY_GROUPS。")
+            },
+            isError = !maxGroupsValid,
+            singleLine = true,
+            enabled = !controller.busy && !saving,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Button(
+                onClick = onSaveMaxGroups,
+                enabled = maxGroupsValid && parsedMaxGroups != controller.config.tagHistoryMaxGroups && !controller.busy && !saving,
+            ) {
+                Text("保存Tag设置")
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsGenbuSection(
     controller: DesktopApplication,
     genbuPath: String,
@@ -1097,7 +1177,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
             )
         }
     }
-    SettingsCard("AWM Tag Skill", "安装仅包含测试 Tag 操作的 \$awm Skill，不包含任务创建流程。") {
+    if (controller.config.tagEnabled) SettingsCard("AWM Tag Skill", "安装仅包含测试 Tag 操作的 \$awm Skill，不包含任务创建流程。") {
         Text("安装状态", style = MaterialTheme.typography.titleSmall)
         SelectionContainer {
             Text(tagSkillStatus.message, style = MaterialTheme.typography.bodyMedium)
@@ -2158,9 +2238,11 @@ private fun GroupSettingsRow(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                Text("测试Tag")
-                Spacer(Modifier.width(8.dp))
-                Switch(group.tagEnabled, { controller.setGroupTagEnabled(group.id, it) }, enabled = !controller.busy && !defaultsSaving)
+                if (controller.config.tagEnabled) {
+                    Text("测试Tag")
+                    Spacer(Modifier.width(8.dp))
+                    Switch(group.tagEnabled, { controller.setGroupTagEnabled(group.id, it) }, enabled = !controller.busy && !defaultsSaving)
+                }
                 if (groupCount > 1) {
                     ActionIconButton("上移组", { controller.moveGroup(group.id, -1) }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移") }
                     ActionIconButton("下移组", { controller.moveGroup(group.id, 1) }, enabled = index < groupCount - 1) { Icon(Icons.Outlined.KeyboardArrowDown, "下移") }
@@ -2268,6 +2350,7 @@ private fun SettingsCard(title: String, subtitle: String, content: @Composable C
 
 private fun settingsCardIcon(title: String): ImageVector = when (title) {
     "外观" -> Icons.Outlined.Palette
+    "Tag设置" -> Icons.Outlined.Sell
     "任务路径设置" -> Icons.Outlined.Folder
     "需求资料目录设置" -> Icons.Outlined.Folder
     "系统主配置文件" -> Icons.Outlined.Description

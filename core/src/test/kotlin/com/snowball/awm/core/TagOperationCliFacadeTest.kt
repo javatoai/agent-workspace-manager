@@ -269,6 +269,17 @@ class TagOperationCliFacadeTest {
     }
 
     @Test
+    fun `build rejects every Tag operation when the global switch is off`() {
+        val fixture = fixture(probeEnabled = false, globalTagEnabled = false)
+
+        val error = assertFailsWith<IllegalStateException> {
+            fixture.facade.build("task-42", listOf("service:default"), allServices = false)
+        }
+
+        assertTrue(error.message.orEmpty().contains("全局测试Tag已关闭"))
+    }
+
+    @Test
     fun `build collapses repeated and aliased service keys into one operation`() {
         val fixture = fixture(probeEnabled = false, services = listOf(workspace(tagEnabled = true)))
 
@@ -330,6 +341,7 @@ class TagOperationCliFacadeTest {
             production = GenbuStageStatus.INITIAL,
         ),
         genbuFailure: String? = null,
+        globalTagEnabled: Boolean = true,
         groupTagEnabled: Boolean = true,
         services: List<ServiceWorkspace> = emptyList(),
     ): Fixture {
@@ -346,6 +358,7 @@ class TagOperationCliFacadeTest {
                     "https://example.test/repo.git",
                 ),
             ),
+            tagEnabled = globalTagEnabled,
             groups = listOf(GroupConfig("group", "测试", tagEnabled = groupTagEnabled, services = listOf(
                 GroupServiceConfig(
                     "service",

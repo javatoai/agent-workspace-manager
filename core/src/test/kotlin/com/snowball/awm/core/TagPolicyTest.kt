@@ -18,9 +18,11 @@ class TagPolicyTest {
         val manifest = manifest(workspace)
         val enabled = AppConfig(repositories = listOf(repository()), groups = listOf(GroupConfig("g", "G", true, listOf(service))))
         val disabled = enabled.copy(groups = listOf(enabled.groups.single().copy(tagEnabled = false)))
+        val globallyDisabled = enabled.copy(tagEnabled = false)
 
         assertEquals("release/test", TagPolicy.resolve(enabled, manifest, workspace.selectionKey).targetBranch)
         assertFailsWith<IllegalStateException> { TagPolicy.resolve(disabled, manifest, workspace.selectionKey) }
+        assertFailsWith<IllegalStateException> { TagPolicy.resolve(globallyDisabled, manifest, workspace.selectionKey) }
         assertEquals("release/test", TagPolicy.resolve(enabled.copy(groups = listOf(enabled.groups.single().copy(services = listOf(service.copy(modules = listOf(module.copy(tagEnabled = false))))))), manifest, workspace.selectionKey).targetBranch)
     }
 

@@ -55,8 +55,9 @@ class DeliveryController internal constructor(
     private val genbuTagProbes: GenbuTagProbeService,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
+    private val onError: (Throwable) -> Unit = {},
 ) {
-    private var historyItems by mutableStateOf(adapter.historyItems(session.config, session.tasks))
+    private var historyItems by mutableStateOf(loadHistory())
     private var history by mutableStateOf(historyItems.flatMap(::operationsIn))
     private var genbuProbeJob: Job? = null
     private var genbuProbeRefreshing by mutableStateOf(false)
@@ -71,7 +72,7 @@ class DeliveryController internal constructor(
 
     fun canBuild(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
         val group = session.config.groups.firstOrNull { it.id == task.groupId } ?: return false
-        if (!group.tagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
+        if (!session.config.tagEnabled || !group.tagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
         if (!workspace.tagEnabled) return false
         // The read-only Tag preflight determines whether a branch write is needed.
         // Core policy enforcement runs after that preflight and before every write.
@@ -202,8 +203,14 @@ class DeliveryController internal constructor(
     }
 
     fun reloadHistory() {
-        historyItems = adapter.historyItems(session.config, session.tasks)
+        historyItems = loadHistory()
         history = historyItems.flatMap(::operationsIn)
+    }
+
+    private fun loadHistory(): List<TagHistoryItem> {
+        runCatching { adapter.enforceHistoryRetention(session.config, session.tasks) }
+            .onFailure(onError)
+        return adapter.historyItems(session.config, session.tasks)
     }
 
     /**

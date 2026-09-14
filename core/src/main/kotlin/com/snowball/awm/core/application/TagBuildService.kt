@@ -77,7 +77,7 @@ internal fun tagWorkspaceChanges(statusOutput: String): List<String> = statusOut
     .toList()
 
 internal fun tagMergeConflictMessage(sourceBranch: String, remote: String, targetBranch: String): String =
-    "自动将 $sourceBranch 合入 $remote/$targetBranch 时检测到冲突，请手工解决后提交并推送 $remote/$targetBranch，再重试"
+    "自动将 $sourceBranch 合入 $remote/$targetBranch 时检测到冲突。"
 
 class TagBuildService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
@@ -96,6 +96,7 @@ class TagBuildService(
         repositoryIds: List<String>,
     ): List<TagOperation> {
         if (repositoryIds.isEmpty()) return emptyList()
+        TagPolicy.requireEnabled(config)
         val batchId = UUID.randomUUID().toString()
         // Task lifecycle uses an exclusive lock. Batch operations intentionally
         // serialize within one task so archive/delete cannot interleave and a
@@ -185,6 +186,7 @@ class TagBuildService(
         taskDirectory: Path,
         repositoryId: String,
     ): TagOperation = taskLock.withLock(taskDirectory) {
+        TagPolicy.requireEnabled(config)
         buildUnlocked(config, taskDirectory, repositoryId)
     }
 
@@ -198,9 +200,12 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
-        require(previous.state == TagOperationState.CONFLICT) {
-            "只有${TagOperationState.CONFLICT.userFacingLabel()}的测试Tag操作可以重试"
+    ): TagOperation {
+        TagPolicy.requireEnabled(config)
+        return resumeExisting(config, taskDirectory, operationId) { previous ->
+            require(previous.state == TagOperationState.CONFLICT) {
+                "只有${TagOperationState.CONFLICT.userFacingLabel()}的测试Tag操作可以重试"
+            }
         }
     }
 
@@ -213,8 +218,11 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
-        require(previous.state in interruptedRetryableTagStates) { "只有构建中断的测试Tag操作可以重试" }
+    ): TagOperation {
+        TagPolicy.requireEnabled(config)
+        return resumeExisting(config, taskDirectory, operationId) { previous ->
+            require(previous.state in interruptedRetryableTagStates) { "只有构建中断的测试Tag操作可以重试" }
+        }
     }
 
     /**
@@ -225,8 +233,11 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
-        require(previous.state == TagOperationState.FAILED) { "只有失败的测试Tag操作可以重试" }
+    ): TagOperation {
+        TagPolicy.requireEnabled(config)
+        return resumeExisting(config, taskDirectory, operationId) { previous ->
+            require(previous.state == TagOperationState.FAILED) { "只有失败的测试Tag操作可以重试" }
+        }
     }
 
     /**
@@ -238,15 +249,18 @@ class TagBuildService(
         config: AppConfig,
         taskDirectory: Path,
         operationId: String,
-    ): TagOperation = resumeExisting(config, taskDirectory, operationId) { previous ->
-        require(
-            previous.state == TagOperationState.SUCCESS &&
-                previous.genbuStatus.build == GenbuStageStatus.FAILED,
-        ) {
-            "只有 Genbu 构建失败的测试Tag可以重新打Tag"
-        }
-        require(previous.genbuStatus.failureReason == null) {
-            "Genbu 实时状态查询失败，请刷新状态后再判断是否重新打Tag"
+    ): TagOperation {
+        TagPolicy.requireEnabled(config)
+        return resumeExisting(config, taskDirectory, operationId) { previous ->
+            require(
+                previous.state == TagOperationState.SUCCESS &&
+                    previous.genbuStatus.build == GenbuStageStatus.FAILED,
+            ) {
+                "只有 Genbu 构建失败的测试Tag可以重新打Tag"
+            }
+            require(previous.genbuStatus.failureReason == null) {
+                "Genbu 实时状态查询失败，请刷新状态后再判断是否重新打Tag"
+            }
         }
     }
 
@@ -454,6 +468,7 @@ class TagBuildService(
         taskDirectory: Path,
         operationId: String,
     ): TagOperation = taskLock.withLock(taskDirectory) {
+        TagPolicy.requireEnabled(config)
         var operation = operations.load(taskDirectory, operationId)
         require(operation.state == TagOperationState.PARTIAL) {
             "只有${TagOperationState.PARTIAL.userFacingLabel()}的测试Tag操作可以恢复"
