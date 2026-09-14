@@ -1,8 +1,10 @@
 package com.snowball.awm.desktop
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.HorizontalScrollbar
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -653,7 +655,7 @@ private fun WorkspaceDirtyFilesDialog(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             val dialogWidth = minOf(maxWidth * 0.90f, 1_800.dp)
-            val dialogHeight = minOf(maxHeight * 0.82f, 820.dp)
+            val dialogHeight = minOf(maxHeight * 0.90f, 960.dp)
             val fileListWidth = if (dialogWidth >= 1_400.dp) 360.dp else 300.dp
             Surface(
                 Modifier.width(dialogWidth).height(dialogHeight),
@@ -767,6 +769,7 @@ private fun WorkspaceDirtyFilesDialog(
                         WorkspaceFilePreviewPane(
                             change = selectedChange,
                             state = previewState,
+                            onCopyRelativePath = { controller.copyText(it, "相对路径已复制") },
                             selectedMode = selectedMode,
                             onModeSelected = { selectedMode = it },
                             comparisonDisplayMode = comparisonDisplayMode,
@@ -798,6 +801,7 @@ private sealed interface WorkspaceFilePreviewState {
 private fun WorkspaceFilePreviewPane(
     change: WorkspaceGitFileChange?,
     state: WorkspaceFilePreviewState,
+    onCopyRelativePath: (String) -> Unit,
     selectedMode: WorkspaceFilePreviewMode?,
     onModeSelected: (WorkspaceFilePreviewMode) -> Unit,
     comparisonDisplayMode: WorkspaceComparisonDisplayMode,
@@ -817,12 +821,22 @@ private fun WorkspaceFilePreviewPane(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Text(
-                    change.path,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        change.path,
+                        Modifier.weight(1f, fill = false),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    ActionIconButton(
+                        "复制相对路径",
+                        { onCopyRelativePath(workspaceRelativePathForCopy(change)) },
+                        Modifier.size(28.dp),
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, "复制相对路径", Modifier.size(16.dp))
+                    }
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -958,6 +972,8 @@ internal fun workspacePreviewDisplayedMode(
     }
 }
 
+internal fun workspaceRelativePathForCopy(change: WorkspaceGitFileChange): String = change.path
+
 internal enum class WorkspaceComparisonDisplayMode { ALL_LINES, CHANGED_LINES }
 
 @Composable
@@ -986,20 +1002,23 @@ private fun ColumnScope.WorkspaceFileContentPreview(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(10.dp),
     ) {
-        SelectionContainer {
-            Box(
-                Modifier.fillMaxSize()
-                    .verticalScroll(verticalScroll)
-                    .horizontalScroll(horizontalScroll)
-                    .padding(14.dp),
-            ) {
-                Text(
-                    workspaceContentPreviewText(preview, palette),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                    softWrap = false,
-                )
+        Column(Modifier.fillMaxSize()) {
+            SelectionContainer {
+                Box(
+                    Modifier.weight(1f).fillMaxWidth()
+                        .verticalScroll(verticalScroll)
+                        .horizontalScroll(horizontalScroll)
+                        .padding(14.dp),
+                ) {
+                    Text(
+                        workspaceContentPreviewText(preview, palette),
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                        softWrap = false,
+                    )
+                }
             }
+            WorkspaceHorizontalScrollbar(horizontalScroll)
         }
     }
 }
@@ -1013,8 +1032,10 @@ private fun ColumnScope.WorkspaceSideBySideComparisonPreview(
     val palette = workspacePreviewPalette()
     val text = workspaceComparisonText(comparison, displayMode, language, palette)
     val verticalScroll = rememberScrollState()
-    val oldHorizontalScroll = rememberScrollState()
-    val newHorizontalScroll = rememberScrollState()
+    val sharedHorizontalScroll = rememberScrollState()
+    var oldContentWidth by remember(text.old) { mutableStateOf(0) }
+    var newContentWidth by remember(text.new) { mutableStateOf(0) }
+    val sharedContentWidth = with(LocalDensity.current) { maxOf(oldContentWidth, newContentWidth).toDp() }
     Surface(
         Modifier.weight(1f).fillMaxWidth().padding(12.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -1041,37 +1062,58 @@ private fun ColumnScope.WorkspaceSideBySideComparisonPreview(
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                SelectionContainer {
-                    Row(
-                        Modifier.fillMaxSize().verticalScroll(verticalScroll),
-                        verticalAlignment = Alignment.Top,
+                Row(
+                    Modifier.fillMaxSize().verticalScroll(verticalScroll),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(
+                        Modifier.weight(1f).horizontalScroll(sharedHorizontalScroll).padding(14.dp),
                     ) {
-                        Box(
-                            Modifier.weight(1f).horizontalScroll(oldHorizontalScroll).padding(14.dp),
-                        ) {
-                            Text(
-                                text.old,
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                                softWrap = false,
-                            )
+                        SelectionContainer {
+                            Box(Modifier.widthIn(min = sharedContentWidth)) {
+                                Text(
+                                    text.old,
+                                    onTextLayout = { oldContentWidth = it.size.width },
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                                    softWrap = false,
+                                )
+                            }
                         }
-                        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        Box(
-                            Modifier.weight(1f).horizontalScroll(newHorizontalScroll).padding(14.dp),
-                        ) {
-                            Text(
-                                text.new,
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                                softWrap = false,
-                            )
+                    }
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Box(
+                        Modifier.weight(1f).horizontalScroll(sharedHorizontalScroll).padding(14.dp),
+                    ) {
+                        SelectionContainer {
+                            Box(Modifier.widthIn(min = sharedContentWidth)) {
+                                Text(
+                                    text.new,
+                                    onTextLayout = { newContentWidth = it.size.width },
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                                    softWrap = false,
+                                )
+                            }
                         }
                     }
                 }
             }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            WorkspaceHorizontalScrollbar(sharedHorizontalScroll)
         }
     }
+}
+
+@Composable
+private fun WorkspaceHorizontalScrollbar(
+    scrollState: androidx.compose.foundation.ScrollState,
+    modifier: Modifier = Modifier,
+) {
+    HorizontalScrollbar(
+        adapter = rememberScrollbarAdapter(scrollState),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+    )
 }
 
 private data class WorkspacePreviewPalette(

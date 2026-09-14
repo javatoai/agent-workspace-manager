@@ -124,6 +124,16 @@ class TaskDetailLayoutTest {
     }
 
     @Test
+    fun `workspace preview path copy preserves the complete relative path`() {
+        val path = "src/main/java/com/snowballtech/operationcenter/config/socket/MessageEventHandler.java"
+
+        assertEquals(
+            path,
+            workspaceRelativePathForCopy(WorkspaceGitFileChange(path, WorkspaceGitFileChangeKind.MODIFIED)),
+        )
+    }
+
+    @Test
     fun `workspace file changes are grouped in the expected order and sorted by path`() {
         val groups = workspaceGitFileChangeGroups(
             listOf(
