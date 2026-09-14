@@ -1,5 +1,7 @@
 package com.snowball.awm.core
 
+import java.time.Instant
+
 enum class WorkspaceGitHealthState { CHECKING, READY, FAILED, MISSING }
 
 enum class LocalPushState { PUSHED, AHEAD, REMOTE_BRANCH_MISSING, NO_UPSTREAM, FAILED }
@@ -18,6 +20,13 @@ enum class WorkspaceGitFileChangeKind {
 data class WorkspaceGitFileChange(
     val path: String,
     val kind: WorkspaceGitFileChangeKind,
+)
+
+data class WorkspaceGitCommit(
+    val shortHash: String,
+    val committedAt: Instant,
+    val message: String,
+    val authorName: String = "",
 )
 
 enum class WorkspaceGitIssue {

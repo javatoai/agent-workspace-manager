@@ -1,6 +1,7 @@
 package com.snowball.awm.desktop
 
 import com.snowball.awm.core.LocalPushState
+import com.snowball.awm.core.WorkspaceGitCommit
 import com.snowball.awm.core.WorkspaceFileComparison
 import com.snowball.awm.core.WorkspaceFileComparisonLine
 import com.snowball.awm.core.WorkspaceFileComparisonLineKind
@@ -20,6 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import java.nio.file.Files
+import java.time.Instant
 
 class TaskDetailLayoutTest {
     @Test
@@ -101,6 +103,23 @@ class TaskDetailLayoutTest {
     }
 
     @Test
+    fun `commit history follows the push status instead of being separated by trailing space`() {
+        assertEquals(
+            listOf("无未提交", "已推送", "提交历史"),
+            workspaceGitStatusLineLabels(
+                WorkspaceGitHealth(
+                    state = WorkspaceGitHealthState.READY,
+                    pushState = LocalPushState.PUSHED,
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("检查中"),
+            workspaceGitStatusLineLabels(WorkspaceGitHealth(state = WorkspaceGitHealthState.CHECKING)),
+        )
+    }
+
+    @Test
     fun `only a ready workspace with dirty files exposes the file details action`() {
         assertTrue(
             workspaceGitStatusHasDirtyFiles(
@@ -111,6 +130,60 @@ class TaskDetailLayoutTest {
         assertFalse(workspaceGitStatusHasDirtyFiles(WorkspaceGitHealth(state = WorkspaceGitHealthState.CHECKING, dirtyFileCount = 1)))
         assertFalse(workspaceGitStatusHasDirtyFiles(WorkspaceGitHealth(state = WorkspaceGitHealthState.FAILED, dirtyFileCount = 1)))
         assertFalse(workspaceGitStatusHasDirtyFiles(null))
+    }
+
+    @Test
+    fun `only a ready workspace exposes the independent commit history action`() {
+        assertTrue(workspaceGitStatusHasHistory(WorkspaceGitHealth(state = WorkspaceGitHealthState.READY)))
+        assertTrue(workspaceGitStatusHasHistory(WorkspaceGitHealth(state = WorkspaceGitHealthState.READY, dirtyFileCount = 3)))
+        assertFalse(workspaceGitStatusHasHistory(WorkspaceGitHealth(state = WorkspaceGitHealthState.CHECKING)))
+        assertFalse(workspaceGitStatusHasHistory(WorkspaceGitHealth(state = WorkspaceGitHealthState.FAILED)))
+        assertFalse(workspaceGitStatusHasHistory(WorkspaceGitHealth(state = WorkspaceGitHealthState.MISSING)))
+        assertFalse(workspaceGitStatusHasHistory(null))
+    }
+
+    @Test
+    fun `clean status keeps no uncommitted text non actionable while history remains available`() {
+        val clean = WorkspaceGitHealth(state = WorkspaceGitHealthState.READY, dirtyFileCount = 0)
+
+        assertEquals(listOf("无未提交", "检查失败"), workspaceGitStatusLabels(clean))
+        assertFalse(workspaceGitStatusHasDirtyFiles(clean))
+        assertTrue(workspaceGitStatusHasHistory(clean))
+    }
+
+    @Test
+    fun `commit history header uses the short hash and application local time`() {
+        assertEquals(
+            "2026-09-14 15:58:05 · abcdef1 · AWM Tests",
+            workspaceGitCommitHeader(
+                WorkspaceGitCommit(
+                    shortHash = "abcdef1",
+                    committedAt = Instant.parse("2026-09-14T07:58:05Z"),
+                    message = "subject\n\nbody",
+                    authorName = "AWM Tests",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `commit history exposes the author label and separates subject from body`() {
+        val commit = WorkspaceGitCommit(
+            shortHash = "abcdef1",
+            committedAt = Instant.parse("2026-09-14T07:58:05Z"),
+            message = "subject\n\nbody line",
+            authorName = "AWM Tests",
+        )
+
+        assertEquals("提交人：AWM Tests", workspaceGitCommitAuthorLabel(commit))
+        assertEquals(
+            WorkspaceGitCommitMessageParts("subject", "body line"),
+            workspaceGitCommitMessageParts(commit.message),
+        )
+        assertEquals(
+            "未知提交人",
+            workspaceGitCommitAuthorName(commit.copy(authorName = "  ")),
+        )
     }
 
     @Test

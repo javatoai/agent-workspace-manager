@@ -28,6 +28,8 @@ import com.snowball.awm.core.WorkspaceGitFileChange
 import com.snowball.awm.core.WorkspaceGitFilePreviewService
 import com.snowball.awm.core.WorkspaceGitFilePreview
 import com.snowball.awm.core.WorkspaceGitHealthState
+import com.snowball.awm.core.WorkspaceGitCommit
+import com.snowball.awm.core.WorkspaceGitHistoryService
 import com.snowball.awm.core.WorkspaceGitStatusService
 import com.snowball.awm.core.WorkspaceToolLaunchService
 import com.snowball.awm.core.WorkspaceGitOperationService
@@ -50,6 +52,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 
@@ -91,6 +94,7 @@ class TaskController internal constructor(
     private val tasks: TaskApplicationService,
     private val gitStatus: WorkspaceGitStatusService,
     private val gitFilePreviews: WorkspaceGitFilePreviewService,
+    private val gitHistory: WorkspaceGitHistoryService,
     private val workspaceTools: WorkspaceToolLaunchService,
     private val gitOperations: WorkspaceGitOperationService,
     private val taskBranchCatalog: TaskBranchCatalog,
@@ -538,6 +542,10 @@ class TaskController internal constructor(
         change: WorkspaceGitFileChange,
     ): WorkspaceGitFilePreview = withContext(ioDispatcher) {
         gitFilePreviews.preview(worktreePath, change)
+    }
+
+    suspend fun workspaceGitHistory(worktreePath: String): List<WorkspaceGitCommit> = runInterruptible(ioDispatcher) {
+        gitHistory.read(Path.of(worktreePath).toAbsolutePath().normalize())
     }
 
     fun loadBatchGitPreviews(task: TaskManifest) {

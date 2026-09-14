@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -72,12 +74,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.snowball.awm.core.AppConfig
+import com.snowball.awm.core.AwmTime
 import com.snowball.awm.core.DevelopmentToolType
 import com.snowball.awm.core.LocalPushState
 import com.snowball.awm.core.ServiceWorkspace
 import com.snowball.awm.core.TaskManifest
 import com.snowball.awm.core.WorkspaceGitFileChange
 import com.snowball.awm.core.WorkspaceGitFileChangeKind
+import com.snowball.awm.core.WorkspaceGitCommit
 import com.snowball.awm.core.WorkspaceGitFilePreview
 import com.snowball.awm.core.WorkspaceGitHealth
 import com.snowball.awm.core.WorkspaceGitHealthState
@@ -330,7 +334,9 @@ private fun WorkspaceCardSummary(
     val copyIcons = taskAreaCopyIconPresentationFor(controller.config)
     var confirmRerunBootstrap by remember(workspace.worktreePath) { mutableStateOf(false) }
     var showDirtyFiles by remember(workspace.worktreePath) { mutableStateOf(false) }
+    var showCommitHistory by remember(task.taskDirectoryName, workspace.worktreePath) { mutableStateOf(false) }
     val dirtyHealth = health?.takeIf(::workspaceGitStatusHasDirtyFiles)
+    val historyHealth = health?.takeIf(::workspaceGitStatusHasHistory)
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 28.dp),
@@ -398,7 +404,11 @@ private fun WorkspaceCardSummary(
             },
         )
         if (statusPlacement == WorkspaceStatusPlacement.SECOND_ROW) {
-            WorkspaceGitStatusLine(health) { showDirtyFiles = true }
+            WorkspaceGitStatusLine(
+                health = health,
+                onShowDirtyFiles = { showDirtyFiles = true },
+                onShowCommitHistory = { showCommitHistory = true },
+            )
         }
         if (statusPlacement == WorkspaceStatusPlacement.THIRD_ROW && health != null) {
             FlowRow(
@@ -468,6 +478,14 @@ private fun WorkspaceCardSummary(
             onDismiss = { showDirtyFiles = false },
         )
     }
+    if (showCommitHistory && historyHealth != null) {
+        WorkspaceCommitHistoryDialog(
+            controller = controller,
+            taskKey = task.taskDirectoryName,
+            worktreePath = workspace.worktreePath,
+            onDismiss = { showCommitHistory = false },
+        )
+    }
 }
 
 @Composable
@@ -509,8 +527,11 @@ private fun WorkspaceBranchCopyRow(
 private fun WorkspaceGitStatusLine(
     health: WorkspaceGitHealth?,
     onShowDirtyFiles: () -> Unit,
+    onShowCommitHistory: () -> Unit,
 ) {
-    val labels = workspaceGitStatusLabels(health)
+    val lineLabels = workspaceGitStatusLineLabels(health)
+    val hasHistory = lineLabels.lastOrNull() == "提交历史"
+    val labels = if (hasHistory) lineLabels.dropLast(1) else lineLabels
     if (labels.isEmpty()) return
     val hasDirtyFiles = workspaceGitStatusHasDirtyFiles(health)
     val dirtyModifier = if (hasDirtyFiles) {
@@ -543,13 +564,27 @@ private fun WorkspaceGitStatusLine(
             )
             Text(
                 labels.drop(1).joinToString(" · "),
-                Modifier.weight(1f),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (hasHistory) {
+            Text(
+                " · ",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Text(
+                "提交历史",
+                Modifier.clickable(onClickLabel = "查看提交历史", onClick = onShowCommitHistory),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.weight(1f))
     }
 }
 
@@ -569,8 +604,16 @@ internal fun workspaceGitStatusLabels(health: WorkspaceGitHealth?): List<String>
     else -> emptyList()
 }
 
+internal fun workspaceGitStatusLineLabels(health: WorkspaceGitHealth?): List<String> {
+    val labels = workspaceGitStatusLabels(health)
+    return if (workspaceGitStatusHasHistory(health)) labels + "提交历史" else labels
+}
+
 internal fun workspaceGitStatusHasDirtyFiles(health: WorkspaceGitHealth?): Boolean =
     health?.state == WorkspaceGitHealthState.READY && health.dirtyFileCount > 0
+
+internal fun workspaceGitStatusHasHistory(health: WorkspaceGitHealth?): Boolean =
+    health?.state == WorkspaceGitHealthState.READY
 
 internal fun workspaceGitFileChangeLabel(kind: WorkspaceGitFileChangeKind): String = when (kind) {
     WorkspaceGitFileChangeKind.MODIFIED -> "修改"
@@ -788,6 +831,197 @@ private fun WorkspaceDirtyFilesDialog(
             }
         }
     }
+}
+
+private sealed interface WorkspaceCommitHistoryState {
+    data object Loading : WorkspaceCommitHistoryState
+    data class Loaded(val commits: List<WorkspaceGitCommit>) : WorkspaceCommitHistoryState
+    data class Failed(val message: String) : WorkspaceCommitHistoryState
+}
+
+@Composable
+private fun WorkspaceCommitHistoryDialog(
+    controller: DesktopApplication,
+    taskKey: String,
+    worktreePath: String,
+    onDismiss: () -> Unit,
+) {
+    var state by remember(taskKey, worktreePath) {
+        mutableStateOf<WorkspaceCommitHistoryState>(WorkspaceCommitHistoryState.Loading)
+    }
+    LaunchedEffect(taskKey, worktreePath) {
+        state = WorkspaceCommitHistoryState.Loading
+        state = try {
+            WorkspaceCommitHistoryState.Loaded(controller.workspaceGitHistory(worktreePath))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            WorkspaceCommitHistoryState.Failed(error.message ?: "无法读取提交历史")
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val dialogWidth = minOf(maxWidth * 0.60f, 1_800.dp)
+            val dialogHeight = minOf(maxHeight * 0.90f, 960.dp)
+            Surface(
+                Modifier.width(dialogWidth).height(dialogHeight),
+                shape = RoundedCornerShape(22.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    val title = when (val current = state) {
+                        is WorkspaceCommitHistoryState.Loaded -> "分支提交历史（${current.commits.size}）"
+                        else -> "分支提交历史"
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(title, style = MaterialTheme.typography.titleLarge)
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            "当前分支 HEAD 的本地提交",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Box(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
+                        when (val current = state) {
+                            WorkspaceCommitHistoryState.Loading -> Box(
+                                Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator()
+                            }
+
+                            is WorkspaceCommitHistoryState.Failed -> SelectionContainer {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(current.message, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+
+                            is WorkspaceCommitHistoryState.Loaded -> {
+                                if (current.commits.isEmpty()) {
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            "该分支暂无提交记录",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        Modifier.fillMaxSize(),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        itemsIndexed(
+                                            current.commits,
+                                            key = { index, commit -> "$index-${commit.shortHash}" },
+                                        ) { _, commit ->
+                                            WorkspaceCommitHistoryCard(commit)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(onClick = onDismiss) { Text("关闭") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceCommitHistoryCard(commit: WorkspaceGitCommit) {
+    val message = workspaceGitCommitMessageParts(commit.message)
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    AwmTime.format(commit.committedAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    commit.shortHash,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    workspaceGitCommitAuthorLabel(commit),
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+            SelectionContainer {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(message.subject, style = MaterialTheme.typography.bodyLarge)
+                    message.body?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun workspaceGitCommitHeader(commit: WorkspaceGitCommit): String =
+    "${AwmTime.format(commit.committedAt)} · ${commit.shortHash} · ${workspaceGitCommitAuthorName(commit)}"
+
+internal fun workspaceGitCommitAuthorLabel(commit: WorkspaceGitCommit): String =
+    "提交人：${workspaceGitCommitAuthorName(commit)}"
+
+internal fun workspaceGitCommitAuthorName(commit: WorkspaceGitCommit): String =
+    commit.authorName.ifBlank { "未知提交人" }
+
+internal data class WorkspaceGitCommitMessageParts(
+    val subject: String,
+    val body: String?,
+)
+
+internal fun workspaceGitCommitMessageParts(message: String): WorkspaceGitCommitMessageParts {
+    val normalized = message.trim('\r', '\n')
+    if (normalized.isBlank()) return WorkspaceGitCommitMessageParts("（无提交说明）", null)
+    val separator = normalized.indexOf('\n')
+    if (separator < 0) return WorkspaceGitCommitMessageParts(normalized, null)
+    val subject = normalized.substring(0, separator).trimEnd('\r')
+    val body = normalized.substring(separator + 1).trim('\r', '\n').ifBlank { null }
+    return WorkspaceGitCommitMessageParts(subject.ifBlank { "（无提交说明）" }, body)
 }
 
 private sealed interface WorkspaceFilePreviewState {
